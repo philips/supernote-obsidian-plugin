@@ -2,6 +2,12 @@
 
 This plugin generates PNGs for any `*.note` files found in your Obsidian Vault. The PNGs will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`.
 
+## Install via BRAT
+
+- Install the BRAT plugin via Community Plugin Search
+- [Read the docs](https://tfthacker.com/BRAT)
+- Add `https://github.com/philips/obsidian-plugin-supernote`
+
 ## Manually installing the plugin
 
 - Copy over `main.js`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/obsidian-plugin-supernote/` from https://github.com/philips/obsidian-plugin-supernote/releases.
