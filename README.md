@@ -7,8 +7,20 @@ This plugin generates PNGs for any `*.note` files found in your Obsidian Vault. 
 
 ### How to use
 
-- Clone this repo.
 - Make sure your NodeJS is at least v16 (`node --version`).
+- Clone this repo.
+- Setup the deps
+
+```
+git submodule init
+git submodule update
+cd supernote-typescript/
+npm run build
+npm link
+cd ..
+npm link supernote-typescript/
+```
+
 - `npm i` or `yarn` to install dependencies.
 - `npm run dev` to start compilation in watch mode.
 
