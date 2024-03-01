@@ -22,6 +22,6 @@
 		"typescript": "4.7.4"
 	},
 	"dependencies": {
-		"supernote": "^0.1.0"
+		"supernote": "github:philips/supernote-typescript"
 	}
 }

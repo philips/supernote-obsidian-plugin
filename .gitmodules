@@ -1,0 +1,3 @@
+[submodule "supernote-typescript"]
+	path = supernote-typescript
+	url = https://github.com/philips/supernote-typescript

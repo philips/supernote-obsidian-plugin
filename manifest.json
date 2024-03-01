@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "supernote-plugin",
+	"name": "Supernote Plugin",
+	"version": "0.0.1",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Generates .note files for ",
+	"author": "Brandon Philips",
+	"authorUrl": "https://github.com/philips/obsidian-supernote-plugin",
+	"fundingUrl": "https://ifup.org",
 	"isDesktopOnly": false
 }
