@@ -1,0 +1,46 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+  </head>
+  <body>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <script type="text/javascript">
+      async function main() {
+        let pyodide = await loadPyodide();
+        await pyodide.loadPackage("micropip");
+        const micropip = pyodide.pyimport("micropip");
+        await micropip.install("numpy");
+        await micropip.install("Pillow");
+        await micropip.install("potracer");
+        await micropip.install("colour");
+        await micropip.install("pypng");
+        await micropip.install("reportlab");
+//        await micropip.install("svglib");
+//        await micropip.install("svgwrite");
+        await pyodide.runPython(`
+# The standard way to import NumPy:
+import numpy as np
+from PIL import Image
+from potrace import Bitmap
+from colour import Color
+#from svglib.svglib import svg2rlg
+#from reportlab.graphics import renderPDF, renderPM
+
+
+c = Color("blue")
+print(c)
+
+# Create a 2-D array, set every second element in
+# some rows and find max per row:
+
+x = np.arange(15, dtype=np.int64).reshape(3, 5)
+x[1:, ::2] = -99
+print(x)
+
+#drawing = svg2rlg("file.svg")
+      `);
+      }
+      main();
+    </script>
+  </body>
+</html>
