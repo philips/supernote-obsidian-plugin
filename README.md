@@ -1,6 +1,6 @@
 # Supernote Obsidian Plugin
 
-This plugin generates PNGs for any `*.note` files found in your Obsidian Vault. The PNGs will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`.
+This plugin generates PNGs and markdown files for any `*.note` files found in your Obsidian Vault. The files will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`, `test.note-1.md`, `test.note-2.md`.
 
 ## Install via BRAT
 
