@@ -12,6 +12,13 @@ This plugin generates PNGs and markdown files for any `*.note` files found in yo
 
 - Copy over `main.js`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/obsidian-plugin-supernote/` from https://github.com/philips/obsidian-plugin-supernote/releases.
 
+## Roadmap / Ideas
+
+- 📺 [Screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) capture directly to the current note
+- 🔗 Note linking
+- 🎛️ Settings panel to control file layout, linking, and more
+- 🚀 Get listed in the official Obsidian community plugin list
+
 ## Thank You
 
 Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.
