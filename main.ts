@@ -34,7 +34,6 @@ export default class SupernotePlugin extends Plugin {
 				const note = await this.app.vault.readBinary(file as TFile);
 				let sn = new SupernoteX(toBuffer(note));
 				let images = await toImage(sn);
-				console.log(`image.length ${images.length}`)
 				for (let i = 0; i < images.length; i++) {
 					let filename = `${file.path}-${i}.png`
 					if (this.app.vault.getFileByPath(filename)) {
@@ -43,6 +42,18 @@ export default class SupernotePlugin extends Plugin {
 					}
 					this.app.vault.createBinary(filename, images[i].toBuffer());
 					console.log(`wrote ${filename}`);
+				}
+
+				for (let i = 0; i < sn.pages.length; i++) {
+					let filename = `${file.path}-${i}.md`
+					if (this.app.vault.getFileByPath(filename)) {
+						console.log(`skipped ${filename}`);
+						continue;
+					}
+					if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+						this.app.vault.create(filename, sn.pages[i].text);
+						console.log(`wrote ${filename}`);
+					}
 				}
 			}
 		}));
