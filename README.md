@@ -27,6 +27,13 @@ This plugin generates PNGs and markdown files for any `*.note` files found in yo
 
 Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.
 
+## Other Helpful Plugins
+
+These are not endorsements but might be useful to pair with this plugin.
+
+- [Ozan's Image in Editor Plugin](https://github.com/ozntel/oz-image-in-editor-obsidian)
+- [Obsidian OCR Plugin](https://github.com/schlundd/obsidian-ocr-plugin)
+
 ## Developer Notes
 
 ### How to use
