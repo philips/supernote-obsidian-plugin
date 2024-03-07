@@ -27,6 +27,11 @@ This plugin generates PNGs and markdown files for any `*.note` files found in yo
 
 Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.
 
+## Relevant Resources
+
+- [E-Ink notes in Obsidian / Notion? by Brandon Boswell](https://www.youtube.com/watch?v=kW8I8B-eCRk)
+- [Academic HANDWRITTEN notes in OBSIDIAN ft. Supernote by pixel leaves](https://www.youtube.com/watch?v=lzYCPkVnqIM)
+
 ## Other Helpful Plugins
 
 These are not endorsements but might be useful to pair with this plugin.
