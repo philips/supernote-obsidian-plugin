@@ -2,6 +2,8 @@
 
 This plugin generates PNGs and markdown files for any `*.note` files found in your Obsidian Vault. The files will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`, `test.note-1.md`, `test.note-2.md`.
 
+**Video Demo**
+
 [![Watch the video](https://img.youtube.com/vi/hrEOETbTW0k/hqdefault.jpg)](https://www.youtube.com/embed/hrEOETbTW0k)
 
 ## Install via BRAT
