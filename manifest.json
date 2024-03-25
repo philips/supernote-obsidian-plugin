@@ -1,7 +1,7 @@
 {
 	"id": "supernote-plugin",
 	"name": "Supernote Plugin",
-	"version": "1.1.0",
+	"version": "1.1.1",
 	"minAppVersion": "0.15.0",
 	"description": "Generates .note files for ",
 	"author": "Brandon Philips",
