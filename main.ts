@@ -1,5 +1,5 @@
-import { App, TFolder, TFile, Plugin, PluginSettingTab, Setting, TAbstractFile } from 'obsidian';
-import { SupernoteX, toImage } from 'supernote-typescript';
+import { TFolder, TFile, Plugin, Editor, MarkdownView } from 'obsidian';
+import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 
 // Remember to rename these classes and interfaces!
 
@@ -24,6 +24,18 @@ export default class SupernotePlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		this.addCommand({
+			id: 'insert-supernote-mirror-image',
+			name: 'Insert a Supernote mirror image',
+			editorCallback: async (editor: Editor, view: MarkdownView) => {
+				let image = await fetchMirrorFrame('192.168.86.243:8080');
+				let filename = 'mirror.png';
+				this.app.vault.createBinary(filename, image.toBuffer());
+				editor.replaceRange(`![[${filename}]]`, editor.getCursor());
+			},
+		});
+
 		this.registerEvent(this.app.vault.on("create", async (file) => {
 			if (file instanceof TFolder) {
 				return;
