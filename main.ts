@@ -51,7 +51,7 @@ export default class SupernotePlugin extends Plugin {
 				const f = this.app.workspace.activeEditor?.file;
 				const p = f?.parent?.path || '';
 				const b = f?.basename || '';
-				const fp = path.join(p, b);
+				const fp = `${p}/${b}`;
 				let filename = `${fp}-supernote-mirror-${ts}.png`;
 
 				try {
