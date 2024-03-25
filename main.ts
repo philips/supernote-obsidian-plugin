@@ -1,4 +1,4 @@
-import { TFolder, TFile, Plugin, Editor, MarkdownView } from 'obsidian';
+import { App, Modal, TFolder, TFile, Plugin, Editor, MarkdownView } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 
 // Remember to rename these classes and interfaces!
@@ -29,10 +29,15 @@ export default class SupernotePlugin extends Plugin {
 			id: 'insert-supernote-mirror-image',
 			name: 'Insert a Supernote mirror image',
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				let image = await fetchMirrorFrame('192.168.86.243:8080');
-				let filename = 'mirror.png';
-				this.app.vault.createBinary(filename, image.toBuffer());
-				editor.replaceRange(`![[${filename}]]`, editor.getCursor());
+				try {
+					let image = await fetchMirrorFrame('192.168.86.243:8080');
+					let filename = 'mirror.png';
+					editor.getDoc();
+					this.app.vault.createBinary(filename, image.toBuffer());
+					editor.replaceRange(`![[${filename}]]`, editor.getCursor());
+				} catch (err: any) {
+					new ErrorModal(this.app, err).open();
+				}
 			},
 		});
 
@@ -81,5 +86,25 @@ export default class SupernotePlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+}
+
+
+class ErrorModal extends Modal {
+	error: Error;
+
+	constructor(app: App, error: Error) {
+		super(app);
+		this.error = error;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.setText(this.error.message);
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
 	}
 }
