@@ -1,12 +1,13 @@
-import { App, Modal, TFolder, TFile, Plugin, Editor, MarkdownView } from 'obsidian';
+import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
-
-// Remember to rename these classes and interfaces!
+import * as path from 'path';
 
 interface SupernotePluginSettings {
+	mirrorIP: string;
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
+	mirrorIP: '',
 }
 
 
@@ -19,24 +20,50 @@ function toBuffer(arrayBuffer: ArrayBuffer) {
 	return buffer;
 }
 
+function generateTimestamp(): string {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0'); // Add leading zero for single-digit months
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  const timestamp = `${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
+  return timestamp;
+}
+
 export default class SupernotePlugin extends Plugin {
 	settings: SupernotePluginSettings;
 
 	async onload() {
 		await this.loadSettings();
 
+		this.addSettingTab(new SupernoteSettingTab(this.app, this));
+
 		this.addCommand({
 			id: 'insert-supernote-mirror-image',
 			name: 'Insert a Supernote mirror image',
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
+
+				// generate a unique filename for the mirror based on the current note path
+				let ts = generateTimestamp();
+				const f = this.app.workspace.activeEditor?.file;
+				const p = f?.parent?.path || '';
+				const b = f?.basename || '';
+				const fp = path.join(p, b);
+				let filename = `${fp}-supernote-mirror-${ts}.png`;
+
 				try {
-					let image = await fetchMirrorFrame('192.168.86.243:8080');
-					let filename = 'mirror.png';
-					editor.getDoc();
+					if (this.settings.mirrorIP.length == 0) {
+						throw new Error("IP is unset, please set in Supernote plugin settings")
+					}
+					let image = await fetchMirrorFrame(`${this.settings.mirrorIP}:8080`);
+
 					this.app.vault.createBinary(filename, image.toBuffer());
 					editor.replaceRange(`![[${filename}]]`, editor.getCursor());
 				} catch (err: any) {
-					new ErrorModal(this.app, err).open();
+					new ErrorModal(this.app, this.settings, err).open();
 				}
 			},
 		});
@@ -92,19 +119,47 @@ export default class SupernotePlugin extends Plugin {
 
 class ErrorModal extends Modal {
 	error: Error;
+	settings: SupernotePluginSettings;
 
-	constructor(app: App, error: Error) {
+	constructor(app: App, settings: SupernotePluginSettings, error: Error) {
 		super(app);
 		this.error = error;
+		this.settings = settings;
 	}
 
 	onOpen() {
 		const {contentEl} = this;
-		contentEl.setText(this.error.message);
+		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Screen Mirroring?`);
 	}
 
 	onClose() {
 		const {contentEl} = this;
 		contentEl.empty();
+	}
+}
+
+class SupernoteSettingTab extends PluginSettingTab {
+	plugin: SupernotePlugin;
+
+	constructor(app: App, plugin: SupernotePlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const {containerEl} = this;
+
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName('Supernote Mirror IP')
+			.setDesc('See Supernote Screen Mirroring documentation for how to enable')
+			.addText(text => text
+				.setPlaceholder('IP e.g. 192.168.1.2')
+				.setValue(this.plugin.settings.mirrorIP)
+				.onChange(async (value) => {
+					this.plugin.settings.mirrorIP = value;
+					await this.plugin.saveSettings();
+				}));
 	}
 }
