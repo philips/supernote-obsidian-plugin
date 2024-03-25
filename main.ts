@@ -42,17 +42,14 @@ export default class SupernotePlugin extends Plugin {
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 
 		this.addCommand({
-			id: 'insert-supernote-mirror-image',
-			name: 'Insert a Supernote mirror image',
+			id: 'insert-supernote-screen-mirror-image',
+			name: 'Insert a Supernote screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
 
 				// generate a unique filename for the mirror based on the current note path
 				let ts = generateTimestamp();
-				const f = this.app.workspace.activeEditor?.file;
-				const p = f?.parent?.path || '';
-				const b = f?.basename || '';
-				const fp = `${p}/${b}`;
-				let filename = `${fp}-supernote-mirror-${ts}.png`;
+				const f = this.app.workspace.activeEditor?.file?.basename || '';
+				const filename = await this.app.fileManager.getAvailablePathForAttachment(`supernote-mirror-${f}-${ts}.png`);
 
 				try {
 					if (this.settings.mirrorIP.length == 0) {
