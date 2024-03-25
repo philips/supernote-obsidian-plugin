@@ -1,6 +1,10 @@
 # Supernote Obsidian Plugin
 
-This plugin generates PNGs and markdown files for any `*.note` files found in your Obsidian Vault. The files will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`, `test.note-1.md`, `test.note-2.md`.
+This plugin has two main features:
+
+- 📝 Generates PNGs and markdown files for any `*.note` files found in your Obsidian Vault. The files will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`, `test.note-1.md`, `test.note-2.md`.
+
+- 📺 Copies an image from a Supernote via [screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) into your current note with the "Insert Supernote mirror image" command ([demo video](https://youtu.be/Ih_NW-z_aLw))
 
 **Video Demo**
 
@@ -22,7 +26,6 @@ This plugin generates PNGs and markdown files for any `*.note` files found in yo
 
 ## Roadmap / Ideas
 
-- 📺 [Screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) capture directly to the current note
 - 🔗 Note linking
 - 🎛️ Settings panel to control file layout, linking, and more
 - 🚀 Get listed in the official Obsidian community plugin list
@@ -63,5 +66,3 @@ npm link supernote-typescript/
 
 - `npm i` or `yarn` to install dependencies.
 - `npm run dev` to start compilation in watch mode.
-
-
