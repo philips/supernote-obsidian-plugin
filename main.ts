@@ -1,4 +1,4 @@
-import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView } from 'obsidian';
+import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 import * as path from 'path';
 
@@ -33,6 +33,53 @@ function generateTimestamp(): string {
   return timestamp;
 }
 
+export const VIEW_TYPE_SUPERNOTE = "supernote-view";
+
+export class SupernoteView extends FileView {
+constructor(leaf: WorkspaceLeaf) {
+	super(leaf);
+	}
+
+	getViewType() {
+		return VIEW_TYPE_SUPERNOTE;
+	}
+
+	getDisplayText() {
+		return "Example view";
+	}
+
+	async onLoadFile(file: TFile): Promise<void> {
+		const container = this.containerEl.children[1];
+		container.createEl("h1", { text: file.name });
+
+		const note = await this.app.vault.readBinary(file as TFile);
+		let sn = new SupernoteX(toBuffer(note));
+
+		let images = await toImage(sn);
+		for (let i = 0; i < images.length; i++) {
+			const imageDataUrl = images[i].toDataURL();
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				const text = container.createEl("div");
+				text.appendText(sn.pages[i].text);
+			}
+			const imgElement = container.createEl("img");
+			imgElement.src = imageDataUrl;
+			// Create a button to save image to vault
+			const saveButton = container.createEl("button", {
+				text: "Save Image to Vault",
+				cls: "mod-cta",
+			});
+			saveButton.addEventListener("click", async () => {
+				const filename = `${file.path}-${i}.png`; // Set desired filename for the saved image
+				await this.app.vault.createBinary(filename, images[i].toBuffer());
+			});
+		}
+
+	}
+
+	async onClose() {	}
+}
+
 export default class SupernotePlugin extends Plugin {
 	settings: SupernotePluginSettings;
 
@@ -40,6 +87,12 @@ export default class SupernotePlugin extends Plugin {
 		await this.loadSettings();
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
+
+		this.registerView(
+			VIEW_TYPE_SUPERNOTE,
+			(leaf) => new SupernoteView(leaf)
+		);
+		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
 
 		this.addCommand({
 			id: 'insert-supernote-screen-mirror-image',
@@ -65,44 +118,39 @@ export default class SupernotePlugin extends Plugin {
 			},
 		});
 
-		this.registerEvent(this.app.vault.on("create", async (file) => {
-			if (file instanceof TFolder) {
-				return;
-			}
+		this.addCommand({
+			id: 'attach-all-supernote-note-contents-as-files',
+			name: 'Attach all of this Supernote note\'s contents as individual markdown and PNG files',
 
-			if (file.path.endsWith('.note')) {
-				console.log(`got ${file.path}`);
-				const note = await this.app.vault.readBinary(file as TFile);
-				let sn = new SupernoteX(toBuffer(note));
-				let images = await toImage(sn);
-				for (let i = 0; i < images.length; i++) {
-					let filename = `${file.path}-${i}.png`
-					if (this.app.vault.getFileByPath(filename)) {
-						console.log(`skipped ${filename}`);
-						continue;
-					}
-					this.app.vault.createBinary(filename, images[i].toBuffer());
-					console.log(`wrote ${filename}`);
-				}
-
-				for (let i = 0; i < sn.pages.length; i++) {
-					let filename = `${file.path}-${i}.md`
-					if (this.app.vault.getFileByPath(filename)) {
-						console.log(`skipped ${filename}`);
-						continue;
-					}
-					if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-						this.app.vault.create(filename, sn.pages[i].text);
-						console.log(`wrote ${filename}`);
-					}
-				}
-			}
-		}));
+		})
 	}
 
 	onunload() {
 
 	}
+
+	async activateView() {
+		const { workspace } = this.app;
+
+		let leaf: WorkspaceLeaf | null = null;
+		const leaves = workspace.getLeavesOfType(VIEW_TYPE_SUPERNOTE);
+
+		if (leaves.length > 0) {
+		  // A leaf with our view already exists, use that
+		  leaf = leaves[0];
+		} else {
+		  // Our view could not be found in the workspace, create a new leaf
+		  // in the right sidebar for it
+		  leaf = workspace.getRightLeaf(false);
+		  if (!leaf) {
+			throw new Error("leaf is null");
+		  }
+		  await leaf.setViewState({ type: VIEW_TYPE_SUPERNOTE, active: true });
+		}
+
+		// "Reveal" the leaf in case it is in a collapsed sidebar
+		workspace.revealLeaf(leaf);
+	  }
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
