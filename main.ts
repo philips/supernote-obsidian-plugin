@@ -58,7 +58,9 @@ constructor(leaf: WorkspaceLeaf) {
 
 		let images = await toImage(sn);
 		if (images.length > 1) {
-			container.createEl("h2", { text: "Table of Contents" });
+			const atoc = container.createEl("a");
+			atoc.id = "toc";
+			atoc.createEl("h2", { text: "Table of Contents" });
 			const ul = container.createEl("ul");
 			for (let i = 0; i < images.length; i++) {
 				const a = container.createEl("li").createEl("a");
@@ -74,7 +76,8 @@ constructor(leaf: WorkspaceLeaf) {
 			if (images.length > 1) {
 				const a = container.createEl("a");
 				a.id = `page${i+1}`;
-				a.createEl("h3", { text: `Page ${i+1}` });
+				a.href = "#toc";
+				a.createEl("h3", { text: `Page ${i+1} (click back to TOC)` });
 			}
 
 			// Show the text of the page, if any
@@ -95,7 +98,7 @@ constructor(leaf: WorkspaceLeaf) {
 			});
 
 			saveButton.addEventListener("click", async () => {
-				const filename = `${file.path}-${i}.png`; // Set desired filename for the saved image
+				const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}}.png`);
 				await this.app.vault.createBinary(filename, images[i].toBuffer());
 			});
 		}
@@ -137,14 +140,14 @@ export default class SupernotePlugin extends Plugin {
 					this.app.vault.createBinary(filename, image.toBuffer());
 					editor.replaceRange(`![[${filename}]]`, editor.getCursor());
 				} catch (err: any) {
-					new ErrorModal(this.app, this.settings, err).open();
+					new MirrorErrorModal(this.app, this.settings, err).open();
 				}
 			},
 		});
 
 		this.addCommand({
-			id: 'attach-all-supernote-note-contents-as-files',
-			name: 'Attach all of this Supernote note\'s contents as individual markdown and PNG files',
+			id: 'export-supernote-note-as-files',
+			name: 'Export this Supernote note as a markdown and PNG files as attachments',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -167,33 +170,76 @@ export default class SupernotePlugin extends Plugin {
 				return false;
 			},
 		});
+
+		this.addCommand({
+			id: 'export-supernote-note-as-markdown',
+			name: 'Export this Supernote note as a markdown file attachment',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "note") {
+					if (checking) {
+						return true
+					}
+					try {
+						if (!file) {
+							throw new Error("No file to attach");
+						}
+						this.attachMarkdownFile(file);
+					} catch (err: any) {
+						new ErrorModal(this.app, this.settings, err).open();
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
 	}
 
 	onunload() {
 
 	}
 
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: string[] | null) {
+		let content = '';
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.md`);
+		for (let i = 0; i < sn.pages.length; i++) {
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				content += `## Page ${i+1}\n\n${sn.pages[i].text}\n`;
+				if (imgs) {
+					content += `![[${imgs[i]}]]\n`;
+				}
+			}
+		}
+		this.app.vault.create(filename, content);
+	}
+
+	async writeImageFiles(file: TFile, sn: SupernoteX) : Promise<string[]> {
+		let images = await toImage(sn);
+		let imgs: string[] = [];
+		for (let i = 0; i < images.length; i++) {
+			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
+			this.app.vault.createBinary(filename, images[i].toBuffer());
+			imgs.push(filename);
+		}
+		return imgs;
+	}
+
+	async attachMarkdownFile(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		let sn = new SupernoteX(toBuffer(note));
+
+		this.writeMarkdownFile(file, sn, null);
+	}
+
 	async attachNoteFiles(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
 		let sn = new SupernoteX(toBuffer(note));
-		let images = await toImage(sn);
-		for (let i = 0; i < images.length; i++) {
-			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.path}-${i}.png`);
-			if (this.app.vault.getFileByPath(filename)) {
-				continue;
-			}
-			this.app.vault.createBinary(filename, images[i].toBuffer());
-		}
 
-		for (let i = 0; i < sn.pages.length; i++) {
-			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.path}-${i}.md`);
-			if (this.app.vault.getFileByPath(filename)) {
-				continue;
-			}
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				this.app.vault.create(filename, sn.pages[i].text);
-			}
-		}
+		const imgs = await this.writeImageFiles(file, sn);
+		this.writeMarkdownFile(file, sn, imgs);
 	}
 
 	async activateView() {
@@ -229,7 +275,7 @@ export default class SupernotePlugin extends Plugin {
 }
 
 
-class ErrorModal extends Modal {
+class MirrorErrorModal extends Modal {
 	error: Error;
 	settings: SupernotePluginSettings;
 
@@ -249,6 +295,28 @@ class ErrorModal extends Modal {
 		contentEl.empty();
 	}
 }
+
+class ErrorModal extends Modal {
+	error: Error;
+	settings: SupernotePluginSettings;
+
+	constructor(app: App, settings: SupernotePluginSettings, error: Error) {
+		super(app);
+		this.error = error;
+		this.settings = settings;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.setText(`Error: ${this.error.message}.`);
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
 
 class SupernoteSettingTab extends PluginSettingTab {
 	plugin: SupernotePlugin;
