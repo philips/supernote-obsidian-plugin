@@ -10,7 +10,7 @@ This plugin has three main features:
 
 **Video Demo**
 
-[![Watch the video](https://img.youtube.com/vi/hrEOETbTW0k/hqdefault.jpg)](https://www.youtube.com/embed/hrEOETbTW0k)
+[![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=tEoW35fYVew)
 
 ## Install via BRAT
 
