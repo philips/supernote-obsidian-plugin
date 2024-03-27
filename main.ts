@@ -33,11 +33,63 @@ function generateTimestamp(): string {
 	return timestamp;
 }
 
+class VaultWriter {
+	app: App;
+
+	constructor(app: App) {
+		this.app = app;
+	}
+
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: string[] | null) {
+		let content = '';
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.md`);
+		content += `[Source Note](${file.path})\n`
+		for (let i = 0; i < sn.pages.length; i++) {
+			content += `## Page ${i+1}\n\n`
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				content += `${sn.pages[i].text}\n`;
+			}
+			if (imgs) {
+				content += `![[${imgs[i]}]]\n`;
+			}
+		}
+		this.app.vault.create(filename, content);
+	}
+
+	async writeImageFiles(file: TFile, sn: SupernoteX) : Promise<string[]> {
+		let images = await toImage(sn);
+		let imgs: string[] = [];
+		for (let i = 0; i < images.length; i++) {
+			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
+			this.app.vault.createBinary(filename, images[i].toBuffer());
+			imgs.push(filename);
+		}
+		return imgs;
+	}
+
+	async attachMarkdownFile(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		let sn = new SupernoteX(toBuffer(note));
+
+		this.writeMarkdownFile(file, sn, null);
+	}
+
+	async attachNoteFiles(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		let sn = new SupernoteX(toBuffer(note));
+
+		const imgs = await this.writeImageFiles(file, sn);
+		this.writeMarkdownFile(file, sn, imgs);
+	}
+}
+
+let vw: VaultWriter;
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
 
 export class SupernoteView extends FileView {
-constructor(leaf: WorkspaceLeaf) {
-	super(leaf);
+	file: TFile;
+	constructor(leaf: WorkspaceLeaf) {
+		super(leaf);
 	}
 
 	getViewType() {
@@ -45,7 +97,10 @@ constructor(leaf: WorkspaceLeaf) {
 	}
 
 	getDisplayText() {
-		return "Example view";
+		if (!this.file) {
+			return "Supernote View"
+		}
+		return this.file.basename;
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -55,8 +110,26 @@ constructor(leaf: WorkspaceLeaf) {
 
 		const note = await this.app.vault.readBinary(file as TFile);
 		let sn = new SupernoteX(toBuffer(note));
-
 		let images = await toImage(sn);
+
+		const exportNoteBtn = container.createEl("p").createEl("button", {
+			text: "Attach Markdown to Vault",
+			cls: "mod-cta",
+		});
+
+		exportNoteBtn.addEventListener("click", async () => {
+			vw.attachMarkdownFile(file);
+		});
+
+		const exportAllBtn = container.createEl("p").createEl("button", {
+			text: "Attach Markdown and Images to Vault",
+			cls: "mod-cta",
+		});
+
+		exportAllBtn.addEventListener("click", async () => {
+			vw.attachNoteFiles(file);
+		});
+
 		if (images.length > 1) {
 			const atoc = container.createEl("a");
 			atoc.id = "toc";
@@ -77,7 +150,7 @@ constructor(leaf: WorkspaceLeaf) {
 				const a = container.createEl("a");
 				a.id = `page${i+1}`;
 				a.href = "#toc";
-				a.createEl("h3", { text: `Page ${i+1} (click back to TOC)` });
+				a.createEl("h3", { text: `Page ${i+1}` });
 			}
 
 			// Show the text of the page, if any
@@ -113,6 +186,7 @@ export default class SupernotePlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		vw = new VaultWriter(this.app);
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 
@@ -160,7 +234,7 @@ export default class SupernotePlugin extends Plugin {
 						if (!file) {
 							throw new Error("No file to attach");
 						}
-						this.attachNoteFiles(file);
+						vw.attachNoteFiles(file);
 					} catch (err: any) {
 						new ErrorModal(this.app, this.settings, err).open();
 					}
@@ -186,7 +260,7 @@ export default class SupernotePlugin extends Plugin {
 						if (!file) {
 							throw new Error("No file to attach");
 						}
-						this.attachMarkdownFile(file);
+						vw.attachMarkdownFile(file);
 					} catch (err: any) {
 						new ErrorModal(this.app, this.settings, err).open();
 					}
@@ -200,46 +274,6 @@ export default class SupernotePlugin extends Plugin {
 
 	onunload() {
 
-	}
-
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: string[] | null) {
-		let content = '';
-		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.md`);
-		for (let i = 0; i < sn.pages.length; i++) {
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `## Page ${i+1}\n\n${sn.pages[i].text}\n`;
-				if (imgs) {
-					content += `![[${imgs[i]}]]\n`;
-				}
-			}
-		}
-		this.app.vault.create(filename, content);
-	}
-
-	async writeImageFiles(file: TFile, sn: SupernoteX) : Promise<string[]> {
-		let images = await toImage(sn);
-		let imgs: string[] = [];
-		for (let i = 0; i < images.length; i++) {
-			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
-			this.app.vault.createBinary(filename, images[i].toBuffer());
-			imgs.push(filename);
-		}
-		return imgs;
-	}
-
-	async attachMarkdownFile(file: TFile) {
-		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(toBuffer(note));
-
-		this.writeMarkdownFile(file, sn, null);
-	}
-
-	async attachNoteFiles(file: TFile) {
-		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(toBuffer(note));
-
-		const imgs = await this.writeImageFiles(file, sn);
-		this.writeMarkdownFile(file, sn, imgs);
 	}
 
 	async activateView() {
