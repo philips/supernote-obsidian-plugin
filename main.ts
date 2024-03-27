@@ -50,25 +50,50 @@ constructor(leaf: WorkspaceLeaf) {
 
 	async onLoadFile(file: TFile): Promise<void> {
 		const container = this.containerEl.children[1];
+		container.innerHTML = '';
 		container.createEl("h1", { text: file.name });
 
 		const note = await this.app.vault.readBinary(file as TFile);
 		let sn = new SupernoteX(toBuffer(note));
 
 		let images = await toImage(sn);
+		if (images.length > 1) {
+			container.createEl("h2", { text: "Table of Contents" });
+			const ul = container.createEl("ul");
+			for (let i = 0; i < images.length; i++) {
+				const a = container.createEl("li").createEl("a");
+				a.href = `#page${i+1}`
+				a.text = `Page ${i+1}`
+
+			}
+		}
+
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i].toDataURL();
+
+			if (images.length > 1) {
+				const a = container.createEl("a");
+				a.id = `page${i+1}`;
+				a.createEl("h3", { text: `Page ${i+1}` });
+			}
+
+			// Show the text of the page, if any
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				const text = container.createEl("div");
-				text.appendText(sn.pages[i].text);
+				text.setAttr('style', 'user-select: text; white-space: pre-line;');
+				text.textContent = sn.pages[i].text;
 			}
+
+			// Show the img of the page
 			const imgElement = container.createEl("img");
 			imgElement.src = imageDataUrl;
+			imgElement.draggable = true;
 			// Create a button to save image to vault
 			const saveButton = container.createEl("button", {
 				text: "Save Image to Vault",
 				cls: "mod-cta",
 			});
+
 			saveButton.addEventListener("click", async () => {
 				const filename = `${file.path}-${i}.png`; // Set desired filename for the saved image
 				await this.app.vault.createBinary(filename, images[i].toBuffer());
