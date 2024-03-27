@@ -1,10 +1,12 @@
 # Supernote Obsidian Plugin
 
-This plugin has two main features:
+This plugin has three main features:
 
-- 📝 Generates PNGs and markdown files for any `*.note` files found in your Obsidian Vault. The files will be named based on the filename of the note and the page number of the note like so: `test.note-0.png`, `test.note-1.png`, `test.note-1.md`, `test.note-2.md`.
+- 📝 View Supernote `*.note` files in your Obsidian Vault. You can link to these notes from your Markdown notes too `[My Note](example.note)`.
 
-- 📺 Copies an image from a Supernote via [screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) into your current note with the "Insert Supernote mirror image" command ([demo video](https://youtu.be/Ih_NW-z_aLw))
+- ➡️  Export Supernote `*.note` files as PNGs and/or markdown files and attach them to your Vault.
+
+- 📺 Copy an image from a Supernote via [screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) into your current note with the "Insert Supernote mirror image" command ([demo video](https://youtu.be/Ih_NW-z_aLw))
 
 **Video Demo**
 
