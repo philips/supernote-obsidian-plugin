@@ -21,16 +21,16 @@ function toBuffer(arrayBuffer: ArrayBuffer) {
 }
 
 function generateTimestamp(): string {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0'); // Add leading zero for single-digit months
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
+	const date = new Date();
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, '0'); // Add leading zero for single-digit months
+	const day = String(date.getDate()).padStart(2, '0');
+	const hours = String(date.getHours()).padStart(2, '0');
+	const minutes = String(date.getMinutes()).padStart(2, '0');
+	const seconds = String(date.getSeconds()).padStart(2, '0');
 
-  const timestamp = `${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
-  return timestamp;
+	const timestamp = `${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
+	return timestamp;
 }
 
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
@@ -123,7 +123,6 @@ export default class SupernotePlugin extends Plugin {
 			id: 'insert-supernote-screen-mirror-image',
 			name: 'Insert a Supernote screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-
 				// generate a unique filename for the mirror based on the current note path
 				let ts = generateTimestamp();
 				const f = this.app.workspace.activeEditor?.file?.basename || '';
@@ -146,12 +145,55 @@ export default class SupernotePlugin extends Plugin {
 		this.addCommand({
 			id: 'attach-all-supernote-note-contents-as-files',
 			name: 'Attach all of this Supernote note\'s contents as individual markdown and PNG files',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
 
-		})
+				if (ext === "note") {
+					if (checking) {
+						return true
+					}
+					try {
+						if (!file) {
+							throw new Error("No file to attach");
+						}
+						this.attachNoteFiles(file);
+					} catch (err: any) {
+						new ErrorModal(this.app, this.settings, err).open();
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
 	}
 
 	onunload() {
 
+	}
+
+	async attachNoteFiles(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		let sn = new SupernoteX(toBuffer(note));
+		let images = await toImage(sn);
+		for (let i = 0; i < images.length; i++) {
+			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.path}-${i}.png`);
+			if (this.app.vault.getFileByPath(filename)) {
+				continue;
+			}
+			this.app.vault.createBinary(filename, images[i].toBuffer());
+		}
+
+		for (let i = 0; i < sn.pages.length; i++) {
+			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.path}-${i}.md`);
+			if (this.app.vault.getFileByPath(filename)) {
+				continue;
+			}
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				this.app.vault.create(filename, sn.pages[i].text);
+			}
+		}
 	}
 
 	async activateView() {
@@ -161,21 +203,21 @@ export default class SupernotePlugin extends Plugin {
 		const leaves = workspace.getLeavesOfType(VIEW_TYPE_SUPERNOTE);
 
 		if (leaves.length > 0) {
-		  // A leaf with our view already exists, use that
-		  leaf = leaves[0];
+			// A leaf with our view already exists, use that
+			leaf = leaves[0];
 		} else {
-		  // Our view could not be found in the workspace, create a new leaf
-		  // in the right sidebar for it
-		  leaf = workspace.getRightLeaf(false);
-		  if (!leaf) {
-			throw new Error("leaf is null");
-		  }
-		  await leaf.setViewState({ type: VIEW_TYPE_SUPERNOTE, active: true });
+			// Our view could not be found in the workspace, create a new leaf
+			// in the right sidebar for it
+			leaf = workspace.getRightLeaf(false);
+			if (!leaf) {
+				throw new Error("leaf is null");
+			}
+			await leaf.setViewState({ type: VIEW_TYPE_SUPERNOTE, active: true });
 		}
 
 		// "Reveal" the leaf in case it is in a collapsed sidebar
 		workspace.revealLeaf(leaf);
-	  }
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
