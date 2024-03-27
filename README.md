@@ -36,6 +36,12 @@ This plugin has three main features:
 
 Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.
 
+## FAQ
+
+**Q** Why isn't there a table of contents in the generated Markdown file? 
+
+**A** Because the [Obsidian Outline](https://help.obsidian.md/Plugins/Outline) sidebar accomplishes this same feature.
+
 ## Relevant Resources
 
 - [E-Ink notes in Obsidian / Notion? by Brandon Boswell](https://www.youtube.com/watch?v=kW8I8B-eCRk)
