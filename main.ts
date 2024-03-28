@@ -43,7 +43,7 @@ class VaultWriter {
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: string[] | null) {
 		let content = '';
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.md`);
-		content += `[Source Note](${file.path})\n`
+		content += `[[${file.path}|Source Note]]\n`
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i+1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
