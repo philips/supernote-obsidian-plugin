@@ -10,16 +10,6 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	mirrorIP: '',
 }
 
-
-function toBuffer(arrayBuffer: ArrayBuffer) {
-	const buffer = Buffer.alloc(arrayBuffer.byteLength);
-	const view = new Uint8Array(arrayBuffer);
-	for (let i = 0; i < buffer.length; ++i) {
-		buffer[i] = view[i];
-	}
-	return buffer;
-}
-
 function generateTimestamp(): string {
 	const date = new Date();
 	const year = date.getFullYear();
@@ -69,14 +59,14 @@ class VaultWriter {
 
 	async attachMarkdownFile(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(toBuffer(note));
+		let sn = new SupernoteX(new Uint8Array(note));
 
 		this.writeMarkdownFile(file, sn, null);
 	}
 
 	async attachNoteFiles(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(toBuffer(note));
+		let sn = new SupernoteX(new Uint8Array(note));
 
 		const imgs = await this.writeImageFiles(file, sn);
 		this.writeMarkdownFile(file, sn, imgs);
@@ -109,7 +99,7 @@ export class SupernoteView extends FileView {
 		container.createEl("h1", { text: file.name });
 
 		const note = await this.app.vault.readBinary(file as TFile);
-		let sn = new SupernoteX(toBuffer(note));
+		let sn = new SupernoteX(new Uint8Array(note));
 		let images = await toImage(sn);
 
 		const exportNoteBtn = container.createEl("p").createEl("button", {
