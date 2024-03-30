@@ -1,5 +1,11 @@
 # Supernote Obsidian Plugin
 
+I use my Supernote for capturing hand written notes and reading documents.
+
+But, I already use Obsidian for organizing and capturing all of my digital notes.
+
+This plugin enables me (and now you!) to import handwritten notes into Obsidian and view them on a desktop, phone or tablet.
+
 This plugin has three main features:
 
 - 📝 View Supernote `*.note` files in your Obsidian Vault. You can link to these notes from your Markdown notes too `[My Note](example.note)`.
