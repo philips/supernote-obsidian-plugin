@@ -1,0 +1,13 @@
+#!/bin/sh
+
+git submodule init
+git submodule update
+cd supernote-typescript/
+git clean -x -f -d
+npm install --include=dev
+npm run build
+npm link
+cd ..
+npm link supernote-typescript/
+npm install --include=dev
+npm run build

@@ -12,6 +12,8 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"@types/color": "^3.0.6",
+		"@types/jest": "^29.5.12",
 		"@types/node": "^16.11.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
@@ -22,6 +24,7 @@
 		"typescript": "4.7.4"
 	},
 	"dependencies": {
+		"image-js": "^0.35.5",
 		"supernote": "github:philips/supernote-typescript"
 	}
 }

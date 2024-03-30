@@ -19,6 +19,9 @@
       "ES7"
     ]
   },
+  "exclude": [
+    "supernote-typescript/**/*.ts"
+  ],
   "include": [
     "**/*.ts"
   ]
