@@ -33,7 +33,12 @@ class VaultWriter {
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null) {
 		let content = '';
 
-		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.md`);
+		// Generate a non-conflicting filename - it has a bit of a race but that is OK
+		let filename = 	`${file.parent?.path}/${file.basename}.md`;
+		let i = 0;
+		while (this.app.vault.getFileByPath(filename) !== null) {
+			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
+		}
 
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
@@ -48,6 +53,7 @@ class VaultWriter {
 				content += `${link}\n`;
 			}
 		}
+
 		this.app.vault.create(filename, content);
 	}
 
@@ -235,7 +241,7 @@ export default class SupernotePlugin extends Plugin {
 						}
 						vw.attachNoteFiles(file);
 					} catch (err: any) {
-						new ErrorModal(this.app, this.settings, err).open();
+						new ErrorModal(this.app, err).open();
 					}
 					return true;
 				}
@@ -261,7 +267,7 @@ export default class SupernotePlugin extends Plugin {
 						}
 						vw.attachMarkdownFile(file);
 					} catch (err: any) {
-						new ErrorModal(this.app, this.settings, err).open();
+						new ErrorModal(this.app, err).open();
 					}
 					return true;
 				}
@@ -333,10 +339,9 @@ class ErrorModal extends Modal {
 	error: Error;
 	settings: SupernotePluginSettings;
 
-	constructor(app: App, settings: SupernotePluginSettings, error: Error) {
+	constructor(app: App, error: Error) {
 		super(app);
 		this.error = error;
-		this.settings = settings;
 	}
 
 	onOpen() {
