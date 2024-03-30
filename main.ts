@@ -30,29 +30,33 @@ class VaultWriter {
 		this.app = app;
 	}
 
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: string[] | null) {
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null) {
 		let content = '';
+
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.md`);
-		content += `[[${file.path}|Source Note]]\n`
+
+		content = this.app.fileManager.generateMarkdownLink(file, filename);
+		content += '\n';
+
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i+1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				content += `${sn.pages[i].text}\n`;
 			}
 			if (imgs) {
-				content += `![[${imgs[i]}]]\n`;
+				const link = this.app.fileManager.generateMarkdownLink(imgs[i], filename);
+				content += `${link}\n`;
 			}
 		}
 		this.app.vault.create(filename, content);
 	}
 
-	async writeImageFiles(file: TFile, sn: SupernoteX) : Promise<string[]> {
+	async writeImageFiles(file: TFile, sn: SupernoteX) : Promise<TFile[]> {
 		let images = await toImage(sn);
-		let imgs: string[] = [];
+		let imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
 			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
-			this.app.vault.createBinary(filename, images[i].toBuffer());
-			imgs.push(filename);
+			imgs.push(await this.app.vault.createBinary(filename, images[i].toBuffer()));
 		}
 		return imgs;
 	}
@@ -201,8 +205,13 @@ export default class SupernotePlugin extends Plugin {
 					}
 					let image = await fetchMirrorFrame(`${this.settings.mirrorIP}:8080`);
 
-					this.app.vault.createBinary(filename, image.toBuffer());
-					editor.replaceRange(`![[${filename}]]`, editor.getCursor());
+					const file = await this.app.vault.createBinary(filename, image.toBuffer());
+					const path = this.app.workspace.activeEditor?.file?.path;
+					if (!path) {
+						throw new Error("Active file path is null")
+					}
+					const link = this.app.fileManager.generateMarkdownLink(file, path);
+					editor.replaceRange(link, editor.getCursor());
 				} catch (err: any) {
 					new MirrorErrorModal(this.app, this.settings, err).open();
 				}
