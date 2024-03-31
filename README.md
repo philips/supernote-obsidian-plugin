@@ -22,11 +22,11 @@ This plugin has three main features:
 
 - Install the BRAT plugin via Community Plugin Search
 - [Read the docs](https://tfthacker.com/BRAT)
-- Add `https://github.com/philips/obsidian-plugin-supernote`
+- Add `https://github.com/philips/supernote-obsidian-plugin`
 
 ## Manually installing the plugin
 
-- Copy over `main.js`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/obsidian-plugin-supernote/` from https://github.com/philips/obsidian-plugin-supernote/releases.
+- Copy over `main.js`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/obsidian-plugin-supernote/` from [https://github.com/philips/supernote-obsidian-plugin/releases](https://github.com/philips/supernote-obsidian-plugin)
 
 ## Known Issues
 
