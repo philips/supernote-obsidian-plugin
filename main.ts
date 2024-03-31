@@ -105,10 +105,10 @@ export class SupernoteView extends FileView {
 
 	async onLoadFile(file: TFile): Promise<void> {
 		const container = this.containerEl.children[1];
-		container.innerHTML = '';
+		container.empty();
 		container.createEl("h1", { text: file.name });
 
-		const note = await this.app.vault.readBinary(file as TFile);
+		const note = await this.app.vault.readBinary(file);
 		let sn = new SupernoteX(new Uint8Array(note));
 		let images = await toImage(sn);
 
