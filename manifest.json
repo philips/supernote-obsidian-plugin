@@ -5,7 +5,7 @@
 	"minAppVersion": "0.15.0",
 	"description": "View Supernote notes, generate markdown from note and capture screen mirror.",
 	"author": "Brandon Philips",
-	"authorUrl": "https://github.com/philips/supernote-obsidian-plugin",
-	"fundingUrl": "https://ifup.org",
+	"authorUrl": "https://ifup.org",
+	"fundingUrl": "https://signal.org/donate/",
 	"isDesktopOnly": false
 }
