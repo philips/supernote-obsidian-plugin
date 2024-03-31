@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "supernote-obsidian-plugin",
 	"version": "2.1.7",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Unofficial Supernote by Ratta Integration for Obsidian",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
