@@ -60,6 +60,10 @@ These are not endorsements but might be useful to pair with this plugin.
 - [Ozan's Image in Editor Plugin](https://github.com/ozntel/oz-image-in-editor-obsidian)
 - [Obsidian OCR Plugin](https://github.com/schlundd/obsidian-ocr-plugin)
 
+## Funding
+
+I personally don't accept funding or donations for this project. However, if you feel inclined, consider donating to the [Signal Foundation](https://signal.org/donate/).
+
 ## Developer Notes
 
 ### How to use
