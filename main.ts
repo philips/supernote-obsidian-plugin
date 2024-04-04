@@ -1,6 +1,5 @@
 import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
-import * as path from 'path';
 
 interface SupernotePluginSettings {
 	mirrorIP: string;
