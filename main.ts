@@ -112,7 +112,7 @@ export class SupernoteView extends FileView {
 		let images = await toImage(sn);
 
 		const exportNoteBtn = container.createEl("p").createEl("button", {
-			text: "Attach Markdown to Vault",
+			text: "Attach markdown to vault",
 			cls: "mod-cta",
 		});
 
@@ -121,7 +121,7 @@ export class SupernoteView extends FileView {
 		});
 
 		const exportAllBtn = container.createEl("p").createEl("button", {
-			text: "Attach Markdown and Images to Vault",
+			text: "Attach markdown and images to vault",
 			cls: "mod-cta",
 		});
 
@@ -132,7 +132,7 @@ export class SupernoteView extends FileView {
 		if (images.length > 1) {
 			const atoc = container.createEl("a");
 			atoc.id = "toc";
-			atoc.createEl("h2", { text: "Table of Contents" });
+			atoc.createEl("h2", { text: "Table of contents" });
 			const ul = container.createEl("ul");
 			for (let i = 0; i < images.length; i++) {
 				const a = container.createEl("li").createEl("a");
@@ -165,7 +165,7 @@ export class SupernoteView extends FileView {
 			imgElement.draggable = true;
 			// Create a button to save image to vault
 			const saveButton = container.createEl("button", {
-				text: "Save Image to Vault",
+				text: "Save image to vault",
 				cls: "mod-cta",
 			});
 
@@ -369,10 +369,10 @@ class SupernoteSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Supernote Mirror IP')
-			.setDesc('See Supernote Screen Mirroring documentation for how to enable')
+			.setName('Supernote IP address for "Screen Mirroring"')
+			.setDesc('See Supernote "Screen Mirroring" documentation for how to enable')
 			.addText(text => text
-				.setPlaceholder('IP e.g. 192.168.1.2')
+				.setPlaceholder('e.g. 192.168.1.2')
 				.setValue(this.plugin.settings.mirrorIP)
 				.onChange(async (value) => {
 					this.plugin.settings.mirrorIP = value;
