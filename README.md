@@ -18,7 +18,13 @@ This plugin has three main features:
 
 [![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=tEoW35fYVew)
 
+## Install via Community Plugin Store
+
+This plugin is available via the [Obsidian Community Plugin Store](https://obsidian.md/plugins?id=supernote). Click the previous link or search for "Unofficial Supernote by Ratta Integration". 
+
 ## Install via BRAT
+
+To test Beta builds of this plugin follow these steps:
 
 - Install the BRAT plugin via Community Plugin Search
 - [Read the docs](https://tfthacker.com/BRAT)
@@ -30,13 +36,12 @@ This plugin has three main features:
 
 ## Known Issues
 
-- Doesn't seem to work on iOS
+- None. Do you need to [create a new issue](https://github.com/philips/supernote-obsidian-plugin/issues)?
 
 ## Roadmap / Ideas
 
 - 🔗 Note linking
 - 🎛️ Settings panel to control file layout, linking, and more
-- 🚀 Get listed in the official Obsidian community plugin list
 
 ## Thank You
 
