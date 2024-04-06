@@ -1,0 +1,46 @@
+{
+  "name": "js-priority-queue",
+  "version": "0.1.5",
+  "description": "Priority queue data structures",
+  "main": "priority-queue.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adamhooper/js-priority-queue"
+  },
+  "keywords": [
+    "priority",
+    "queue",
+    "bheap",
+    "b-heap",
+    "binary",
+    "heap",
+    "dequeue",
+    "comparator"
+  ],
+  "author": "Adam Hooper <adam@adamhooper.com>",
+  "license": "Public Domain",
+  "readmeFilename": "README.md",
+  "devDependencies": {
+    "browserify": "^11.0.0",
+    "chai": "^3.1.0",
+    "coffee-script": "^1.10.0",
+    "coffeeify": "^1.1.0",
+    "del": "^1.2.0",
+    "gulp": "^3.9.0",
+    "gulp-coffee": "^2.3.1",
+    "gulp-derequire": "^2.1.0",
+    "gulp-mocha": "^2.1.3",
+    "gulp-rename": "^1.2.2",
+    "gulp-uglify": "^1.2.0",
+    "gulp-util": "^3.0.6",
+    "karma": "^0.13.2",
+    "karma-browserify": "^4.2.1",
+    "karma-chai": "~0.1.0",
+    "karma-mocha": "^0.2.0",
+    "karma-phantomjs-launcher": "^0.2.0",
+    "mocha": "^2.2.5",
+    "phantomjs": "^1.9.17",
+    "vinyl-source-stream": "^1.1.0"
+  }
+}

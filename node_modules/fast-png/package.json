@@ -1,0 +1,61 @@
+{
+  "name": "fast-png",
+  "version": "6.2.0",
+  "description": "PNG image decoder and encoder written entirely in JavaScript",
+  "main": "./lib/index.js",
+  "module": "./lib-esm/index.js",
+  "types": "./lib/index.d.ts",
+  "keywords": [
+    "png",
+    "image",
+    "image-js",
+    "encoder",
+    "decoder"
+  ],
+  "author": "Michaël Zasso",
+  "license": "MIT",
+  "files": [
+    "src",
+    "lib",
+    "lib-esm"
+  ],
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "clean": "rimraf lib lib-esm",
+    "eslint": "eslint src",
+    "eslint-fix": "npm run eslint -- --fix",
+    "prepack": "npm run tsc",
+    "prettier": "prettier --check src",
+    "prettier-write": "prettier --write src",
+    "test": "npm run test-only && npm run eslint && npm run prettier && npm run check-types",
+    "test-only": "jest --coverage",
+    "tsc": "npm run clean && npm run tsc-cjs && npm run tsc-esm",
+    "tsc-cjs": "tsc --project tsconfig.cjs.json",
+    "tsc-esm": "tsc --project tsconfig.esm.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/image-js/fast-png.git"
+  },
+  "bugs": {
+    "url": "https://github.com/image-js/fast-png/issues"
+  },
+  "homepage": "https://github.com/image-js/fast-png#readme",
+  "devDependencies": {
+    "@types/jest": "^29.5.3",
+    "@types/node": "^20.4.2",
+    "eslint": "^8.45.0",
+    "eslint-config-cheminfo-typescript": "^11.3.1",
+    "jest": "^29.6.1",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.0.0",
+    "rimraf": "^5.0.1",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "@types/pako": "^2.0.0",
+    "iobuffer": "^5.3.2",
+    "pako": "^2.1.0"
+  }
+}

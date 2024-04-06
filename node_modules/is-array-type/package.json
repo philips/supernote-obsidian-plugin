@@ -1,0 +1,21 @@
+{
+  "name": "is-array-type",
+  "version": "1.0.0",
+  "description": "Check if a value is an array or a typed array",
+  "main": "is-array-type.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": "targos/is-array-type",
+  "keywords": [
+    "is",
+    "array",
+    "typed"
+  ],
+  "author": "Michaël Zasso",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/targos/is-array-type/issues"
+  },
+  "homepage": "https://github.com/targos/is-array-type#readme"
+}

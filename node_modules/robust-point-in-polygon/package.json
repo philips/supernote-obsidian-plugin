@@ -1,0 +1,40 @@
+{
+  "name": "robust-point-in-polygon",
+  "version": "1.0.3",
+  "description": "Exactly test if a point is inside, outside or on the boundary of a polygon",
+  "main": "robust-pnp.js",
+  "directories": {
+    "test": "test"
+  },
+  "dependencies": {
+    "robust-orientation": "^1.0.2"
+  },
+  "devDependencies": {
+    "tape": "^2.0.0"
+  },
+  "scripts": {
+    "test": "tape test/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/mikolalysenko/robust-point-in-polygon.git"
+  },
+  "keywords": [
+    "robust",
+    "point",
+    "in",
+    "polygon",
+    "pnp",
+    "inside",
+    "outside",
+    "on",
+    "exact",
+    "arithmetic"
+  ],
+  "author": "Mikola Lysenko",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mikolalysenko/robust-point-in-polygon/issues"
+  },
+  "homepage": "https://github.com/mikolalysenko/robust-point-in-polygon"
+}

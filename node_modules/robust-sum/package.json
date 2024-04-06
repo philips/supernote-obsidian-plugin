@@ -1,0 +1,35 @@
+{
+  "name": "robust-sum",
+  "version": "1.0.0",
+  "description": "Evaluates the sum of two nonoverlapping increasing sequences of floats",
+  "main": "robust-sum.js",
+  "directories": {
+    "test": "test"
+  },
+  "dependencies": {
+  },
+  "devDependencies": {
+    "tape": "^2.12.3",
+    "validate-robust-sequence": "^1.0.0"
+  },
+  "scripts": {
+    "test": "tap test/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/mikolalysenko/robust-sum.git"
+  },
+  "keywords": [
+    "robust",
+    "sum",
+    "float",
+    "exact",
+    "nonoverlapping",
+    "shewchuk"
+  ],
+  "author": "Mikola Lysenko",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mikolalysenko/robust-sum/issues"
+  }
+}

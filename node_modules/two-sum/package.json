@@ -1,0 +1,34 @@
+{
+  "name": "two-sum",
+  "version": "1.0.0",
+  "description": "Computes a non-overlapping sequence representing the sum of two floating point numbers.",
+  "main": "two-sum.js",
+  "directories": {
+    "test": "test"
+  },
+  "dependencies": {
+  },
+  "devDependencies": {
+    "tape": "~1.1.0"
+	},
+  "scripts": {
+    "test": "tap test/*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/mikolalysenko/two-sum.git"
+  },
+  "keywords": [
+    "two",
+    "sum",
+    "floating",
+    "point",
+    "robust",
+    "exact"
+  ],
+  "author": "Mikola Lysenko",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mikolalysenko/two-sum/issues"
+  }
+}

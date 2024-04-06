@@ -1,0 +1,38 @@
+{
+  "name": "next-power-of-two",
+  "version": "1.0.0",
+  "description": "returns the next highest power of two",
+  "main": "index.js",
+  "license": "MIT",
+  "author": {
+    "name": "Matt DesLauriers",
+    "email": "dave.des@gmail.com",
+    "url": "https://github.com/mattdesl"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "faucet": "0.0.1",
+    "tape": "^4.0.0"
+  },
+  "scripts": {
+    "test": "node test.js | faucet"
+  },
+  "keywords": [
+    "power",
+    "of",
+    "two",
+    "next",
+    "highest",
+    "greatest",
+    "pot",
+    "2"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/mattdesl/next-power-of-two.git"
+  },
+  "homepage": "https://github.com/mattdesl/next-power-of-two",
+  "bugs": {
+    "url": "https://github.com/mattdesl/next-power-of-two/issues"
+  }
+}
