@@ -55,6 +55,7 @@ Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for devel
 
 ## Relevant Resources
 
+- [Obsidian and Supernote by Organizing for Change](https://www.youtube.com/watch?v=2zKD79e-V_U)
 - [E-Ink notes in Obsidian / Notion? by Brandon Boswell](https://www.youtube.com/watch?v=kW8I8B-eCRk)
 - [Academic HANDWRITTEN notes in OBSIDIAN ft. Supernote by pixel leaves](https://www.youtube.com/watch?v=lzYCPkVnqIM)
 
@@ -70,8 +71,6 @@ These are not endorsements but might be useful to pair with this plugin.
 I personally don't accept funding or donations for this project. However, if you feel inclined, consider donating to the [Signal Foundation](https://signal.org/donate/).
 
 ## Developer Notes
-
-### How to use
 
 - Make sure your NodeJS is at least v16 (`node --version`).
 - Clone this repo.
