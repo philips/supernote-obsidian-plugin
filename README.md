@@ -36,7 +36,7 @@ To test Beta builds of this plugin follow these steps:
 
 ## Known Issues
 
-- None. Do you need to [create a new issue](https://github.com/philips/supernote-obsidian-plugin/issues)?
+There are a handful of known issues. Please check the [issue list](https://github.com/philips/supernote-obsidian-plugin/issues). If you don't see a matching issue please [create a new issue](https://github.com/philips/supernote-obsidian-plugin/issues)?
 
 ## Roadmap / Ideas
 
@@ -53,18 +53,22 @@ Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for devel
 
 **A** Because the [Obsidian Outline](https://help.obsidian.md/Plugins/Outline) sidebar accomplishes this same feature.
 
-## Relevant Resources
+**Q** Can the images be larger or smaller?
 
-- [Obsidian and Supernote by Organizing for Change](https://www.youtube.com/watch?v=2zKD79e-V_U)
-- [E-Ink notes in Obsidian / Notion? by Brandon Boswell](https://www.youtube.com/watch?v=kW8I8B-eCRk)
-- [Academic HANDWRITTEN notes in OBSIDIAN ft. Supernote by pixel leaves](https://www.youtube.com/watch?v=lzYCPkVnqIM)
+**A** Add a number, in pixels, after a `|` in the link like `![[20240419_100426-0.png|100]]`. [See Obsidian docs](https://help.obsidian.md/Linking+notes+and+files/Embed+files#Embed+an+image+in+a+note). Also, you can use the mouse wheel zoom plugin suggested below to make this easier.
 
 ## Other Helpful Plugins
 
 These are not endorsements but might be useful to pair with this plugin.
 
-- [Ozan's Image in Editor Plugin](https://github.com/ozntel/oz-image-in-editor-obsidian)
-- [Obsidian OCR Plugin](https://github.com/schlundd/obsidian-ocr-plugin)
+- [Mousewheel Image Zoom](https://obsidian.md/plugins?id=mousewheel-image-zoom)
+- [Image Toolkit](https://obsidian.md/plugins?id=obsidian-image-toolkit)
+
+## Relevant Resources
+
+- [Obsidian and Supernote by Organizing for Change](https://www.youtube.com/watch?v=2zKD79e-V_U)
+- [E-Ink notes in Obsidian / Notion? by Brandon Boswell](https://www.youtube.com/watch?v=kW8I8B-eCRk)
+- [Academic HANDWRITTEN notes in OBSIDIAN ft. Supernote by pixel leaves](https://www.youtube.com/watch?v=lzYCPkVnqIM)
 
 ## Funding
 
