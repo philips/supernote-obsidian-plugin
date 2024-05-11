@@ -3,10 +3,12 @@ import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 
 interface SupernotePluginSettings {
 	mirrorIP: string;
+	invertColorsWhenDark: boolean;
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	mirrorIP: '',
+	invertColorsWhenDark: true,
 }
 
 function generateTimestamp(): string {
@@ -24,16 +26,18 @@ function generateTimestamp(): string {
 
 class VaultWriter {
 	app: App;
+	settings: SupernotePluginSettings;
 
-	constructor(app: App) {
+	constructor(app: App, settings: SupernotePluginSettings) {
 		this.app = app;
+		this.settings = settings;
 	}
 
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null) {
 		let content = '';
 
 		// Generate a non-conflicting filename - it has a bit of a race but that is OK
-		let filename = 	`${file.parent?.path}/${file.basename}.md`;
+		let filename = `${file.parent?.path}/${file.basename}.md`;
 		let i = 0;
 		while (this.app.vault.getFileByPath(filename) !== null) {
 			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
@@ -43,12 +47,17 @@ class VaultWriter {
 		content += '\n';
 
 		for (let i = 0; i < sn.pages.length; i++) {
-			content += `## Page ${i+1}\n\n`
+			content += `## Page ${i + 1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				content += `${sn.pages[i].text}\n`;
 			}
 			if (imgs) {
-				const link = this.app.fileManager.generateMarkdownLink(imgs[i], filename);
+				let subpath = '';
+				if (this.settings.invertColorsWhenDark) {
+					subpath = '#supernote-invert-dark';
+				}
+
+				const link = this.app.fileManager.generateMarkdownLink(imgs[i], filename, subpath);
 				content += `${link}\n`;
 			}
 		}
@@ -56,7 +65,7 @@ class VaultWriter {
 		this.app.vault.create(filename, content);
 	}
 
-	async writeImageFiles(file: TFile, sn: SupernoteX) : Promise<TFile[]> {
+	async writeImageFiles(file: TFile, sn: SupernoteX): Promise<TFile[]> {
 		let images = await toImage(sn);
 		let imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
@@ -87,8 +96,10 @@ export const VIEW_TYPE_SUPERNOTE = "supernote-view";
 
 export class SupernoteView extends FileView {
 	file: TFile;
-	constructor(leaf: WorkspaceLeaf) {
+	settings: SupernotePluginSettings;
+	constructor(leaf: WorkspaceLeaf, settings: SupernotePluginSettings) {
 		super(leaf);
+		this.settings = settings;
 	}
 
 	getViewType() {
@@ -136,8 +147,8 @@ export class SupernoteView extends FileView {
 			const ul = container.createEl("ul");
 			for (let i = 0; i < images.length; i++) {
 				const a = container.createEl("li").createEl("a");
-				a.href = `#page${i+1}`
-				a.text = `Page ${i+1}`
+				a.href = `#page${i + 1}`
+				a.text = `Page ${i + 1}`
 
 			}
 		}
@@ -147,9 +158,9 @@ export class SupernoteView extends FileView {
 
 			if (images.length > 1) {
 				const a = container.createEl("a");
-				a.id = `page${i+1}`;
+				a.id = `page${i + 1}`;
 				a.href = "#toc";
-				a.createEl("h3", { text: `Page ${i+1}` });
+				a.createEl("h3", { text: `Page ${i + 1}` });
 			}
 
 			// Show the text of the page, if any
@@ -162,7 +173,11 @@ export class SupernoteView extends FileView {
 			// Show the img of the page
 			const imgElement = container.createEl("img");
 			imgElement.src = imageDataUrl;
+			if (this.settings.invertColorsWhenDark) {
+				imgElement.addClass("supernote-invert-dark");
+			}
 			imgElement.draggable = true;
+
 			// Create a button to save image to vault
 			const saveButton = container.createEl("button", {
 				text: "Save image to vault",
@@ -177,7 +192,7 @@ export class SupernoteView extends FileView {
 
 	}
 
-	async onClose() {	}
+	async onClose() { }
 }
 
 export default class SupernotePlugin extends Plugin {
@@ -185,13 +200,13 @@ export default class SupernotePlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
-		vw = new VaultWriter(this.app);
+		vw = new VaultWriter(this.app, this.settings);
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 
 		this.registerView(
 			VIEW_TYPE_SUPERNOTE,
-			(leaf) => new SupernoteView(leaf)
+			(leaf) => new SupernoteView(leaf, this.settings)
 		);
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
 
@@ -324,12 +339,12 @@ class MirrorErrorModal extends Modal {
 	}
 
 	onOpen() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Screen Mirroring?`);
 	}
 
 	onClose() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.empty();
 	}
 }
@@ -344,12 +359,12 @@ class ErrorModal extends Modal {
 	}
 
 	onOpen() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.setText(`Error: ${this.error.message}.`);
 	}
 
 	onClose() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.empty();
 	}
 }
@@ -364,7 +379,7 @@ class SupernoteSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
@@ -372,11 +387,23 @@ class SupernoteSettingTab extends PluginSettingTab {
 			.setName('Supernote IP address for "Screen Mirroring"')
 			.setDesc('See Supernote "Screen Mirroring" documentation for how to enable')
 			.addText(text => text
-				.setPlaceholder('e.g. 192.168.1.2')
+				.setPlaceholder('IP )e.g. 192.168.1.2')
 				.setValue(this.plugin.settings.mirrorIP)
 				.onChange(async (value) => {
 					this.plugin.settings.mirrorIP = value;
 					await this.plugin.saveSettings();
-				}));
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Invert colors in "Dark mode"')
+			.setDesc('When Obsidian is in "Dark mode" increase image visibility by inverting colors of images')
+			.addToggle(text => text
+				.setValue(this.plugin.settings.invertColorsWhenDark)
+				.onChange(async (value) => {
+					this.plugin.settings.invertColorsWhenDark = value;
+					await this.plugin.saveSettings();
+				})
+			);
 	}
 }

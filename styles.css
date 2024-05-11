@@ -1,8 +1,15 @@
-/*
+.theme-dark img[alt*="supernote-invert-dark"] {
+    filter: invert(1);
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.theme-light img[alt*="supernote-invert-light"] {
+    filter: invert(1);
+}
 
-If your plugin does not need CSS, delete this file.
+.theme-dark img.supernote-invert-dark {
+    filter: invert(1);
+}
 
-*/
+.theme-light img.supernote-invert-light {
+    filter: invert(1);
+}
