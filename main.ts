@@ -5,13 +5,15 @@ interface SupernotePluginSettings {
 	mirrorIP: string;
 	invertColorsWhenDark: boolean;
 	showTOC: boolean;
+	showExportButtons: boolean;
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	mirrorIP: '',
 	invertColorsWhenDark: true,
 	showTOC: true,
-}
+	showExportButtons: true,
+};
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -49,7 +51,7 @@ class VaultWriter {
 		content += '\n';
 
 		for (let i = 0; i < sn.pages.length; i++) {
-			content += `## Page ${i + 1}\n\n`
+			content += `## Page ${i + 1}\n\n`;
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				content += `${sn.pages[i].text}\n`;
 			}
@@ -59,7 +61,11 @@ class VaultWriter {
 					subpath = '#supernote-invert-dark';
 				}
 
-				const link = this.app.fileManager.generateMarkdownLink(imgs[i], filename, subpath);
+				const link = this.app.fileManager.generateMarkdownLink(
+					imgs[i],
+					filename,
+					subpath,
+				);
 				content += `${link}\n`;
 			}
 		}
@@ -71,8 +77,16 @@ class VaultWriter {
 		let images = await toImage(sn);
 		let imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
-			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
-			imgs.push(await this.app.vault.createBinary(filename, images[i].toBuffer()));
+			let filename =
+				await this.app.fileManager.getAvailablePathForAttachment(
+					`${file.basename}-${i}.png`,
+				);
+			imgs.push(
+				await this.app.vault.createBinary(
+					filename,
+					images[i].toBuffer(),
+				),
+			);
 		}
 		return imgs;
 	}
@@ -94,7 +108,7 @@ class VaultWriter {
 }
 
 let vw: VaultWriter;
-export const VIEW_TYPE_SUPERNOTE = "supernote-view";
+export const VIEW_TYPE_SUPERNOTE = 'supernote-view';
 
 export class SupernoteView extends FileView {
 	file: TFile;
@@ -110,7 +124,7 @@ export class SupernoteView extends FileView {
 
 	getDisplayText() {
 		if (!this.file) {
-			return "Supernote View"
+			return 'Supernote View';
 		}
 		return this.file.basename;
 	}
@@ -118,40 +132,41 @@ export class SupernoteView extends FileView {
 	async onLoadFile(file: TFile): Promise<void> {
 		const container = this.containerEl.children[1];
 		container.empty();
-		container.createEl("h1", { text: file.name });
+		container.createEl('h1', { text: file.name });
 
 		const note = await this.app.vault.readBinary(file);
 		let sn = new SupernoteX(new Uint8Array(note));
 		let images = await toImage(sn);
 
-		const exportNoteBtn = container.createEl("p").createEl("button", {
-			text: "Attach markdown to vault",
-			cls: "mod-cta",
-		});
+		if (this.settings.showExportButtons) {
+			const exportNoteBtn = container.createEl('p').createEl('button', {
+				text: 'Attach markdown to vault',
+				cls: 'mod-cta',
+			});
 
-		exportNoteBtn.addEventListener("click", async () => {
-			vw.attachMarkdownFile(file);
-		});
+			exportNoteBtn.addEventListener('click', async () => {
+				vw.attachMarkdownFile(file);
+			});
 
-		const exportAllBtn = container.createEl("p").createEl("button", {
-			text: "Attach markdown and images to vault",
-			cls: "mod-cta",
-		});
+			const exportAllBtn = container.createEl('p').createEl('button', {
+				text: 'Attach markdown and images to vault',
+				cls: 'mod-cta',
+			});
 
-		exportAllBtn.addEventListener("click", async () => {
-			vw.attachNoteFiles(file);
-		});
+			exportAllBtn.addEventListener('click', async () => {
+				vw.attachNoteFiles(file);
+			});
+		}
 
 		if (images.length > 1 && this.settings.showTOC) {
-			const atoc = container.createEl("a");
-			atoc.id = "toc";
-			atoc.createEl("h2", { text: "Table of contents" });
-			const ul = container.createEl("ul");
+			const atoc = container.createEl('a');
+			atoc.id = 'toc';
+			atoc.createEl('h2', { text: 'Table of contents' });
+			const ul = container.createEl('ul');
 			for (let i = 0; i < images.length; i++) {
-				const a = container.createEl("li").createEl("a");
-				a.href = `#page${i + 1}`
-				a.text = `Page ${i + 1}`
-
+				const a = container.createEl('li').createEl('a');
+				a.href = `#page${i + 1}`;
+				a.text = `Page ${i + 1}`;
 			}
 		}
 
@@ -159,42 +174,52 @@ export class SupernoteView extends FileView {
 			const imageDataUrl = images[i].toDataURL();
 
 			if (images.length > 1 && this.settings.showTOC) {
-				const a = container.createEl("a");
+				const a = container.createEl('a');
 				a.id = `page${i + 1}`;
-				a.href = "#toc";
-				a.createEl("h3", { text: `Page ${i + 1}` });
+				a.href = '#toc';
+				a.createEl('h3', { text: `Page ${i + 1}` });
 			}
 
 			// Show the text of the page, if any
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				const text = container.createEl("div");
-				text.setAttr('style', 'user-select: text; white-space: pre-line;');
+				const text = container.createEl('div');
+				text.setAttr(
+					'style',
+					'user-select: text; white-space: pre-line;',
+				);
 				text.textContent = sn.pages[i].text;
 			}
 
 			// Show the img of the page
-			const imgElement = container.createEl("img");
+			const imgElement = container.createEl('img');
 			imgElement.src = imageDataUrl;
 			if (this.settings.invertColorsWhenDark) {
-				imgElement.addClass("supernote-invert-dark");
+				imgElement.addClass('supernote-invert-dark');
 			}
 			imgElement.draggable = true;
 
 			// Create a button to save image to vault
-			const saveButton = container.createEl("button", {
-				text: "Save image to vault",
-				cls: "mod-cta",
-			});
+			if (this.settings.showExportButtons) {
+				const saveButton = container.createEl('button', {
+					text: 'Save image to vault',
+					cls: 'mod-cta',
+				});
 
-			saveButton.addEventListener("click", async () => {
-				const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}}.png`);
-				await this.app.vault.createBinary(filename, images[i].toBuffer());
-			});
+				saveButton.addEventListener('click', async () => {
+					const filename =
+						await this.app.fileManager.getAvailablePathForAttachment(
+							`${file.basename}}.png`,
+						);
+					await this.app.vault.createBinary(
+						filename,
+						images[i].toBuffer(),
+					);
+				});
+			}
 		}
-
 	}
 
-	async onClose() { }
+	async onClose() {}
 }
 
 export default class SupernotePlugin extends Plugin {
@@ -208,7 +233,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.registerView(
 			VIEW_TYPE_SUPERNOTE,
-			(leaf) => new SupernoteView(leaf, this.settings)
+			(leaf) => new SupernoteView(leaf, this.settings),
 		);
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
 
@@ -219,20 +244,33 @@ export default class SupernotePlugin extends Plugin {
 				// generate a unique filename for the mirror based on the current note path
 				let ts = generateTimestamp();
 				const f = this.app.workspace.activeEditor?.file?.basename || '';
-				const filename = await this.app.fileManager.getAvailablePathForAttachment(`supernote-mirror-${f}-${ts}.png`);
+				const filename =
+					await this.app.fileManager.getAvailablePathForAttachment(
+						`supernote-mirror-${f}-${ts}.png`,
+					);
 
 				try {
 					if (this.settings.mirrorIP.length == 0) {
-						throw new Error("IP is unset, please set in Supernote plugin settings")
+						throw new Error(
+							'IP is unset, please set in Supernote plugin settings',
+						);
 					}
-					let image = await fetchMirrorFrame(`${this.settings.mirrorIP}:8080`);
+					let image = await fetchMirrorFrame(
+						`${this.settings.mirrorIP}:8080`,
+					);
 
-					const file = await this.app.vault.createBinary(filename, image.toBuffer());
+					const file = await this.app.vault.createBinary(
+						filename,
+						image.toBuffer(),
+					);
 					const path = this.app.workspace.activeEditor?.file?.path;
 					if (!path) {
-						throw new Error("Active file path is null")
+						throw new Error('Active file path is null');
 					}
-					const link = this.app.fileManager.generateMarkdownLink(file, path);
+					const link = this.app.fileManager.generateMarkdownLink(
+						file,
+						path,
+					);
 					editor.replaceRange(link, editor.getCursor());
 				} catch (err: any) {
 					new MirrorErrorModal(this.app, this.settings, err).open();
@@ -247,13 +285,13 @@ export default class SupernotePlugin extends Plugin {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
 
-				if (ext === "note") {
+				if (ext === 'note') {
 					if (checking) {
-						return true
+						return true;
 					}
 					try {
 						if (!file) {
-							throw new Error("No file to attach");
+							throw new Error('No file to attach');
 						}
 						vw.attachNoteFiles(file);
 					} catch (err: any) {
@@ -273,13 +311,13 @@ export default class SupernotePlugin extends Plugin {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
 
-				if (ext === "note") {
+				if (ext === 'note') {
 					if (checking) {
-						return true
+						return true;
 					}
 					try {
 						if (!file) {
-							throw new Error("No file to attach");
+							throw new Error('No file to attach');
 						}
 						vw.attachMarkdownFile(file);
 					} catch (err: any) {
@@ -293,9 +331,7 @@ export default class SupernotePlugin extends Plugin {
 		});
 	}
 
-	onunload() {
-
-	}
+	onunload() {}
 
 	async activateView() {
 		const { workspace } = this.app;
@@ -311,9 +347,12 @@ export default class SupernotePlugin extends Plugin {
 			// in the right sidebar for it
 			leaf = workspace.getRightLeaf(false);
 			if (!leaf) {
-				throw new Error("leaf is null");
+				throw new Error('leaf is null');
 			}
-			await leaf.setViewState({ type: VIEW_TYPE_SUPERNOTE, active: true });
+			await leaf.setViewState({
+				type: VIEW_TYPE_SUPERNOTE,
+				active: true,
+			});
 		}
 
 		// "Reveal" the leaf in case it is in a collapsed sidebar
@@ -321,14 +360,17 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData(),
+		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
 }
-
 
 class MirrorErrorModal extends Modal {
 	error: Error;
@@ -342,7 +384,9 @@ class MirrorErrorModal extends Modal {
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Screen Mirroring?`);
+		contentEl.setText(
+			`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Screen Mirroring?`,
+		);
 	}
 
 	onClose() {
@@ -371,7 +415,6 @@ class ErrorModal extends Modal {
 	}
 }
 
-
 class SupernoteSettingTab extends PluginSettingTab {
 	plugin: SupernotePlugin;
 
@@ -387,36 +430,59 @@ class SupernoteSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Supernote IP address for "Screen Mirroring"')
-			.setDesc('See Supernote "Screen Mirroring" documentation for how to enable')
-			.addText(text => text
-				.setPlaceholder('IP )e.g. 192.168.1.2')
-				.setValue(this.plugin.settings.mirrorIP)
-				.onChange(async (value) => {
-					this.plugin.settings.mirrorIP = value;
-					await this.plugin.saveSettings();
-				})
+			.setDesc(
+				'See Supernote "Screen Mirroring" documentation for how to enable',
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder('IP )e.g. 192.168.1.2')
+					.setValue(this.plugin.settings.mirrorIP)
+					.onChange(async (value) => {
+						this.plugin.settings.mirrorIP = value;
+						await this.plugin.saveSettings();
+					}),
 			);
 
 		new Setting(containerEl)
 			.setName('Invert colors in "Dark mode"')
-			.setDesc('When Obsidian is in "Dark mode" increase image visibility by inverting colors of images')
-			.addToggle(text => text
-				.setValue(this.plugin.settings.invertColorsWhenDark)
-				.onChange(async (value) => {
-					this.plugin.settings.invertColorsWhenDark = value;
-					await this.plugin.saveSettings();
-				})
+			.setDesc(
+				'When Obsidian is in "Dark mode" increase image visibility by inverting colors of images',
+			)
+			.addToggle((text) =>
+				text
+					.setValue(this.plugin.settings.invertColorsWhenDark)
+					.onChange(async (value) => {
+						this.plugin.settings.invertColorsWhenDark = value;
+						await this.plugin.saveSettings();
+					}),
 			);
 
 		new Setting(containerEl)
 			.setName('Show table of contents')
-			.setDesc('When viewing .note files, show a table of contents and headers for each page')
-			.addToggle(text => text
-				.setValue(this.plugin.settings.showTOC)
-				.onChange(async (value) => {
-					this.plugin.settings.showTOC = value;
-					await this.plugin.saveSettings();
-				})
+			.setDesc(
+				'When viewing .note files, show a table of contents and headers for each page',
+			)
+			.addToggle((text) =>
+				text
+					.setValue(this.plugin.settings.showTOC)
+					.onChange(async (value) => {
+						this.plugin.settings.showTOC = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Show export buttons')
+			.setDesc(
+				'When viewing .note files, show buttons for exporting images and/or markdown files to vault',
+			)
+			.addToggle((text) =>
+				text
+					.setValue(this.plugin.settings.showExportButtons)
+					.onChange(async (value) => {
+						this.plugin.settings.showExportButtons = value;
+						await this.plugin.saveSettings();
+					}),
 			);
 	}
 }
