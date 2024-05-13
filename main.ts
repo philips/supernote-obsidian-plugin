@@ -4,12 +4,18 @@ import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 interface SupernotePluginSettings {
 	mirrorIP: string;
 	invertColorsWhenDark: boolean;
+	showTOC: boolean;
+	showExportButtons: boolean;
+	collapseRecognizedText: boolean,
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	mirrorIP: '',
 	invertColorsWhenDark: true,
-}
+	showTOC: true,
+	showExportButtons: true,
+	collapseRecognizedText: false,
+};
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -122,25 +128,27 @@ export class SupernoteView extends FileView {
 		let sn = new SupernoteX(new Uint8Array(note));
 		let images = await toImage(sn);
 
-		const exportNoteBtn = container.createEl("p").createEl("button", {
-			text: "Attach markdown to vault",
-			cls: "mod-cta",
-		});
+		if (this.settings.showExportButtons) {
+			const exportNoteBtn = container.createEl("p").createEl("button", {
+				text: "Attach markdown to vault",
+				cls: "mod-cta",
+			});
 
-		exportNoteBtn.addEventListener("click", async () => {
-			vw.attachMarkdownFile(file);
-		});
+			exportNoteBtn.addEventListener("click", async () => {
+				vw.attachMarkdownFile(file);
+			});
 
-		const exportAllBtn = container.createEl("p").createEl("button", {
-			text: "Attach markdown and images to vault",
-			cls: "mod-cta",
-		});
+			const exportAllBtn = container.createEl("p").createEl("button", {
+				text: "Attach markdown and images to vault",
+				cls: "mod-cta",
+			});
 
-		exportAllBtn.addEventListener("click", async () => {
-			vw.attachNoteFiles(file);
-		});
+			exportAllBtn.addEventListener("click", async () => {
+				vw.attachNoteFiles(file);
+			});
+		}
 
-		if (images.length > 1) {
+		if (images.length > 1 && this.settings.showTOC) {
 			const atoc = container.createEl("a");
 			atoc.id = "toc";
 			atoc.createEl("h2", { text: "Table of contents" });
@@ -149,14 +157,13 @@ export class SupernoteView extends FileView {
 				const a = container.createEl("li").createEl("a");
 				a.href = `#page${i + 1}`
 				a.text = `Page ${i + 1}`
-
 			}
 		}
 
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i].toDataURL();
 
-			if (images.length > 1) {
+			if (images.length > 1 && this.settings.showTOC) {
 				const a = container.createEl("a");
 				a.id = `page${i + 1}`;
 				a.href = "#toc";
@@ -165,9 +172,21 @@ export class SupernoteView extends FileView {
 
 			// Show the text of the page, if any
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				const text = container.createEl("div");
-				text.setAttr('style', 'user-select: text; white-space: pre-line;');
-				text.textContent = sn.pages[i].text;
+				let text;
+
+				// If Collapse Text setting is enabled, place the text into an HTML `details` element
+				if (this.settings.collapseRecognizedText) {
+					text = container.createEl('details', {
+						text: '\n' + sn.pages[i].text,
+					});
+					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
+				} else {
+					text = container.createEl('div', {
+						text: sn.pages[i].text,
+					});
+				}
+
+				text.setAttr('style', 'user-select: text; white-space: pre-line; margin-top: 1.2em;');
 			}
 
 			// Show the img of the page
@@ -179,17 +198,18 @@ export class SupernoteView extends FileView {
 			imgElement.draggable = true;
 
 			// Create a button to save image to vault
-			const saveButton = container.createEl("button", {
-				text: "Save image to vault",
-				cls: "mod-cta",
-			});
+			if (this.settings.showExportButtons) {
+				const saveButton = container.createEl("button", {
+					text: "Save image to vault",
+					cls: "mod-cta",
+				});
 
-			saveButton.addEventListener("click", async () => {
-				const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}}.png`);
-				await this.app.vault.createBinary(filename, images[i].toBuffer());
-			});
+				saveButton.addEventListener("click", async () => {
+					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}}.png`);
+					await this.app.vault.createBinary(filename, images[i].toBuffer());
+				});
+			}
 		}
-
 	}
 
 	async onClose() { }
@@ -402,6 +422,45 @@ class SupernoteSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.invertColorsWhenDark)
 				.onChange(async (value) => {
 					this.plugin.settings.invertColorsWhenDark = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Show table of contents and page headings')
+			.setDesc(
+				'When viewing .note files, show a table of contents and page number headings',
+			)
+			.addToggle((text) =>
+				text
+					.setValue(this.plugin.settings.showTOC)
+					.onChange(async (value) => {
+						this.plugin.settings.showTOC = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Show export buttons')
+			.setDesc(
+				'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
+			)
+			.addToggle((text) =>
+				text
+					.setValue(this.plugin.settings.showExportButtons)
+					.onChange(async (value) => {
+						this.plugin.settings.showExportButtons = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Collapse recognized text')
+			.setDesc('When viewing .note files, hide recognized text in a collapsible element. This does not affect exported markdown.')
+			.addToggle(text => text
+				.setValue(this.plugin.settings.collapseRecognizedText)
+				.onChange(async (value) => {
+					this.plugin.settings.collapseRecognizedText = value;
 					await this.plugin.saveSettings();
 				})
 			);
