@@ -6,6 +6,7 @@ interface SupernotePluginSettings {
 	invertColorsWhenDark: boolean;
 	showTOC: boolean;
 	showExportButtons: boolean;
+	collapseRecognizedText: boolean,
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -13,7 +14,8 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	invertColorsWhenDark: true,
 	showTOC: true,
 	showExportButtons: true,
-};
+	collapseRecognizedText: false,
+}
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -182,12 +184,21 @@ export class SupernoteView extends FileView {
 
 			// Show the text of the page, if any
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				const text = container.createEl('div');
-				text.setAttr(
-					'style',
-					'user-select: text; white-space: pre-line;',
-				);
-				text.textContent = sn.pages[i].text;
+				let text;
+
+				// If Collapse Text setting is enabled, place the text into an HTML `details` element
+				if (this.settings.collapseRecognizedText) {
+					text = container.createEl('details', {
+						text: '\n' + sn.pages[i].text,
+					});
+					text.createEl('summary', { text: `Page ${i+1} Recognized Text` });
+				} else {
+					text = container.createEl('div', {
+						text: sn.pages[i].text,
+					});
+				}
+
+				text.setAttr('style', 'user-select: text; white-space: pre-line;');
 			}
 
 			// Show the img of the page
@@ -483,6 +494,17 @@ class SupernoteSettingTab extends PluginSettingTab {
 						this.plugin.settings.showExportButtons = value;
 						await this.plugin.saveSettings();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Collapse recognized text')
+			.setDesc('When viewing .note files, hide recognized text in a collapsible element. This does not affect exported markdown.')
+			.addToggle(text => text
+				.setValue(this.plugin.settings.collapseRecognizedText)
+				.onChange(async (value) => {
+					this.plugin.settings.collapseRecognizedText = value;
+					await this.plugin.saveSettings();
+				})
 			);
 	}
 }
