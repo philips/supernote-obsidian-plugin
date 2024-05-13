@@ -191,7 +191,7 @@ export class SupernoteView extends FileView {
 					text = container.createEl('details', {
 						text: '\n' + sn.pages[i].text,
 					});
-					text.createEl('summary', { text: `Page ${i+1} Recognized Text` });
+					text.createEl('summary', { text: `Page ${i+1} Text` });
 				} else {
 					text = container.createEl('div', {
 						text: sn.pages[i].text,
