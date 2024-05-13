@@ -186,7 +186,7 @@ export class SupernoteView extends FileView {
 					});
 				}
 
-				text.setAttr('style', 'user-select: text; white-space: pre-line;');
+				text.setAttr('style', 'user-select: text; white-space: pre-line; margin-top: 1.2em;');
 			}
 
 			// Show the img of the page
@@ -427,9 +427,9 @@ class SupernoteSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Show table of contents')
+			.setName('Show table of contents and page headings')
 			.setDesc(
-				'When viewing .note files, show a table of contents and headers for each page',
+				'When viewing .note files, show a table of contents and page number headings',
 			)
 			.addToggle((text) =>
 				text
