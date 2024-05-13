@@ -4,11 +4,13 @@ import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 interface SupernotePluginSettings {
 	mirrorIP: string;
 	invertColorsWhenDark: boolean;
+	showTOC: boolean;
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	mirrorIP: '',
 	invertColorsWhenDark: true,
+	showTOC: true,
 }
 
 function generateTimestamp(): string {
@@ -140,7 +142,7 @@ export class SupernoteView extends FileView {
 			vw.attachNoteFiles(file);
 		});
 
-		if (images.length > 1) {
+		if (images.length > 1 && this.settings.showTOC) {
 			const atoc = container.createEl("a");
 			atoc.id = "toc";
 			atoc.createEl("h2", { text: "Table of contents" });
@@ -156,7 +158,7 @@ export class SupernoteView extends FileView {
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i].toDataURL();
 
-			if (images.length > 1) {
+			if (images.length > 1 && this.settings.showTOC) {
 				const a = container.createEl("a");
 				a.id = `page${i + 1}`;
 				a.href = "#toc";
@@ -402,6 +404,17 @@ class SupernoteSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.invertColorsWhenDark)
 				.onChange(async (value) => {
 					this.plugin.settings.invertColorsWhenDark = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('Show table of contents')
+			.setDesc('When viewing .note files, show a table of contents and headers for each page')
+			.addToggle(text => text
+				.setValue(this.plugin.settings.showTOC)
+				.onChange(async (value) => {
+					this.plugin.settings.showTOC = value;
 					await this.plugin.saveSettings();
 				})
 			);
