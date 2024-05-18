@@ -467,8 +467,8 @@ class SupernoteSettingTab extends PluginSettingTab {
 					this.plugin.settings.collapseRecognizedText = value;
 		
 		new Setting(containerEl)
-			.setName('Note width in .note files')
-			.setDesc('Width of the note image when viewing .note files, in pixels. Does not affect exported images and markdown.')
+			.setName('Max image width in .note files')
+			.setDesc('Maximum width of the note image when viewing .note files, in pixels. Does not affect exported images and markdown.')
 			.addSlider(text => text
 				.setLimits(100, 1400, 50) // Width of an A5X/A6X2/Nomad page is 1404 px (with no upscaling)
 				.setDynamicTooltip()
