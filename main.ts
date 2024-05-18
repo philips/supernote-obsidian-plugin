@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	showExportButtons: true,
 	collapseRecognizedText: false,
 	noteImageMaxWidth: 0,
+	noteImageMaxWidth: 1400, // Default to (nearly) the full width of the image
 }
 
 function generateTimestamp(): string {
@@ -197,9 +198,7 @@ export class SupernoteView extends FileView {
 			if (this.settings.invertColorsWhenDark) {
 				imgElement.addClass("supernote-invert-dark");
 			}
-			if (this.settings.noteImageMaxWidth > 0) {
-				imgElement.setAttr('style', 'width: 100%; max-width: ' + this.settings.noteImageMaxWidth + 'px')
-			}
+			imgElement.setAttr('style', 'width: 100%; max-width: ' + this.settings.noteImageMaxWidth + 'px') // Note width responsive to container width, up to the set max width
 			imgElement.draggable = true;
 
 			// Create a button to save image to vault
@@ -471,7 +470,7 @@ class SupernoteSettingTab extends PluginSettingTab {
 			.setName('Note width in .note files')
 			.setDesc('Width of the note image when viewing .note files, in pixels. Does not affect exported images and markdown. Set to 0 to allow the image to scale freely.')
 			.addSlider(text => text
-				.setLimits(0, 1400, 50) // Width of an A6X2/Nomad page at 100% is 1404 px
+				.setLimits(100, 1400, 50) // Width of an A5X/A6X2/Nomad page is 1404 px (with no upscaling)
 				.setDynamicTooltip()
 				.setValue(this.plugin.settings.noteImageMaxWidth)
 				.onChange(async (value) => {
