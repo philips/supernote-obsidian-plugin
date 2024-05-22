@@ -1,6 +1,6 @@
 {
 	"name": "supernote-obsidian-plugin",
-	"version": "2.2.6",
+	"version": "2.2.7",
 	"description": "Unofficial Supernote by Ratta Integration for Obsidian",
 	"main": "main.js",
 	"scripts": {
