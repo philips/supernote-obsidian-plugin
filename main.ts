@@ -16,7 +16,6 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	showTOC: true,
 	showExportButtons: true,
 	collapseRecognizedText: false,
-	noteImageMaxWidth: 0,
 	noteImageMaxWidth: 1400, // Default to (nearly) the full width of the image
 }
 
@@ -465,6 +464,9 @@ class SupernoteSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.collapseRecognizedText)
 				.onChange(async (value) => {
 					this.plugin.settings.collapseRecognizedText = value;
+					await this.plugin.saveSettings();
+				})
+			);
 		
 		new Setting(containerEl)
 			.setName('Max image width in .note files')
