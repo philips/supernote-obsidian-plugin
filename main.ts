@@ -7,7 +7,7 @@ interface SupernotePluginSettings {
 	showTOC: boolean;
 	showExportButtons: boolean;
 	collapseRecognizedText: boolean,
-	noteImageMaxWidth: number;
+	noteImageMaxDim: number;
 }
 
 const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -16,7 +16,7 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	showTOC: true,
 	showExportButtons: true,
 	collapseRecognizedText: false,
-	noteImageMaxWidth: 1400, // Default to (nearly) the full width of the image
+	noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
 }
 
 function generateTimestamp(): string {
@@ -165,8 +165,13 @@ export class SupernoteView extends FileView {
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i].toDataURL();
 
+			const pageContainer = container.createEl("div", {
+				cls: 'page-container',
+			})
+			pageContainer.setAttr('style', 'max-width: ' + this.settings.noteImageMaxDim + 'px;')
+
 			if (images.length > 1 && this.settings.showTOC) {
-				const a = container.createEl("a");
+				const a = pageContainer.createEl("a");
 				a.id = `page${i + 1}`;
 				a.href = "#toc";
 				a.createEl("h3", { text: `Page ${i + 1}` });
@@ -178,31 +183,31 @@ export class SupernoteView extends FileView {
 
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
-					text = container.createEl('details', {
+					text = pageContainer.createEl('details', {
 						text: '\n' + sn.pages[i].text,
+						cls: 'page-recognized-text',
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
-					text = container.createEl('div', {
+					text = pageContainer.createEl('div', {
 						text: sn.pages[i].text,
+						cls: 'page-recognized-text',
 					});
 				}
-
-				text.setAttr('style', 'user-select: text; white-space: pre-line; margin-top: 1.2em;');
 			}
 
 			// Show the img of the page
-			const imgElement = container.createEl("img");
+			const imgElement = pageContainer.createEl("img");
 			imgElement.src = imageDataUrl;
 			if (this.settings.invertColorsWhenDark) {
 				imgElement.addClass("supernote-invert-dark");
 			}
-			imgElement.setAttr('style', 'width: 100%; max-width: ' + this.settings.noteImageMaxWidth + 'px') // Note width responsive to container width, up to the set max width
+			imgElement.setAttr('style', 'max-height: ' + this.settings.noteImageMaxDim + 'px;')
 			imgElement.draggable = true;
 
 			// Create a button to save image to vault
 			if (this.settings.showExportButtons) {
-				const saveButton = container.createEl("button", {
+				const saveButton = pageContainer.createEl("button", {
 					text: "Save image to vault",
 					cls: "mod-cta",
 				});
@@ -469,14 +474,14 @@ class SupernoteSettingTab extends PluginSettingTab {
 			);
 		
 		new Setting(containerEl)
-			.setName('Max image width in .note files')
-			.setDesc('Maximum width of the note image when viewing .note files, in pixels. Does not affect exported images and markdown.')
+			.setName('Max image side length in .note files')
+			.setDesc('Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.')
 			.addSlider(text => text
-				.setLimits(100, 1400, 50) // Width of an A5X/A6X2/Nomad page is 1404 px (with no upscaling)
+				.setLimits(200, 1900, 100) // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
 				.setDynamicTooltip()
-				.setValue(this.plugin.settings.noteImageMaxWidth)
+				.setValue(this.plugin.settings.noteImageMaxDim)
 				.onChange(async (value) => {
-					this.plugin.settings.noteImageMaxWidth = value;
+					this.plugin.settings.noteImageMaxDim = value;
 					await this.plugin.saveSettings();
 				})
 			);
