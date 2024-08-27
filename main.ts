@@ -1,7 +1,8 @@
-import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView, SettingTab } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
+import { CustomDictionarySettings, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, createCustomDictionarySettingsUI } from './customDictionary';
 
-interface SupernotePluginSettings {
+interface SupernotePluginSettings extends CustomDictionarySettings {
 	mirrorIP: string;
 	invertColorsWhenDark: boolean;
 	showTOC: boolean;
@@ -15,6 +16,7 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	showTOC: true,
 	showExportButtons: true,
 	collapseRecognizedText: false,
+	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 };
 
 function generateTimestamp(): string {
@@ -464,5 +466,9 @@ class SupernoteSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
+
+		// Add custom dictionary settings to the settings tab
+		createCustomDictionarySettingsUI(containerEl, this.plugin);
+
 	}
 }
