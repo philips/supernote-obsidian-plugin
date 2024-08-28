@@ -36,3 +36,9 @@
 .supernote-settings-custom-dictionary table th {
 	text-align: start;
 }
+
+.supernote-settings-custom-dictionary-entry-options {
+	display: grid;
+	grid-gap: var(--size-4-1);
+	grid-auto-flow: column;
+}

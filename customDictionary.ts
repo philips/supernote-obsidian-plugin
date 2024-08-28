@@ -1,4 +1,4 @@
-import { Setting } from "obsidian";
+import { setIcon, Setting } from "obsidian";
 import SupernotePlugin from "./main";
 
 type CustomDictionaryEntry = {
@@ -19,21 +19,32 @@ export const CUSTOM_DICTIONARY_DEFAULT_SETTINGS: CustomDictionarySettings = {
 function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionaryEntry, tbody: HTMLElement, plugin: SupernotePlugin}) {	
 	const tr = tbody.createEl('tr');
 
-	// Source Text Input
+	// Create source text input
 	const sourceTd = tr.createEl('td');
 	const sourceInput = sourceTd.createEl('input');
 	sourceInput.type = 'text';
 	sourceInput.value = entry.src;
 
-	// Replace Text Input
+	// Create replace text input
 	const replaceTd = tr.createEl('td');
 	const replaceInput = replaceTd.createEl('input');
 	replaceInput.type = 'text';
 	replaceInput.value = entry.replace;
 
-	// Delete Button (in Options column)
+	// Create dictionary entry options
 	const optionsTd = tr.createEl('td');
-	const deleteButton = optionsTd.createEl('button', { text: 'Delete' });
+		optionsTd.addClass('supernote-settings-custom-dictionary-entry-options');
+	const moveUpButton = optionsTd.createEl('button');
+		moveUpButton.ariaLabel = 'Move entry up';
+		moveUpButton.addClass('move-up');
+		setIcon(moveUpButton, 'move-up');
+	const moveDownButton = optionsTd.createEl('button');
+		moveDownButton.ariaLabel = 'Move entry down';
+		moveDownButton.addClass('move-down');
+		setIcon(moveDownButton, 'move-down');
+	const deleteButton = optionsTd.createEl('button');
+		deleteButton.ariaLabel = 'Delete dictionary entry';
+		setIcon(deleteButton, 'trash-2');
 
 	// Update dictionary entry when input changes
 	const updateDictionaryEntry = async () => {
@@ -46,6 +57,25 @@ function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionar
 	}
 	sourceInput.addEventListener('input', updateDictionaryEntry);
 	replaceInput.addEventListener('input', updateDictionaryEntry);
+
+	// Move dictionary entry up when move up button is clicked
+	moveUpButton.addEventListener('click', async () => {
+		const index = Array.from(tbody.children).indexOf(tr);
+		if (index === 0) return;
+		[plugin.settings.customDictionary[index - 1], plugin.settings.customDictionary[index]] = [plugin.settings.customDictionary[index], plugin.settings.customDictionary[index - 1]];
+		await plugin.saveSettings();
+		tbody.insertBefore(tr, tr.previousElementSibling);
+	});
+
+	// Move dictionary entry down when move down button is clicked
+	moveDownButton.addEventListener('click', async () => {
+		const index = Array.from(tbody.children).indexOf(tr);
+		const nextTr = tr.nextElementSibling;
+		if (index === tbody.children.length - 1 || !nextTr) return;
+		[plugin.settings.customDictionary[index], plugin.settings.customDictionary[index + 1]] = [plugin.settings.customDictionary[index + 1], plugin.settings.customDictionary[index]];
+		await plugin.saveSettings();
+		tbody.insertBefore(nextTr, tr);
+	});
 
 	// Delete dictionary entry when delete button is clicked
 	deleteButton.addEventListener('click', async () => {
