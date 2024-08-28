@@ -1,6 +1,6 @@
 import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView, SettingTab } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
-import { CustomDictionarySettings, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, createCustomDictionarySettingsUI } from './customDictionary';
+import { CustomDictionarySettings, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, createCustomDictionarySettingsUI, replaceTextWithCustomDictionary } from './customDictionary';
 
 interface SupernotePluginSettings extends CustomDictionarySettings {
 	mirrorIP: string;
@@ -32,6 +32,13 @@ function generateTimestamp(): string {
 	return timestamp;
 }
 
+function processSupernoteText(text: string, settings: SupernotePluginSettings): string {
+	if (settings.isCustomDictionaryEnabled) {
+		return replaceTextWithCustomDictionary(text, settings.customDictionary);
+	}
+	return text;
+}
+
 class VaultWriter {
 	app: App;
 	settings: SupernotePluginSettings;
@@ -57,7 +64,7 @@ class VaultWriter {
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${sn.pages[i].text}\n`;
+				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 			if (imgs) {
 				let subpath = '';
@@ -179,12 +186,12 @@ export class SupernoteView extends FileView {
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
 					text = container.createEl('details', {
-						text: '\n' + sn.pages[i].text,
+						text: '\n' + processSupernoteText(sn.pages[i].text, this.settings),
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
 					text = container.createEl('div', {
-						text: sn.pages[i].text,
+						text: processSupernoteText(sn.pages[i].text, this.settings),
 					});
 				}
 

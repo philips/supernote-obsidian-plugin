@@ -49,7 +49,7 @@ function createDictionaryEntryUI({id, entry, tbody, plugin}: {id: string, entry:
 
 	// Delete dictionary entry when delete button is clicked
 	deleteButton.addEventListener('click', async () => {
-		delete plugin.settings.customDictionary[sourceInput.value];
+		delete plugin.settings.customDictionary[id];
 		await plugin.saveSettings();
 		tr.remove();
 	});
@@ -57,9 +57,12 @@ function createDictionaryEntryUI({id, entry, tbody, plugin}: {id: string, entry:
 
 export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugin: SupernotePlugin): void {
 	const customDictionaryContainer = containerEl.createDiv();
-	customDictionaryContainer.createEl('hr');
-	customDictionaryContainer.createEl('h2', { text: 'Custom Dictionary' });
-	customDictionaryContainer.createEl('small', { text: 'You can add custom entries to your dictionary to fix errors from Supernote\'s handwriting recognition. This also lets you automatically swap out certain text with your preferred wording.' });
+	customDictionaryContainer
+		.addClasses(['setting-item', 'supernote-settings-custom-dictionary']);
+	customDictionaryContainer.createDiv({ text: 'Custom Dictionary' })
+		.addClass('setting-item-name');
+	customDictionaryContainer.createDiv({ text: 'You can add custom entries to your dictionary to fix errors from Supernote\'s handwriting recognition. This also lets you automatically swap out certain text with your preferred wording.' })
+		.addClass('setting-item-description');
 
 	const table = customDictionaryContainer.createEl('table');
 	const thead = table.createEl('thead');
@@ -95,4 +98,17 @@ export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugi
 
 	const addEntryButton = customDictionaryContainer.createEl('button', { text: 'Add dictionary entry' });
 	addEntryButton.addEventListener('click', addEmptyRow);
+}
+
+function escapeRegExp(string: string): string {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function replaceTextWithCustomDictionary(text: string, customDictionary: Record<string, CustomDictionaryEntry>): string {
+	for (const entry of Object.values(customDictionary)) {
+		const safeSrc = escapeRegExp(entry.src);
+		const safeReplace = escapeRegExp(entry.replace);
+		text = text.replace(new RegExp(safeSrc, 'g'), safeReplace);
+	}
+	return text;
 }

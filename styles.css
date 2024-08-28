@@ -13,3 +13,22 @@
 .theme-light img.supernote-invert-light {
     filter: invert(1);
 }
+
+/* Custom dictionary settings styles */
+.supernote-settings-custom-dictionary {
+	display: block;
+}
+
+.supernote-settings-custom-dictionary table {
+	margin-block-start: var(--size-4-2);
+    margin-block-end: var(--size-2-1);
+	font-size: smaller;
+}
+
+.supernote-settings-custom-dictionary table, .supernote-settings-custom-dictionary table input {
+	width: 100%;
+}
+
+.supernote-settings-custom-dictionary table th {
+	text-align: start;
+}
