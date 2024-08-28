@@ -1,4 +1,4 @@
-import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView, SettingTab } from 'obsidian';
+import { App, Modal, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
 import { CustomDictionarySettings, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, createCustomDictionarySettingsUI, replaceTextWithCustomDictionary } from './customDictionary';
 
@@ -32,6 +32,13 @@ function generateTimestamp(): string {
 	return timestamp;
 }
 
+/**
+ * Processes the Supernote text based on the provided settings.
+ * 
+ * @param text - The input text to be processed.
+ * @param settings - The settings for the Supernote plugin.
+ * @returns The processed text.
+ */
 function processSupernoteText(text: string, settings: SupernotePluginSettings): string {
 	if (settings.isCustomDictionaryEnabled) {
 		return replaceTextWithCustomDictionary(text, settings.customDictionary);
