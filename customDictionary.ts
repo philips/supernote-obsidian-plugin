@@ -1,3 +1,4 @@
+import { Setting } from "obsidian";
 import SupernotePlugin from "./main";
 
 type CustomDictionaryEntry = {
@@ -51,7 +52,12 @@ function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionar
 		const index = Array.from(tbody.children).indexOf(tr);
 		plugin.settings.customDictionary.splice(index, 1);
 		await plugin.saveSettings();
-		tr.remove();
+		if (plugin.settings.customDictionary.length === 0) {
+			sourceInput.value = '';
+			replaceInput.value = '';
+		} else {
+			tr.remove();
+		}
 	});
 }
 
@@ -62,14 +68,22 @@ function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlug
 	containerEl.find(`.${CONTAINER_CLASSNAME}`)?.remove();
 
 	const dictionaryEntriesContainer = containerEl.createDiv();
+
+	dictionaryEntriesContainer
+		.addClasses(['setting-item', CONTAINER_CLASSNAME]);
+
+	dictionaryEntriesContainer.createDiv({ text: 'Custom Dictionary' })
+		.addClass('setting-item-name');
+	dictionaryEntriesContainer.createDiv({ text: 'Add an entry for every text string you would like to replace in the Supernote\'s recognized text. The plugin will match and replace text based on the order in the table, starting from the top and moving to the bottom. So, if you want a more specific text to be replaced first, make sure to add it at the top. This way, the plugin can fall back to less strict matching if needed.' })
+		.addClasses(['setting-item-description']);
+
 	const table = dictionaryEntriesContainer.createEl('table');
 	const thead = table.createEl('thead');
 	const trHead = thead.createEl('tr');
 	const tbody = table.createEl('tbody');
 
-	dictionaryEntriesContainer.addClass(CONTAINER_CLASSNAME);
 	trHead.createEl('th', { text: 'Source Text' });
-	trHead.createEl('th', { text: 'Replace Text' });
+	trHead.createEl('th', { text: 'Replacement' });
 	trHead.createEl('th', { text: 'Options' });
 
 
@@ -101,21 +115,32 @@ function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlug
 export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugin: SupernotePlugin): void {
 	const customDictionaryContainer = containerEl.createDiv();
 	customDictionaryContainer
-		.addClasses(['setting-item', 'supernote-settings-custom-dictionary']);
-	customDictionaryContainer.createDiv({ text: 'Custom Dictionary' })
-		.addClass('setting-item-name');
-	customDictionaryContainer.createDiv({ text: 'You can add custom entries to your dictionary to fix errors from Supernote\'s handwriting recognition. This also lets you automatically swap out certain text with your preferred wording.' })
-		.addClass('setting-item-description');
+		.addClasses(['supernote-settings-custom-dictionary']);
+	customDictionaryContainer.createEl('h3', { text: 'Custom Dictionary' })
+		// .addClass('setting-item-name');
+	customDictionaryContainer.createDiv({ text: 'You can add custom entries to your dictionary to fix errors from Supernote\'s handwriting recognition. This also lets you automatically swap out certain text with your preferred wording, add special markdown characters, etc.' })
+		.addClasses(['setting-item-description', 'supernote-settings-custom-dictionary-subtitle']);
+		
+		new Setting(customDictionaryContainer)
+		.setName('Enable Custom Dictionary')
+		.setDesc('Enable or disable the custom dictionary.')
+		.addToggle(text => text
+			.setValue(plugin.settings.isCustomDictionaryEnabled)
+			.onChange(async (value) => {
+				plugin.settings.isCustomDictionaryEnabled = value;
+				await plugin.saveSettings();
+			})
+		);
 
-	createDictionaryTableUI(customDictionaryContainer, plugin);
+		createDictionaryTableUI(customDictionaryContainer, plugin);
 }
 
 function escapeRegExp(string: string): string {
 	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function replaceTextWithCustomDictionary(text: string, customDictionary: Record<string, CustomDictionaryEntry>): string {
-	for (const entry of Object.values(customDictionary)) {
+export function replaceTextWithCustomDictionary(text: string, customDictionary: CustomDictionarySettings['customDictionary']): string {
+	for (const entry of customDictionary) {
 		const safeSrc = escapeRegExp(entry.src);
 		const safeReplace = escapeRegExp(entry.replace);
 		text = text.replace(new RegExp(safeSrc, 'g'), safeReplace);
