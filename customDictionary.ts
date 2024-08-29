@@ -177,17 +177,10 @@ export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugi
 	createDictionaryTableUI(customDictionaryContainer, plugin);
 }
 
-// Escape special characters in a string to be used in a regular expression
-function escapeRegExp(string: string): string {
-	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // Replace text with custom dictionary entries
 export function replaceTextWithCustomDictionary(text: string, customDictionary: CustomDictionarySettings['customDictionary']): string {
 	for (const entry of customDictionary) {
-		const safeSrc = escapeRegExp(entry.source);
-		const safeReplace = escapeRegExp(entry.replace);
-		text = text.replace(new RegExp(safeSrc, 'g'), safeReplace);
+		text = text.replace(new RegExp(entry.source, 'g'), entry.replace);
 	}
 	return text;
 }
