@@ -177,10 +177,17 @@ export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugi
 	createDictionaryTableUI(customDictionaryContainer, plugin);
 }
 
+// Escape special characters in a string to be used in a regular expression
+function escapeRegExp(string: string): string {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Replace text with custom dictionary entries
 export function replaceTextWithCustomDictionary(text: string, customDictionary: CustomDictionarySettings['customDictionary']): string {
-	for (const entry of customDictionary) {
-		text = text.replace(new RegExp(entry.source, 'g'), entry.replace);
-	}
-	return text;
+	customDictionary.map(entry => escapeRegExp(entry.source)).join('|');
+
+	return text.replace(new RegExp(customDictionary.map(entry => escapeRegExp(entry.source)).join('|'), 'g'), (match) => {
+		const entry = customDictionary.find(entry => new RegExp(escapeRegExp(entry.source)).test(match));
+		return entry ? entry.replace : match;
+	});
 }
