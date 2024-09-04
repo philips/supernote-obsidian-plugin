@@ -42,3 +42,13 @@
 	grid-gap: var(--size-4-1);
 	grid-auto-flow: column;
 }
+
+.supernote-settings-custom-dictionary button {
+	cursor: pointer;
+}
+
+.supernote-settings-custom-dictionary-entry-options button.active {
+	color: var(--text-on-accent);
+	--icon-color: var(--text-on-accent);
+    background-color: var(--interactive-accent);
+}
