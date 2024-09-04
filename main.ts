@@ -1,7 +1,8 @@
-import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
+import { CustomDictionarySettings, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, createCustomDictionarySettingsUI, replaceTextWithCustomDictionary } from './customDictionary';
 
-interface SupernotePluginSettings {
+interface SupernotePluginSettings extends CustomDictionarySettings {
 	mirrorIP: string;
 	invertColorsWhenDark: boolean;
 	showTOC: boolean;
@@ -15,6 +16,7 @@ const DEFAULT_SETTINGS: SupernotePluginSettings = {
 	showTOC: true,
 	showExportButtons: true,
 	collapseRecognizedText: false,
+	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 };
 
 function generateTimestamp(): string {
@@ -28,6 +30,20 @@ function generateTimestamp(): string {
 
 	const timestamp = `${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
 	return timestamp;
+}
+
+/**
+ * Processes the Supernote text based on the provided settings.
+ * 
+ * @param text - The input text to be processed.
+ * @param settings - The settings for the Supernote plugin.
+ * @returns The processed text.
+ */
+function processSupernoteText(text: string, settings: SupernotePluginSettings): string {
+	if (settings.isCustomDictionaryEnabled) {
+		return replaceTextWithCustomDictionary(text, settings.customDictionary);
+	}
+	return text;
 }
 
 class VaultWriter {
@@ -55,7 +71,7 @@ class VaultWriter {
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${sn.pages[i].text}\n`;
+				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 			if (imgs) {
 				let subpath = '';
@@ -177,12 +193,12 @@ export class SupernoteView extends FileView {
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
 					text = container.createEl('details', {
-						text: '\n' + sn.pages[i].text,
+						text: '\n' + processSupernoteText(sn.pages[i].text, this.settings),
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
 					text = container.createEl('div', {
-						text: sn.pages[i].text,
+						text: processSupernoteText(sn.pages[i].text, this.settings),
 					});
 				}
 
@@ -464,5 +480,9 @@ class SupernoteSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
+
+		// Add custom dictionary settings to the settings tab
+		createCustomDictionarySettingsUI(containerEl, this.plugin);
+
 	}
 }
