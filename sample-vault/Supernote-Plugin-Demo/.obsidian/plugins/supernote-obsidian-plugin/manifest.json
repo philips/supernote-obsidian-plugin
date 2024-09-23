@@ -1,0 +1,11 @@
+{
+	"id": "supernote",
+	"name": "Unofficial Supernote by Ratta Integration",
+	"version": "2.2.7",
+	"minAppVersion": "1.5.12",
+	"description": "View Supernote notes, generate markdown from note and capture screen mirror.",
+	"author": "Brandon Philips",
+	"authorUrl": "https://ifup.org",
+	"fundingUrl": "https://github.com/philips/supernote-obsidian-plugin/blob/main/README.md#funding",
+	"isDesktopOnly": false
+}

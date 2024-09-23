@@ -1,0 +1,15 @@
+.theme-dark img[alt*="supernote-invert-dark"] {
+    filter: invert(1);
+}
+
+.theme-light img[alt*="supernote-invert-light"] {
+    filter: invert(1);
+}
+
+.theme-dark img.supernote-invert-dark {
+    filter: invert(1);
+}
+
+.theme-light img.supernote-invert-light {
+    filter: invert(1);
+}
