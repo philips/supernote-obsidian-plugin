@@ -1,3 +1,5 @@
 [submodule "supernote-typescript"]
 	path = supernote-typescript
-	url = https://github.com/philips/supernote-typescript
+	# url = https://github.com/philips/supernote-typescript
+	url = https://github.com/Genei180/supernote-typescript
+	branch = fix_template_unknown_color_error
