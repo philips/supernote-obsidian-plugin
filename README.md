@@ -53,10 +53,6 @@ Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for devel
 
 **A** Because the [Obsidian Outline](https://help.obsidian.md/Plugins/Outline) sidebar accomplishes this same feature.
 
-**Q** Can the images be larger or smaller?
-
-**A** Add a number, in pixels, after a `|` in the link like `![[20240419_100426-0.png|100]]`. [See Obsidian docs](https://help.obsidian.md/Linking+notes+and+files/Embed+files#Embed+an+image+in+a+note). Also, you can use the mouse wheel zoom plugin suggested below to make this easier.
-
 ## Other Helpful Plugins
 
 These are not endorsements but might be useful to pair with this plugin.
