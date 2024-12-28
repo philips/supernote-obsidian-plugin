@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
+    "baseUrl": "./src/",
+    "paths": {
+      "supernote-typescript": ["../supernote-typescript/src/"]
+    },
     "inlineSourceMap": true,
     "inlineSources": true,
     "module": "ESNext",
@@ -11,18 +14,16 @@
     "moduleResolution": "node",
     "importHelpers": true,
     "isolatedModules": true,
-	"strictNullChecks": true,
+    "strictNullChecks": true,
     "lib": [
       "DOM",
       "ES5",
       "ES6",
-      "ES7"
+      "ES7",
+      "DOM.Iterable"
     ]
   },
   "exclude": [
-    "supernote-typescript/**/*.ts"
-  ],
-  "include": [
-    "**/*.ts"
+    "supernote-typescript/tests/*.ts"
   ]
 }
