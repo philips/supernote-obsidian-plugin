@@ -21,10 +21,11 @@ button.mod-cta {
 .page-recognized-text {
     user-select: text; 
     white-space: pre-line; 
-    margin-top: 1.2em;
+    margin: 1.2em 0;
 }
 
 div.page-container {
     display: inline-block; 
     vertical-align: top;
+    margin: 1.2em;
 }
