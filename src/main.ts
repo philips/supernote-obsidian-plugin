@@ -1,5 +1,8 @@
-import { App, Modal, TFolder, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
-import { SupernoteX, toImage, fetchMirrorFrame } from 'supernote-typescript';
+import { App, Modal, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
+import { Image } from 'image-js'
+import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
+import Worker from 'myworker.worker';
 
 interface SupernotePluginSettings {
 	mirrorIP: string;
@@ -30,6 +33,107 @@ function generateTimestamp(): string {
 
 	const timestamp = `${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
 	return timestamp;
+}
+
+function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
+    // Remove data URL prefix (e.g., "data:image/png;base64,")
+    const base64 = dataUrl.split(',')[1];
+    // Convert base64 to binary string
+    const binaryString = atob(base64);
+    // Create buffer and view
+    const bytes = new Uint8Array(binaryString.length);
+    // Convert binary string to buffer
+    for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
+
+export class WorkerPool {
+    private workers: Worker[];
+
+    constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
+        this.workers = Array(maxWorkers).fill(null).map(() =>
+            new Worker()
+        );
+    }
+
+    private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<any[]> {
+        return new Promise((resolve, reject) => {
+            const startTime = Date.now();
+
+            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+                const duration = Date.now() - startTime;
+                //console.log(`Processed pages ${pageNumbers.join(',')} in ${duration}ms`);
+
+                if (e.data.error) {
+                    reject(new Error(e.data.error));
+                } else {
+                    resolve(e.data.images);
+                }
+            };
+
+            worker.onerror = (error) => {
+                console.error('Worker error:', error);
+                reject(error);
+            };
+
+            const message: SupernoteWorkerMessage = {
+                type: 'convert',
+                note,
+                pageNumbers
+            };
+
+            worker.postMessage(message);
+        });
+    }
+
+    async processPages(note: SupernoteX, allPageNumbers: number[]): Promise<any[]> {
+        //console.time('Total processing time');
+
+        // Split pages into chunks based on number of workers
+        const chunkSize = Math.ceil(allPageNumbers.length / this.workers.length);
+        const chunks: number[][] = [];
+
+        for (let i = 0; i < allPageNumbers.length; i += chunkSize) {
+            chunks.push(allPageNumbers.slice(i, i + chunkSize));
+        }
+
+        //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
+
+        // Process chunks in parallel using available workers
+        const results = await Promise.all(
+            chunks.map((chunk, index) =>
+                this.processChunk(this.workers[index % this.workers.length], note, chunk)
+            )
+        );
+
+        //console.timeEnd('Total processing time');
+        return results.flat();
+    }
+
+    terminate() {
+        this.workers.forEach(worker => worker.terminate());
+        this.workers = [];
+    }
+}
+
+export class ImageConverter {
+    private workerPool: WorkerPool;
+
+    constructor(maxWorkers = navigator.hardwareConcurrency) {  // Default to 4 workers
+        this.workerPool = new WorkerPool(maxWorkers);
+    }
+
+    async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<any[]> {
+        const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
+        const results = await this.workerPool.processPages(note, pages);
+        return results;
+    }
+
+    terminate() {
+        this.workerPool.terminate();
+    }
 }
 
 class VaultWriter {
@@ -74,11 +178,21 @@ class VaultWriter {
 	}
 
 	async writeImageFiles(file: TFile, sn: SupernoteX): Promise<TFile[]> {
-		let images = await toImage(sn);
+		let images: string[] = [];
+
+		const converter = new ImageConverter();
+		try {
+			images = await converter.convertToImages(sn);
+		} finally {
+			// Clean up the worker when done
+			converter.terminate();
+		}
+
 		let imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
 			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
-			imgs.push(await this.app.vault.createBinary(filename, images[i].toBuffer()));
+			const buffer = dataUrlToBuffer(images[i]);
+			imgs.push(await this.app.vault.createBinary(filename, buffer));
 		}
 		return imgs;
 	}
@@ -128,7 +242,15 @@ export class SupernoteView extends FileView {
 
 		const note = await this.app.vault.readBinary(file);
 		let sn = new SupernoteX(new Uint8Array(note));
-		let images = await toImage(sn);
+		let images: string[] = [];
+
+		const converter = new ImageConverter();
+		try {
+			images = await converter.convertToImages(sn);
+		} finally {
+			// Clean up the worker when done
+			converter.terminate();
+		}
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
@@ -163,7 +285,7 @@ export class SupernoteView extends FileView {
 		}
 
 		for (let i = 0; i < images.length; i++) {
-			const imageDataUrl = images[i].toDataURL();
+			const imageDataUrl = images[i];
 
 			const pageContainer = container.createEl("div", {
 				cls: 'page-container',
@@ -214,7 +336,8 @@ export class SupernoteView extends FileView {
 
 				saveButton.addEventListener("click", async () => {
 					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}}.png`);
-					await this.app.vault.createBinary(filename, images[i].toBuffer());
+					const buffer = dataUrlToBuffer(imageDataUrl);
+					await this.app.vault.createBinary(filename, buffer);
 				});
 			}
 		}
@@ -472,7 +595,7 @@ class SupernoteSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
-		
+
 		new Setting(containerEl)
 			.setName('Max image side length in .note files')
 			.setDesc('Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.')
