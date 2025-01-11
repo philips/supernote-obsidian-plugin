@@ -335,7 +335,7 @@ export class SupernoteView extends FileView {
 				});
 
 				saveButton.addEventListener("click", async () => {
-					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}}.png`);
+					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
 					const buffer = dataUrlToBuffer(imageDataUrl);
 					await this.app.vault.createBinary(filename, buffer);
 				});
