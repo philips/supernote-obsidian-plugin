@@ -1,6 +1,7 @@
 import { App, Modal, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
-import { Image } from 'image-js'
+import { Image } from 'image-js';
+import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 
@@ -211,6 +212,49 @@ class VaultWriter {
 		const imgs = await this.writeImageFiles(file, sn);
 		this.writeMarkdownFile(file, sn, imgs);
 	}
+
+	async exportToPDF(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		let sn = new SupernoteX(new Uint8Array(note));
+
+		// Create PDF document
+		const pdf = new jsPDF({
+			orientation: 'portrait',
+			unit: 'px',
+			format: [sn.pageWidth, sn.pageHeight] // A4 size in pixels
+		});
+
+		// Convert note pages to images
+		const converter = new ImageConverter();
+		let images: string[] = [];
+		try {
+			images = await converter.convertToImages(sn);
+		} finally {
+			converter.terminate();
+		}
+
+		// Add each page to PDF
+		for (let i = 0; i < images.length; i++) {
+			if (i > 0) {
+				pdf.addPage();
+			}
+
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				pdf.setFontSize(100);
+				pdf.setTextColor(0, 0, 0, 0);
+				pdf.text(sn.pages[i].text, 20, 20, { maxWidth: sn.pageWidth });
+				pdf.setTextColor(0, 0, 0, 1);
+			}
+
+			// Add image first
+			pdf.addImage(images[i], 'PNG', 0, 0, sn.pageWidth, sn.pageHeight);
+		}
+
+		// Generate filename and save
+		let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
+		const pdfOutput = pdf.output('arraybuffer');
+		await this.app.vault.createBinary(filename, pdfOutput);
+	}
 }
 
 let vw: VaultWriter;
@@ -269,6 +313,15 @@ export class SupernoteView extends FileView {
 
 			exportAllBtn.addEventListener("click", async () => {
 				vw.attachNoteFiles(file);
+			});
+
+			const exportPDFBtn = container.createEl("p").createEl("button", {
+				text: "Attach as PDF",
+				cls: "mod-cta",
+			});
+
+			exportPDFBtn.addEventListener("click", async () => {
+				vw.exportToPDF(file);
 			});
 		}
 
@@ -405,6 +458,32 @@ export default class SupernotePlugin extends Plugin {
 							throw new Error("No file to attach");
 						}
 						vw.attachNoteFiles(file);
+					} catch (err: any) {
+						new ErrorModal(this.app, err).open();
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-supernote-note-as-pdf',
+			name: 'Export this Supernote note as PDF',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "note") {
+					if (checking) {
+						return true
+					}
+					try {
+						if (!file) {
+							throw new Error("No file to attach");
+						}
+						vw.exportToPDF(file);
 					} catch (err: any) {
 						new ErrorModal(this.app, err).open();
 					}
