@@ -1,11 +1,11 @@
 import { App, Modal, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
-import { Image } from 'image-js';
+import { FileListModal } from './FileListModal';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 
-interface SupernotePluginSettings {
+export interface SupernotePluginSettings {
 	mirrorIP: string;
 	invertColorsWhenDark: boolean;
 	showTOC: boolean;
@@ -241,7 +241,7 @@ class VaultWriter {
 
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				pdf.setFontSize(100);
-				pdf.setTextColor(0, 0, 0, 0);
+				pdf.setTextColor(0, 0, 0, 0); // Transparent text
 				pdf.text(sn.pages[i].text, 20, 20, { maxWidth: sn.pageWidth });
 				pdf.setTextColor(0, 0, 0, 1);
 			}
@@ -407,6 +407,18 @@ export default class SupernotePlugin extends Plugin {
 		vw = new VaultWriter(this.app, this.settings);
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
+
+		this.addCommand({
+			id: 'attach-supernote-file-from-device',
+			name: 'Attach Supernote file from device',
+			callback: () => {
+				if (this.settings.mirrorIP.length === 0) {
+					new MirrorErrorModal(this.app, this.settings, new Error("IP is unset")).open();
+					return;
+				}
+				new FileListModal(this.app, this.settings).open();
+			}
+		});
 
 		this.registerView(
 			VIEW_TYPE_SUPERNOTE,
