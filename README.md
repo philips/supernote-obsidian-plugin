@@ -6,13 +6,15 @@ But, I already use Obsidian for organizing and capturing all of my digital notes
 
 This plugin enables me (and now you!) to import handwritten notes into Obsidian and view them on a desktop, phone or tablet.
 
-This plugin has three main features:
+This plugin has four main features:
 
 - 📝 View Supernote `*.note` files in your Obsidian Vault. You can link to these notes from your Markdown notes too `[My Note](example.note)`.
 
 - ➡️  Export Supernote `*.note` files as PNGs and/or markdown files and attach them to your Vault.
 
 - 📺 Copy an image from a Supernote via [screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) into your current note with the "Insert Supernote mirror image" command ([demo video](https://youtu.be/Ih_NW-z_aLw))
+
+- ⬇️  Download files directly from your device via the Supernote [Browse & Access] (https://support.supernote.com/en_US/Tools-Features/wi-fi-transfer) feature. 
 
 **Video Demo**
 
