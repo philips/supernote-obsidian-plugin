@@ -66,7 +66,7 @@ export class FileListModal extends SuggestModal<SupernoteFile> {
 
         // Add directory icon or file icon
         const iconEl = container.createSpan({ cls: "suggestion-icon" });
-        iconEl.innerHTML = file.isDirectory ? "📁" : "📄";
+        iconEl.textContent = file.isDirectory ? "📁" : "📄";
 
         const contentEl = container.createDiv({ cls: "suggestion-content" });
         contentEl.createDiv({ text: file.name, cls: "suggestion-title" });
