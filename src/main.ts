@@ -582,7 +582,7 @@ class MirrorErrorModal extends Modal {
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Screen Mirroring?`);
+		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Browse and Access on HTTP://a.b.c.d:8089 ?`);
 	}
 
 	onClose() {
@@ -626,8 +626,8 @@ class SupernoteSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Supernote IP address for "Screen Mirroring"')
-			.setDesc('See Supernote "Screen Mirroring" documentation for how to enable')
+			.setName('Supernote IP address for "Browse and Access"')
+			.setDesc('See Supernote "Browse and Access" documentation. Hint, swipe down, click the Tie Fighter icon, this opens up your Supernote on HTTP://a.b.c.d:8089. This is unencrypted, so watch out for Wiresharkers on your LAN')
 			.addText(text => text
 				.setPlaceholder('IP )e.g. 192.168.1.2')
 				.setValue(this.plugin.settings.mirrorIP)
