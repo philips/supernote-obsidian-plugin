@@ -9,7 +9,7 @@
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": [],
-  "author": "Francois Menard",
+  "author": "Brandon Philips",
   "license": "MIT",
   "devDependencies": {
     "@types/color": "^3.0.6",
