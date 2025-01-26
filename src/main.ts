@@ -582,7 +582,7 @@ class MirrorErrorModal extends Modal {
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Browse and Access on HTTP://a.b.c.d:8089 ?`);
+		contentEl.setText('Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Browse and Access on HTTP://a.b.c.d:8089 ?');
 	}
 
 	onClose() {
