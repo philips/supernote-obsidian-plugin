@@ -2,7 +2,6 @@ import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileVie
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { DownloadListModal, UploadListModal } from './FileListModal';
-import { ParagraphGrouper } from './textflow';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
@@ -145,8 +144,8 @@ class VaultWriter {
 
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
-			if (sn.pages[i].paragraphs !== undefined && sn.pages[i].paragraphs.length > 0) {
-				content += `${sn.pages[i].paragraphs}\n`;
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				content += `${sn.pages[i].text}\n`;
 			}
 			if (imgs) {
 				let subpath = '';
@@ -223,10 +222,10 @@ class VaultWriter {
 				pdf.addPage();
 			}
 
-			if (sn.pages[i].paragraphs !== undefined && sn.pages[i].paragraphs.length > 0) {
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				pdf.setFontSize(100);
 				pdf.setTextColor(0, 0, 0, 0); // Transparent text
-				pdf.text(sn.pages[i].paragraphs, 20, 20, { maxWidth: sn.pageWidth });
+				pdf.text(sn.pages[i].text, 20, 20, { maxWidth: sn.pageWidth });
 				pdf.setTextColor(0, 0, 0, 1);
 			}
 
@@ -337,26 +336,19 @@ export class SupernoteView extends FileView {
 			}
 
 			// Show the text of the page, if any
-			if (sn.pages[i].paragraphs !== undefined && sn.pages[i].paragraphs.length > 0) {
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				let text;
-
-				let paragraphs;
-
-				const grouper = new ParagraphGrouper();
-				const markdownText = grouper.convertToMarkdown(
-  					grouper.groupIntoParagraphs(sn.pages[i].recognitionElements[0])
-				);
 
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
 					text = pageContainer.createEl('details', {
-						text: '\n' + sn.pages[i].paragraphs,
+						text: '\n' + sn.pages[i].text,
 						cls: 'page-recognized-text',
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
 					text = pageContainer.createEl('div', {
-						text: sn.pages[i].paragraphs,
+						text: sn.pages[i].text,
 						cls: 'page-recognized-text',
 					});
 				}
