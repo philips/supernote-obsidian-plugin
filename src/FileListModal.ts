@@ -1,5 +1,6 @@
-import { App, SuggestModal, Notice, MarkdownView } from 'obsidian';
-import { SupernotePluginSettings } from './main';
+import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
+import SupernotePlugin from './main';
+import { SupernotePluginSettings, IP_VALIDATION_PATTERN } from 'settings';
 
 interface SupernoteFile {
     name: string;
@@ -19,20 +20,20 @@ interface SupernoteResponse {
     usedMemory: number;
 }
 
-export class FileListModal extends SuggestModal<SupernoteFile> {
+export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     settings: SupernotePluginSettings;
     files: SupernoteFile[] = [];
     currentPath: string = '/';
 
-    constructor(app: App, settings: SupernotePluginSettings) {
+    constructor(app: App, plugin: SupernotePlugin) {
         super(app);
-        this.settings = settings;
+        this.settings = plugin.settings;
         this.setPlaceholder("Select a file to download or directory to open");
     }
 
-    private async loadFiles() {
+    async loadFiles() {
         try {
-            const response = await fetch(`http://${this.settings.mirrorIP}:8089${this.currentPath}`);
+            const response = await fetch(`http://${this.settings.directConnectIP}:8089${this.currentPath}`);
             if (!response.ok) {
                 throw new Error(`Failed to fetch file list: ${response.statusText}`);
             }
@@ -98,9 +99,26 @@ export class FileListModal extends SuggestModal<SupernoteFile> {
             await this.loadFiles();
             // Reopen the modal to show new directory contents
             this.open();
+        }
+    }
+}
+
+
+export class DownloadListModal extends FileListModal {
+    constructor(app: App, plugin: SupernotePlugin) {
+        super(app, plugin);
+    }
+
+    async onChooseSuggestion(file: SupernoteFile) {
+        if (file.isDirectory) {
+            // Navigate into directory
+            this.currentPath = file.uri;
+            await this.loadFiles();
+            // Reopen the modal to show new directory contents
+            this.open();
         } else {
             try {
-                const fileResponse = await fetch(`http://${this.settings.mirrorIP}:8089${file.uri}`);
+                const fileResponse = await fetch(`http://${this.settings.directConnectIP}:8089${file.uri}`);
                 if (!fileResponse.ok) {
                     throw new Error(`Failed to download file: ${fileResponse.statusText}`);
                 }
@@ -117,6 +135,109 @@ export class FileListModal extends SuggestModal<SupernoteFile> {
             } catch (err) {
                 new Notice(`Failed to download file: ${err.message}`);
             }
+        }
+    }
+}
+export class UploadListModal extends FileListModal {
+    private sanitizePath(path: string): string {
+        return path.replace(/\/+/g, '/').replace(/\/$/, '') + '/';
+    }
+    private currentFile: TFile;
+
+    constructor(app: App, plugin: SupernotePlugin, file: TFile) {
+        super(app, plugin);
+        this.currentFile = file;
+    }
+
+    override async getSuggestions(query: string): Promise<SupernoteFile[]> {
+        const suggestions = await super.getSuggestions(query);
+
+        // Add "Upload here" option when not at root
+        if (this.currentPath !== '/') {
+            return [{
+                name: '[UPLOAD HERE]',
+                size: 0,
+                date: '',
+                uri: this.currentPath,
+                extension: '',
+                isDirectory: false
+            }, ...suggestions];
+        }
+        return suggestions;
+    }
+
+    override renderSuggestion(file: SupernoteFile, el: HTMLElement) {
+        if (file.name === '[UPLOAD HERE]') {
+            el.createDiv({ cls: "suggestion-item upload-here" }, container => {
+                container.createSpan({
+                    cls: "suggestion-icon",
+                    text: "⬆️"
+                });
+                const content = container.createDiv({ cls: "suggestion-content" });
+                content.createDiv({
+                    cls: "suggestion-title",
+                    text: "Upload to current directory"
+                });
+            });
+        } else {
+            super.renderSuggestion(file, el);
+            if (file.isDirectory) {
+                const noteEl = el.querySelector(".suggestion-note");
+                if (noteEl) {
+                    noteEl.textContent = "Select to enter directory";
+                }
+            }
+        }
+    }
+
+    override async onChooseSuggestion(file: SupernoteFile) {
+        if (file.name === '[UPLOAD HERE]') {
+            try {
+                if (!IP_VALIDATION_PATTERN.test(this.settings.directConnectIP)) {
+                    new Notice("Invalid Supernote IP address configured");
+                    return;
+                }
+
+                const uploadURL = `http://${this.settings.directConnectIP}:8089${this.currentPath}`;
+
+                // Create FormData with file payload
+                // Generate filename with .txt extension for markdown files
+                const uploadFilename = this.currentFile.extension === "md"
+                    ? `${this.currentFile.basename}.txt`  // Change extension to .txt
+                    : this.currentFile.name;
+
+                const formData = new FormData();
+                const fileContent = this.currentFile.extension === "md"
+                    ? await this.app.vault.read(this.currentFile)
+                    : await this.app.vault.readBinary(this.currentFile);
+
+                const mimeType = this.currentFile.extension === "md"
+                    ? 'text/plain'  // Use text/plain for compatibility
+                    : 'application/octet-stream';
+
+                // Use modified filename in the FormData
+                formData.append('file', new Blob([fileContent], { type: mimeType }), uploadFilename);
+
+                const response = await fetch(uploadURL, {
+                    method: "POST",
+                    mode: 'cors',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Upload failed: ${errorText}`);
+                }
+
+                new Notice(`Successfully uploaded ${uploadFilename} to Supernote`);
+                this.close();
+            } catch (err) {
+                new Notice(`Upload failed: ${err.message}`);
+                console.error('Upload error:', err);
+            }
+        } else if (file.isDirectory) {
+            // Navigate into directory using parent behavior
+            await super.onChooseSuggestion(file);
         }
     }
 }

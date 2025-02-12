@@ -1,7 +1,7 @@
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
-import { FileListModal } from './FileListModal';
+import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ParagraphGrouper } from './textflow';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
@@ -407,7 +407,22 @@ export default class SupernotePlugin extends Plugin {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
 					return;
 				}
-				new FileListModal(this.app, this.settings).open();
+				new DownloadListModal(this.app, this).open();
+			}
+		});
+
+		this.addCommand({
+			id: 'upload-file-to-supernote',
+			name: 'Upload the current file to a Supernote device',
+			callback: () => {
+				if (this.settings.directConnectIP.length === 0) {
+					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
+					return;
+				}
+				const activeFile = this.app.workspace.getActiveFile();
+				if (activeFile) {
+					new UploadListModal(this.app, this, activeFile).open();
+				}
 			}
 		});
 
@@ -563,7 +578,7 @@ export default class SupernotePlugin extends Plugin {
 
 class DirectConnectErrorModal extends Modal {
 	error: Error;
-	settings: SupernotePluginSettings;
+	public settings: SupernotePluginSettings;
 
 	constructor(app: App, settings: SupernotePluginSettings, error: Error) {
 		super(app);

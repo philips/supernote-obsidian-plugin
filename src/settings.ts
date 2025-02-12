@@ -1,7 +1,7 @@
 import SupernotePlugin from "./main";
 import { App, ExtraButtonComponent, PluginSettingTab, Setting } from 'obsidian';
 
-const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
+export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
 
 export interface SupernotePluginSettings {
