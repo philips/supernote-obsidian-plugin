@@ -1,27 +1,11 @@
-import { App, Modal, TFile, Plugin, PluginSettingTab, Editor, Setting, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { FileListModal } from './FileListModal';
+import { ParagraphGrouper } from './textflow';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
-
-export interface SupernotePluginSettings {
-	mirrorIP: string;
-	invertColorsWhenDark: boolean;
-	showTOC: boolean;
-	showExportButtons: boolean;
-	collapseRecognizedText: boolean,
-	noteImageMaxDim: number;
-}
-
-const DEFAULT_SETTINGS: SupernotePluginSettings = {
-	mirrorIP: '',
-	invertColorsWhenDark: true,
-	showTOC: true,
-	showExportButtons: true,
-	collapseRecognizedText: false,
-	noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
-}
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -161,8 +145,8 @@ class VaultWriter {
 
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${sn.pages[i].text}\n`;
+			if (sn.pages[i].paragraphs !== undefined && sn.pages[i].paragraphs.length > 0) {
+				content += `${sn.pages[i].paragraphs}\n`;
 			}
 			if (imgs) {
 				let subpath = '';
@@ -239,10 +223,10 @@ class VaultWriter {
 				pdf.addPage();
 			}
 
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+			if (sn.pages[i].paragraphs !== undefined && sn.pages[i].paragraphs.length > 0) {
 				pdf.setFontSize(100);
 				pdf.setTextColor(0, 0, 0, 0); // Transparent text
-				pdf.text(sn.pages[i].text, 20, 20, { maxWidth: sn.pageWidth });
+				pdf.text(sn.pages[i].paragraphs, 20, 20, { maxWidth: sn.pageWidth });
 				pdf.setTextColor(0, 0, 0, 1);
 			}
 
@@ -353,19 +337,26 @@ export class SupernoteView extends FileView {
 			}
 
 			// Show the text of the page, if any
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+			if (sn.pages[i].paragraphs !== undefined && sn.pages[i].paragraphs.length > 0) {
 				let text;
+
+				let paragraphs;
+
+				const grouper = new ParagraphGrouper();
+				const markdownText = grouper.convertToMarkdown(
+  					grouper.groupIntoParagraphs(sn.pages[i].recognitionElements[0])
+				);
 
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
 					text = pageContainer.createEl('details', {
-						text: '\n' + sn.pages[i].text,
+						text: '\n' + sn.pages[i].paragraphs,
 						cls: 'page-recognized-text',
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
 					text = pageContainer.createEl('div', {
-						text: sn.pages[i].text,
+						text: sn.pages[i].paragraphs,
 						cls: 'page-recognized-text',
 					});
 				}
@@ -412,8 +403,8 @@ export default class SupernotePlugin extends Plugin {
 			id: 'attach-supernote-file-from-device',
 			name: 'Attach Supernote file from device',
 			callback: () => {
-				if (this.settings.mirrorIP.length === 0) {
-					new MirrorErrorModal(this.app, this.settings, new Error("IP is unset")).open();
+				if (this.settings.directConnectIP.length === 0) {
+					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
 					return;
 				}
 				new FileListModal(this.app, this.settings).open();
@@ -436,10 +427,10 @@ export default class SupernotePlugin extends Plugin {
 				const filename = await this.app.fileManager.getAvailablePathForAttachment(`supernote-mirror-${f}-${ts}.png`);
 
 				try {
-					if (this.settings.mirrorIP.length == 0) {
+					if (this.settings.directConnectIP.length == 0) {
 						throw new Error("IP is unset, please set in Supernote plugin settings")
 					}
-					let image = await fetchMirrorFrame(`${this.settings.mirrorIP}:8080`);
+					let image = await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
 
 					const file = await this.app.vault.createBinary(filename, image.toBuffer());
 					const path = this.app.workspace.activeEditor?.file?.path;
@@ -449,7 +440,7 @@ export default class SupernotePlugin extends Plugin {
 					const link = this.app.fileManager.generateMarkdownLink(file, path);
 					editor.replaceRange(link, editor.getCursor());
 				} catch (err: any) {
-					new MirrorErrorModal(this.app, this.settings, err).open();
+					new DirectConnectErrorModal(this.app, this.settings, err).open();
 				}
 			},
 		});
@@ -570,7 +561,7 @@ export default class SupernotePlugin extends Plugin {
 }
 
 
-class MirrorErrorModal extends Modal {
+class DirectConnectErrorModal extends Modal {
 	error: Error;
 	settings: SupernotePluginSettings;
 
@@ -582,7 +573,7 @@ class MirrorErrorModal extends Modal {
 
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.mirrorIP} and running Screen Mirroring?`);
+		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.directConnectIP} and running Screen Mirroring?`);
 	}
 
 	onClose() {
@@ -608,96 +599,5 @@ class ErrorModal extends Modal {
 	onClose() {
 		const { contentEl } = this;
 		contentEl.empty();
-	}
-}
-
-
-class SupernoteSettingTab extends PluginSettingTab {
-	plugin: SupernotePlugin;
-
-	constructor(app: App, plugin: SupernotePlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const { containerEl } = this;
-
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('Supernote IP address for "Screen Mirroring"')
-			.setDesc('See Supernote "Screen Mirroring" documentation for how to enable')
-			.addText(text => text
-				.setPlaceholder('IP )e.g. 192.168.1.2')
-				.setValue(this.plugin.settings.mirrorIP)
-				.onChange(async (value) => {
-					this.plugin.settings.mirrorIP = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName('Invert colors in "Dark mode"')
-			.setDesc('When Obsidian is in "Dark mode" increase image visibility by inverting colors of images')
-			.addToggle(text => text
-				.setValue(this.plugin.settings.invertColorsWhenDark)
-				.onChange(async (value) => {
-					this.plugin.settings.invertColorsWhenDark = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName('Show table of contents and page headings')
-			.setDesc(
-				'When viewing .note files, show a table of contents and page number headings',
-			)
-			.addToggle((text) =>
-				text
-					.setValue(this.plugin.settings.showTOC)
-					.onChange(async (value) => {
-						this.plugin.settings.showTOC = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName('Show export buttons')
-			.setDesc(
-				'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
-			)
-			.addToggle((text) =>
-				text
-					.setValue(this.plugin.settings.showExportButtons)
-					.onChange(async (value) => {
-						this.plugin.settings.showExportButtons = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName('Collapse recognized text')
-			.setDesc('When viewing .note files, hide recognized text in a collapsible element. This does not affect exported markdown.')
-			.addToggle(text => text
-				.setValue(this.plugin.settings.collapseRecognizedText)
-				.onChange(async (value) => {
-					this.plugin.settings.collapseRecognizedText = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName('Max image side length in .note files')
-			.setDesc('Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.')
-			.addSlider(text => text
-				.setLimits(200, 1900, 100) // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
-				.setDynamicTooltip()
-				.setValue(this.plugin.settings.noteImageMaxDim)
-				.onChange(async (value) => {
-					this.plugin.settings.noteImageMaxDim = value;
-					await this.plugin.saveSettings();
-				})
-			);
 	}
 }
