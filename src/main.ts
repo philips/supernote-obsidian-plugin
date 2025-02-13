@@ -1,3 +1,4 @@
+import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
@@ -386,6 +387,9 @@ export default class SupernotePlugin extends Plugin {
 	settings: SupernotePluginSettings;
 
 	async onload() {
+        // Install polyfills before any other code runs
+        installAtPolyfill();
+
 		await this.loadSettings();
 		vw = new VaultWriter(this.app, this.settings);
 

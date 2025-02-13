@@ -90,3 +90,11 @@ npm link supernote-typescript/
 
 - `npm i` or `yarn` to install dependencies.
 - `npm run dev` to start compilation in watch mode.
+
+**Android Debugging**
+
+- Ensure `npm run dev` is running above
+- Create a vault called "SupernoteTest"
+- Install the supernote plugin from the community store
+- Run `npm run push-android` to push main.js to the device
+- Run "Reload App without Saving" on Obsidian command palette 
