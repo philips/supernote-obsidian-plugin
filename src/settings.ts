@@ -1,10 +1,11 @@
+import { createCustomDictionarySettingsUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, CustomDictionarySettings } from "./customDictionary";
 import SupernotePlugin from "./main";
 import { App, ExtraButtonComponent, PluginSettingTab, Setting } from 'obsidian';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
 
-export interface SupernotePluginSettings {
+export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showTOC: boolean;
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     showExportButtons: true,
     collapseRecognizedText: false,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
+	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
 export class SupernoteSettingTab extends PluginSettingTab {
@@ -123,5 +125,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+
+		// Add custom dictionary settings to the settings tab
+		createCustomDictionarySettingsUI(containerEl, this.plugin);
     }
 }

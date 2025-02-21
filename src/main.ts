@@ -6,6 +6,7 @@ import { DownloadListModal, UploadListModal } from './FileListModal';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
+import { replaceTextWithCustomDictionary } from './customDictionary';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -32,6 +33,21 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
         bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
+}
+
+/**
+ * Processes the Supernote text based on the provided settings.
+ * 
+ * @param text - The input text to be processed.
+ * @param settings - The settings for the Supernote plugin.
+ * @returns The processed text.
+ */
+function processSupernoteText(text: string, settings: SupernotePluginSettings): string {
+	let processedText = text;
+	if (settings.isCustomDictionaryEnabled) {
+		processedText = replaceTextWithCustomDictionary(processedText, settings.customDictionary);
+	}
+	return processedText;
 }
 
 export class WorkerPool {
@@ -146,7 +162,7 @@ class VaultWriter {
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${sn.pages[i].text}\n`;
+				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 			if (imgs) {
 				let subpath = '';
@@ -226,7 +242,7 @@ class VaultWriter {
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				pdf.setFontSize(100);
 				pdf.setTextColor(0, 0, 0, 0); // Transparent text
-				pdf.text(sn.pages[i].text, 20, 20, { maxWidth: sn.pageWidth });
+				pdf.text(processSupernoteText(sn.pages[i].text, this.settings), 20, 20, { maxWidth: sn.pageWidth });
 				pdf.setTextColor(0, 0, 0, 1);
 			}
 
@@ -343,13 +359,13 @@ export class SupernoteView extends FileView {
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
 					text = pageContainer.createEl('details', {
-						text: '\n' + sn.pages[i].text,
+						text: '\n' + processSupernoteText(sn.pages[i].text,this.settings),
 						cls: 'page-recognized-text',
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
 					text = pageContainer.createEl('div', {
-						text: sn.pages[i].text,
+						text: processSupernoteText(sn.pages[i].text, this.settings),
 						cls: 'page-recognized-text',
 					});
 				}
