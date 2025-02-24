@@ -29,3 +29,46 @@ div.page-container {
     vertical-align: top;
     margin: 1.2em;
 }
+
+/* Custom dictionary settings styles */
+.supernote-settings-custom-dictionary-subtitle {
+	padding: 0 0 0.75em;
+}
+
+.supernote-settings-custom-dictionary-entries {
+	display: block;
+}
+
+.supernote-settings-custom-dictionary-entries.disabled {
+	display: none;
+}
+
+.supernote-settings-custom-dictionary table {
+	margin-block-start: var(--size-4-2);
+    margin-block-end: var(--size-2-1);
+	font-size: smaller;
+}
+
+.supernote-settings-custom-dictionary table, .supernote-settings-custom-dictionary table input {
+	width: 100%;
+}
+
+.supernote-settings-custom-dictionary table th {
+	text-align: start;
+}
+
+.supernote-settings-custom-dictionary-entry-options {
+	display: grid;
+	grid-gap: var(--size-4-1);
+	grid-auto-flow: column;
+}
+
+.supernote-settings-custom-dictionary button {
+	cursor: pointer;
+}
+
+.supernote-settings-custom-dictionary-entry-options button.active {
+	color: var(--text-on-accent);
+	--icon-color: var(--text-on-accent);
+    background-color: var(--interactive-accent);
+}
