@@ -146,14 +146,18 @@ class VaultWriter {
 		this.settings = settings;
 	}
 
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null) {
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, overwrite = false) {
 		let content = '';
 
-		// Generate a non-conflicting filename - it has a bit of a race but that is OK
-		let filename = `${file.parent?.path}/${file.basename}.md`;
-		let i = 0;
-		while (this.app.vault.getFileByPath(filename) !== null) {
-			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
+		const baseFilename = `${file.parent?.path}/${file.basename}.md`;
+		let filename = baseFilename;
+
+		if (!overwrite) {
+			// Generate a non-conflicting filename - it has a bit of a race but that is OK
+			let i = 0;
+			while (this.app.vault.getFileByPath(filename) !== null) {
+				filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
+			}
 		}
 
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
@@ -175,7 +179,16 @@ class VaultWriter {
 			}
 		}
 
-		this.app.vault.create(filename, content);
+		if (overwrite) {
+			const existing = this.app.vault.getFileByPath(baseFilename);
+			if (existing) {
+				this.app.vault.modify(existing, content);
+			} else {
+				this.app.vault.create(baseFilename, content);
+			}
+		} else {
+			this.app.vault.create(filename, content);
+		}
 	}
 
 	async writeImageFiles(file: TFile, sn: SupernoteX): Promise<TFile[]> {
@@ -198,11 +211,11 @@ class VaultWriter {
 		return imgs;
 	}
 
-	async attachMarkdownFile(file: TFile) {
+	async attachMarkdownFile(file: TFile, overwrite = false) {
 		const note = await this.app.vault.readBinary(file);
 		let sn = new SupernoteX(new Uint8Array(note));
 
-		this.writeMarkdownFile(file, sn, null);
+		this.writeMarkdownFile(file, sn, null, overwrite);
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -549,6 +562,29 @@ export default class SupernotePlugin extends Plugin {
 				return false;
 			},
 		});
+
+		const syncDebounceMap = new Map<string, ReturnType<typeof setTimeout>>();
+
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (!(file instanceof TFile) || file.extension !== 'note') return;
+				if (!this.settings.autoSyncMarkdown) return;
+				vw.attachMarkdownFile(file, true);
+			})
+		);
+
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => {
+				if (!(file instanceof TFile) || file.extension !== 'note') return;
+				if (!this.settings.autoSyncMarkdown) return;
+				const existing = syncDebounceMap.get(file.path);
+				if (existing) clearTimeout(existing);
+				syncDebounceMap.set(file.path, setTimeout(() => {
+					syncDebounceMap.delete(file.path);
+					vw.attachMarkdownFile(file, true);
+				}, 2000));
+			})
+		);
 	}
 
 	onunload() {

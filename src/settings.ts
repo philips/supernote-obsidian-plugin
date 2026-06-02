@@ -10,6 +10,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     invertColorsWhenDark: boolean;
     showTOC: boolean;
     showExportButtons: boolean;
+    autoSyncMarkdown: boolean;
     collapseRecognizedText: boolean,
     noteImageMaxDim: number;
 }
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     invertColorsWhenDark: true,
     showTOC: true,
     showExportButtons: true,
+    autoSyncMarkdown: false,
     collapseRecognizedText: false,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
@@ -98,6 +100,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.showExportButtons)
                     .onChange(async (value) => {
                         this.plugin.settings.showExportButtons = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+
+        new Setting(containerEl)
+            .setName('Auto-sync .note files to markdown')
+            .setDesc(
+                'Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.',
+            )
+            .addToggle((text) =>
+                text
+                    .setValue(this.plugin.settings.autoSyncMarkdown)
+                    .onChange(async (value) => {
+                        this.plugin.settings.autoSyncMarkdown = value;
                         await this.plugin.saveSettings();
                     }),
             );
