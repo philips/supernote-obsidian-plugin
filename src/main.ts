@@ -211,10 +211,12 @@ class VaultWriter {
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, overwrite = false) {
 		let content = '';
 
-		// Derive base filename from file.path (always correctly formatted by Obsidian,
-		// unlike file.parent?.path which is "/" for root files causing "//name.md").
-		const baseFilename = file.path.replace(/\.note$/i, '.md');
-		const dir = file.path.slice(0, file.path.length - file.name.length);
+		// Derive the output path. When a mirror folder is configured, replicate the
+		// note's relative path under that folder; otherwise save alongside the note.
+		const relMdPath = file.path.replace(/\.note$/i, '.md');
+		const mirrorFolder = this.settings.markdownMirrorFolder;
+		const baseFilename = mirrorFolder ? `${mirrorFolder}/${relMdPath}` : relMdPath;
+		const dir = baseFilename.slice(0, baseFilename.length - `${file.basename}.md`.length);
 		let filename = baseFilename;
 
 		if (!overwrite) {
@@ -224,6 +226,9 @@ class VaultWriter {
 				filename = `${dir}${file.basename} ${++i}.md`;
 			}
 		}
+
+		// Create any missing parent folders before writing.
+		if (dir) await this.ensureFolderExists(dir.replace(/\/$/, ''));
 
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
@@ -327,6 +332,21 @@ class VaultWriter {
 			}
 		} else {
 			await this.app.vault.create(filename, content);
+		}
+	}
+
+	private async ensureFolderExists(path: string): Promise<void> {
+		const parts = path.split('/').filter(Boolean);
+		let current = '';
+		for (const part of parts) {
+			current = current ? `${current}/${part}` : part;
+			if (!this.app.vault.getAbstractFileByPath(current)) {
+				try {
+					await this.app.vault.createFolder(current);
+				} catch {
+					// Folder may have been created concurrently; ignore.
+				}
+			}
 		}
 	}
 

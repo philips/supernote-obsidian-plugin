@@ -15,6 +15,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     noteImageMaxDim: number;
     isKeywordsAndLinksEnabled: boolean;
     isHashtagsMentionsEnabled: boolean;
+    markdownMirrorFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -27,6 +28,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     isKeywordsAndLinksEnabled: true,
     isHashtagsMentionsEnabled: true,
+    markdownMirrorFolder: '',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -120,6 +122,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         this.plugin.settings.isAutoSyncMarkdownEnabled = value;
                         await this.plugin.saveSettings();
                     }),
+            );
+
+        new Setting(containerEl)
+            .setName('Markdown mirror folder')
+            .setDesc(
+                'Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: SupernoteMarkdowns',
+            )
+            .addText(text => text
+                .setPlaceholder('SupernoteMarkdowns')
+                .setValue(this.plugin.settings.markdownMirrorFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.markdownMirrorFolder = value.trim();
+                    await this.plugin.saveSettings();
+                })
             );
 
         new Setting(containerEl)
