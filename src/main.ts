@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView, getAllTags } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { DownloadListModal, UploadListModal } from './FileListModal';
@@ -36,17 +36,48 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
 }
 
 /**
+ * Transforms #-prefixed words into vault tags or headings, and @-mentions into [[links]].
+ *
+ * For each `#word` or `# word` token:
+ *   - If `word` is already a tag in the vault → `#word` (inline tag, no space)
+ *   - Otherwise → `# word` (heading, space added)
+ *
+ * For each `@word` token → `[[word]]`
+ */
+function processHashtagsAndMentions(text: string, app: App): string {
+	const tagSet = new Set<string>();
+	for (const file of app.vault.getMarkdownFiles()) {
+		const cache = app.metadataCache.getFileCache(file);
+		if (cache) {
+			for (const tag of getAllTags(cache) ?? []) {
+				tagSet.add(tag.toLowerCase());
+			}
+		}
+	}
+
+	const result = text
+		.replace(/#\s*(\w[\w-]*)/g, (_match, word) => {
+			return tagSet.has(`#${word.toLowerCase()}`) ? `#${word}` : `# ${word}`;
+		})
+		.replace(/@(\w+)/g, '[[$1]]');
+
+	return result;
+}
+
+/**
  * Processes the Supernote text based on the provided settings.
- * 
+ *
  * @param text - The input text to be processed.
  * @param settings - The settings for the Supernote plugin.
+ * @param app - The Obsidian app instance (used for tag lookup).
  * @returns The processed text.
  */
-function processSupernoteText(text: string, settings: SupernotePluginSettings): string {
+function processSupernoteText(text: string, settings: SupernotePluginSettings, app: App): string {
 	let processedText = text;
 	if (settings.isCustomDictionaryEnabled) {
 		processedText = replaceTextWithCustomDictionary(processedText, settings.customDictionary);
 	}
+	processedText = processHashtagsAndMentions(processedText, app);
 	return processedText;
 }
 
@@ -166,7 +197,7 @@ class VaultWriter {
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+				content += `${processSupernoteText(sn.pages[i].text, this.settings, this.app)}\n`;
 			}
 			if (imgs) {
 				let subpath = '';
@@ -255,7 +286,7 @@ class VaultWriter {
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				pdf.setFontSize(100);
 				pdf.setTextColor(0, 0, 0, 0); // Transparent text
-				pdf.text(processSupernoteText(sn.pages[i].text, this.settings), 20, 20, { maxWidth: sn.pageWidth });
+				pdf.text(processSupernoteText(sn.pages[i].text, this.settings, this.app), 20, 20, { maxWidth: sn.pageWidth });
 				pdf.setTextColor(0, 0, 0, 1);
 			}
 
@@ -372,13 +403,13 @@ export class SupernoteView extends FileView {
 				// If Collapse Text setting is enabled, place the text into an HTML `details` element
 				if (this.settings.collapseRecognizedText) {
 					text = pageContainer.createEl('details', {
-						text: '\n' + processSupernoteText(sn.pages[i].text,this.settings),
+						text: '\n' + processSupernoteText(sn.pages[i].text, this.settings, this.app),
 						cls: 'page-recognized-text',
 					});
 					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
 				} else {
 					text = pageContainer.createEl('div', {
-						text: processSupernoteText(sn.pages[i].text, this.settings),
+						text: processSupernoteText(sn.pages[i].text, this.settings, this.app),
 						cls: 'page-recognized-text',
 					});
 				}
