@@ -44,7 +44,17 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
  *
  * For each `@word` token → `[[word]]`
  */
-function processHashtagsAndMentions(text: string, app: App): string {
+/**
+ * noteKeywordTags: map from lowercase-normalized key (e.g. "new_tag") to the
+ * canonical tag string with # (e.g. "#New_tag"), derived from this note's own
+ * keyword stars. Used so that brand-new tags not yet indexed in the vault are
+ * still recognised as tags rather than headings.
+ */
+function processHashtagsAndMentions(
+	text: string,
+	app: App,
+	noteKeywordTags: Map<string, string> = new Map(),
+): string {
 	const tagSet = new Set<string>();
 	try {
 		// getTags() is an undocumented MetadataCache method that returns all vault
@@ -58,8 +68,20 @@ function processHashtagsAndMentions(text: string, app: App): string {
 	}
 
 	const result = text
-		.replace(/#\s*(\w[\w-]*)/g, (_match, word) => {
-			return tagSet.has(`#${word.toLowerCase()}`) ? `#${word}` : `# ${word}`;
+		.replace(/#\s*(\w[\w-]*)(\s+\w[\w-]*)?/g, (_match, word, next) => {
+			if (next) {
+				const nextWord = next.trim();
+				const twoWordKey = `${word.toLowerCase()}_${nextWord.toLowerCase()}`;
+				// Note's own keyword tags take priority (canonical capitalisation).
+				if (noteKeywordTags.has(twoWordKey)) return noteKeywordTags.get(twoWordKey)!;
+				// Existing vault tag.
+				if (tagSet.has(`#${twoWordKey}`)) return `#${word}_${nextWord}`;
+			}
+			const singleKey = word.toLowerCase();
+			if (noteKeywordTags.has(singleKey)) return noteKeywordTags.get(singleKey)!;
+			if (tagSet.has(`#${singleKey}`)) return `#${word}${next ?? ''}`;
+			// Not a tag → Markdown heading.
+			return `# ${word}${next ?? ''}`;
 		})
 		.replace(/@(\w+)/g, '[[$1]]');
 
@@ -74,12 +96,17 @@ function processHashtagsAndMentions(text: string, app: App): string {
  * @param app - The Obsidian app instance (used for tag lookup).
  * @returns The processed text.
  */
-function processSupernoteText(text: string, settings: SupernotePluginSettings, app: App): string {
+function processSupernoteText(
+	text: string,
+	settings: SupernotePluginSettings,
+	app: App,
+	noteKeywordTags: Map<string, string> = new Map(),
+): string {
 	let processedText = text;
 	if (settings.isCustomDictionaryEnabled) {
 		processedText = replaceTextWithCustomDictionary(processedText, settings.customDictionary);
 	}
-	processedText = processHashtagsAndMentions(processedText, app);
+	processedText = processHashtagsAndMentions(processedText, app, noteKeywordTags);
 	return processedText;
 }
 
@@ -196,45 +223,66 @@ class VaultWriter {
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
 
-		// Emit keyword tags collected from Supernote's star/keyword feature.
+		// Build per-page keyword tag map and a note-level keyword lookup for OCR processing.
+		// Use the KEYWORD footer key prefix (first 4 digits, 1-indexed) for the page,
+		// matching the same format as LINKO keys. KEYWORDPAGE can be '0' (invalid).
 		// Each keyword text is sanitized: non-alphanumeric characters become '_'.
-		const keywordTags: string[] = [];
+		const keywordsByPage = new Map<number, string[]>();
+		// noteKeywordTags: lowercase-normalized → canonical "#Tag" for brand-new tags
+		// not yet in the vault so processHashtagsAndMentions can still recognise them.
+		const noteKeywordTags = new Map<string, string>();
 		for (const key of Object.keys(sn.keywords)) {
+			const pageIdx = parseInt(key.slice(0, 4)) - 1;
 			for (const kw of sn.keywords[key]) {
 				const text = kw.KEYWORD.trim();
 				if (!text) continue;
 				const tag = `#${text.replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
-				if (!keywordTags.includes(tag)) keywordTags.push(tag);
+				if (!keywordsByPage.has(pageIdx)) keywordsByPage.set(pageIdx, []);
+				if (!keywordsByPage.get(pageIdx)!.includes(tag))
+					keywordsByPage.get(pageIdx)!.push(tag);
+				// Register for OCR lookup (single-word and two-word keys).
+				const parts = tag.slice(1).split('_');
+				if (parts.length === 1) noteKeywordTags.set(parts[0].toLowerCase(), tag);
+				if (parts.length === 2) noteKeywordTags.set(`${parts[0].toLowerCase()}_${parts[1].toLowerCase()}`, tag);
 			}
 		}
-		if (keywordTags.length > 0) {
-			content += keywordTags.join(' ') + '\n\n';
-		}
 
-		// Build a page-indexed map of links for quick lookup in the page loop.
+		// Build per-page link map. The LINKO key encodes the source page as its
+		// first 4 digits (1-indexed), so we use that instead of OBJPAGE.
+		// Sorting keys gives top-to-bottom link order within each page.
 		const snLinks = sn.links ?? {};
-		const linksByPage = new Map<string, string[]>();
+		const linksByPage = new Map<number, string[]>();
 		const noteCache = new Map<string, SupernoteX>();
-		for (const key of Object.keys(snLinks)) {
+		for (const key of Object.keys(snLinks).sort()) {
 			for (const link of snLinks[key]) {
 				if (!link.text) continue;
 				const text = await this.resolvePageAnchor(link, noteCache);
-				if (!linksByPage.has(link.OBJPAGE)) linksByPage.set(link.OBJPAGE, []);
-				linksByPage.get(link.OBJPAGE)!.push(`[[${text}]]`);
+				const pageIdx = parseInt(key.slice(0, 4)) - 1;
+				if (!linksByPage.has(pageIdx)) linksByPage.set(pageIdx, []);
+				linksByPage.get(pageIdx)!.push(`[[${text}]]`);
 			}
 		}
 
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
+			// Process OCR text first so we can check which keyword tags are already embedded.
+			let pageOcrText = '';
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				try {
-					content += `${processSupernoteText(sn.pages[i].text, this.settings, this.app)}\n`;
+					pageOcrText = processSupernoteText(sn.pages[i].text, this.settings, this.app, noteKeywordTags);
 				} catch {
-					content += `${sn.pages[i].text}\n`;
+					pageOcrText = sn.pages[i].text;
 				}
 			}
+			// Only emit keyword tags not already present in the OCR text.
+			const pageTags = keywordsByPage.get(i);
+			if (pageTags) {
+				const missing = pageTags.filter(tag => !pageOcrText.includes(tag));
+				if (missing.length > 0) content += missing.join(' ') + '\n\n';
+			}
+			if (pageOcrText) content += pageOcrText + '\n';
 			// Append Supernote internal links that appear on this page.
-			const pageLinks = linksByPage.get(String(i));
+			const pageLinks = linksByPage.get(i);
 			if (pageLinks) {
 				content += pageLinks.join('\n') + '\n';
 			}
