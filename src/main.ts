@@ -209,14 +209,17 @@ class VaultWriter {
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, overwrite = false) {
 		let content = '';
 
-		const baseFilename = `${file.parent?.path}/${file.basename}.md`;
+		// Derive base filename from file.path (always correctly formatted by Obsidian,
+		// unlike file.parent?.path which is "/" for root files causing "//name.md").
+		const baseFilename = file.path.replace(/\.note$/i, '.md');
+		const dir = file.path.slice(0, file.path.length - file.name.length);
 		let filename = baseFilename;
 
 		if (!overwrite) {
 			// Generate a non-conflicting filename - it has a bit of a race but that is OK
 			let i = 0;
 			while (this.app.vault.getFileByPath(filename) !== null) {
-				filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
+				filename = `${dir}${file.basename} ${++i}.md`;
 			}
 		}
 
@@ -300,12 +303,20 @@ class VaultWriter {
 		if (overwrite) {
 			const existing = this.app.vault.getFileByPath(baseFilename);
 			if (existing) {
-				this.app.vault.modify(existing, content);
+				await this.app.vault.modify(existing, content);
 			} else {
-				this.app.vault.create(baseFilename, content);
+				try {
+					await this.app.vault.create(baseFilename, content);
+				} catch {
+					// Race condition: 'create' and 'modify' vault events both fire when
+					// a .note file syncs. The file may have been created between the
+					// getFileByPath check and vault.create — update it instead.
+					const raceFile = this.app.vault.getFileByPath(baseFilename);
+					if (raceFile) await this.app.vault.modify(raceFile, content);
+				}
 			}
 		} else {
-			this.app.vault.create(filename, content);
+			await this.app.vault.create(filename, content);
 		}
 	}
 
@@ -359,7 +370,7 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		let sn = new SupernoteX(new Uint8Array(note));
 
-		this.writeMarkdownFile(file, sn, null, overwrite);
+		await this.writeMarkdownFile(file, sn, null, overwrite);
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -713,7 +724,7 @@ export default class SupernotePlugin extends Plugin {
 			this.app.vault.on('create', (file) => {
 				if (!(file instanceof TFile) || file.extension !== 'note') return;
 				if (!this.settings.autoSyncMarkdown) return;
-				vw.attachMarkdownFile(file, true);
+				vw.attachMarkdownFile(file, true).catch(e => console.error('Supernote auto-sync (create) error:', e));
 			})
 		);
 
@@ -725,7 +736,7 @@ export default class SupernotePlugin extends Plugin {
 				if (existing) clearTimeout(existing);
 				syncDebounceMap.set(file.path, setTimeout(() => {
 					syncDebounceMap.delete(file.path);
-					vw.attachMarkdownFile(file, true);
+					vw.attachMarkdownFile(file, true).catch(e => console.error('Supernote auto-sync (modify) error:', e));
 				}, 2000));
 			})
 		);
