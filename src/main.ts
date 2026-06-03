@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView, getAllTags } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
-import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
+import { SupernoteX, fetchMirrorFrame, ILink } from 'supernote-typescript';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
@@ -46,13 +46,15 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
  */
 function processHashtagsAndMentions(text: string, app: App): string {
 	const tagSet = new Set<string>();
-	for (const file of app.vault.getMarkdownFiles()) {
-		const cache = app.metadataCache.getFileCache(file);
-		if (cache) {
-			for (const tag of getAllTags(cache) ?? []) {
-				tagSet.add(tag.toLowerCase());
-			}
+	try {
+		// getTags() is an undocumented MetadataCache method that returns all vault
+		// tags as Record<string, number> — much cheaper than iterating every file.
+		const allTags: Record<string, number> = (app.metadataCache as any).getTags();
+		for (const tag of Object.keys(allTags)) {
+			tagSet.add(tag.toLowerCase());
 		}
+	} catch {
+		// Vault tag lookup is best-effort; fall back to treating all #words as headings
 	}
 
 	const result = text
@@ -194,10 +196,47 @@ class VaultWriter {
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
 
+		// Emit keyword tags collected from Supernote's star/keyword feature.
+		// Each keyword text is sanitized: non-alphanumeric characters become '_'.
+		const keywordTags: string[] = [];
+		for (const key of Object.keys(sn.keywords)) {
+			for (const kw of sn.keywords[key]) {
+				const text = kw.KEYWORD.trim();
+				if (!text) continue;
+				const tag = `#${text.replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
+				if (!keywordTags.includes(tag)) keywordTags.push(tag);
+			}
+		}
+		if (keywordTags.length > 0) {
+			content += keywordTags.join(' ') + '\n\n';
+		}
+
+		// Build a page-indexed map of links for quick lookup in the page loop.
+		const snLinks = sn.links ?? {};
+		const linksByPage = new Map<string, string[]>();
+		const noteCache = new Map<string, SupernoteX>();
+		for (const key of Object.keys(snLinks)) {
+			for (const link of snLinks[key]) {
+				if (!link.text) continue;
+				const text = await this.resolvePageAnchor(link, noteCache);
+				if (!linksByPage.has(link.OBJPAGE)) linksByPage.set(link.OBJPAGE, []);
+				linksByPage.get(link.OBJPAGE)!.push(`[[${text}]]`);
+			}
+		}
+
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings, this.app)}\n`;
+				try {
+					content += `${processSupernoteText(sn.pages[i].text, this.settings, this.app)}\n`;
+				} catch {
+					content += `${sn.pages[i].text}\n`;
+				}
+			}
+			// Append Supernote internal links that appear on this page.
+			const pageLinks = linksByPage.get(String(i));
+			if (pageLinks) {
+				content += pageLinks.join('\n') + '\n';
 			}
 			if (imgs) {
 				let subpath = '';
@@ -220,6 +259,32 @@ class VaultWriter {
 		} else {
 			this.app.vault.create(filename, content);
 		}
+	}
+
+	private async resolvePageAnchor(link: ILink, cache: Map<string, SupernoteX>): Promise<string> {
+		// Library already resolved same-file links; nothing to do.
+		if (link.text.includes('#')) return link.text;
+		const pageid = link.PAGEID;
+		if (!pageid || pageid === '0' || pageid === 'none') return link.text;
+
+		const targetBasename = link.text;
+		let targetNote = cache.get(targetBasename);
+		if (!targetNote) {
+			const noteFile = this.app.vault.getFiles().find(
+				f => f.extension === 'note' && f.basename === targetBasename
+			);
+			if (!noteFile) return link.text;
+			try {
+				const buffer = await this.app.vault.readBinary(noteFile);
+				targetNote = new SupernoteX(new Uint8Array(buffer));
+				cache.set(targetBasename, targetNote);
+			} catch {
+				return link.text;
+			}
+		}
+
+		const pageIndex = targetNote.pages.findIndex(p => p.PAGEID === pageid);
+		return pageIndex >= 0 ? `${link.text}#Page ${pageIndex + 1}` : link.text;
 	}
 
 	async writeImageFiles(file: TFile, sn: SupernoteX): Promise<TFile[]> {
