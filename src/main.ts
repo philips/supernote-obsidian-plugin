@@ -106,7 +106,9 @@ function processSupernoteText(
 	if (settings.isCustomDictionaryEnabled) {
 		processedText = replaceTextWithCustomDictionary(processedText, settings.customDictionary);
 	}
-	processedText = processHashtagsAndMentions(processedText, app, noteKeywordTags);
+	if (settings.isHashtagsMentionsEnabled) {
+		processedText = processHashtagsAndMentions(processedText, app, noteKeywordTags);
+	}
 	return processedText;
 }
 
@@ -234,19 +236,21 @@ class VaultWriter {
 		// noteKeywordTags: lowercase-normalized → canonical "#Tag" for brand-new tags
 		// not yet in the vault so processHashtagsAndMentions can still recognise them.
 		const noteKeywordTags = new Map<string, string>();
-		for (const key of Object.keys(sn.keywords)) {
-			const pageIdx = parseInt(key.slice(0, 4)) - 1;
-			for (const kw of sn.keywords[key]) {
-				const text = kw.KEYWORD.trim();
-				if (!text) continue;
-				const tag = `#${text.replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
-				if (!keywordsByPage.has(pageIdx)) keywordsByPage.set(pageIdx, []);
-				if (!keywordsByPage.get(pageIdx)!.includes(tag))
-					keywordsByPage.get(pageIdx)!.push(tag);
-				// Register for OCR lookup (single-word and two-word keys).
-				const parts = tag.slice(1).split('_');
-				if (parts.length === 1) noteKeywordTags.set(parts[0].toLowerCase(), tag);
-				if (parts.length === 2) noteKeywordTags.set(`${parts[0].toLowerCase()}_${parts[1].toLowerCase()}`, tag);
+		if (this.settings.isKeywordsAndLinksEnabled) {
+			for (const key of Object.keys(sn.keywords)) {
+				const pageIdx = parseInt(key.slice(0, 4)) - 1;
+				for (const kw of sn.keywords[key]) {
+					const text = kw.KEYWORD.trim();
+					if (!text) continue;
+					const tag = `#${text.replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
+					if (!keywordsByPage.has(pageIdx)) keywordsByPage.set(pageIdx, []);
+					if (!keywordsByPage.get(pageIdx)!.includes(tag))
+						keywordsByPage.get(pageIdx)!.push(tag);
+					// Register for OCR lookup (single-word and two-word keys).
+					const parts = tag.slice(1).split('_');
+					if (parts.length === 1) noteKeywordTags.set(parts[0].toLowerCase(), tag);
+					if (parts.length === 2) noteKeywordTags.set(`${parts[0].toLowerCase()}_${parts[1].toLowerCase()}`, tag);
+				}
 			}
 		}
 
@@ -255,14 +259,16 @@ class VaultWriter {
 		// Sorting keys gives top-to-bottom link order within each page.
 		const snLinks = sn.links ?? {};
 		const linksByPage = new Map<number, string[]>();
-		const noteCache = new Map<string, SupernoteX>();
-		for (const key of Object.keys(snLinks).sort()) {
-			for (const link of snLinks[key]) {
-				if (!link.text) continue;
-				const text = await this.resolvePageAnchor(link, noteCache);
-				const pageIdx = parseInt(key.slice(0, 4)) - 1;
-				if (!linksByPage.has(pageIdx)) linksByPage.set(pageIdx, []);
-				linksByPage.get(pageIdx)!.push(`[[${text}]]`);
+		if (this.settings.isKeywordsAndLinksEnabled) {
+			const noteCache = new Map<string, SupernoteX>();
+			for (const key of Object.keys(snLinks).sort()) {
+				for (const link of snLinks[key]) {
+					if (!link.text) continue;
+					const text = await this.resolvePageAnchor(link, noteCache);
+					const pageIdx = parseInt(key.slice(0, 4)) - 1;
+					if (!linksByPage.has(pageIdx)) linksByPage.set(pageIdx, []);
+					linksByPage.get(pageIdx)!.push(`[[${text}]]`);
+				}
 			}
 		}
 
@@ -278,16 +284,20 @@ class VaultWriter {
 				}
 			}
 			// Only emit keyword tags not already present in the OCR text.
-			const pageTags = keywordsByPage.get(i);
-			if (pageTags) {
-				const missing = pageTags.filter(tag => !pageOcrText.includes(tag));
-				if (missing.length > 0) content += missing.join(' ') + '\n\n';
+			if (this.settings.isKeywordsAndLinksEnabled) {
+				const pageTags = keywordsByPage.get(i);
+				if (pageTags) {
+					const missing = pageTags.filter(tag => !pageOcrText.includes(tag));
+					if (missing.length > 0) content += missing.join(' ') + '\n\n';
+				}
 			}
 			if (pageOcrText) content += pageOcrText + '\n';
 			// Append Supernote internal links that appear on this page.
-			const pageLinks = linksByPage.get(i);
-			if (pageLinks) {
-				content += pageLinks.join('\n') + '\n';
+			if (this.settings.isKeywordsAndLinksEnabled) {
+				const pageLinks = linksByPage.get(i);
+				if (pageLinks) {
+					content += pageLinks.join('\n') + '\n';
+				}
 			}
 			if (imgs) {
 				let subpath = '';
@@ -723,7 +733,7 @@ export default class SupernotePlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('create', (file) => {
 				if (!(file instanceof TFile) || file.extension !== 'note') return;
-				if (!this.settings.autoSyncMarkdown) return;
+				if (!this.settings.isAutoSyncMarkdownEnabled) return;
 				vw.attachMarkdownFile(file, true).catch(e => console.error('Supernote auto-sync (create) error:', e));
 			})
 		);
@@ -731,7 +741,7 @@ export default class SupernotePlugin extends Plugin {
 		this.registerEvent(
 			this.app.vault.on('modify', (file) => {
 				if (!(file instanceof TFile) || file.extension !== 'note') return;
-				if (!this.settings.autoSyncMarkdown) return;
+				if (!this.settings.isAutoSyncMarkdownEnabled) return;
 				const existing = syncDebounceMap.get(file.path);
 				if (existing) clearTimeout(existing);
 				syncDebounceMap.set(file.path, setTimeout(() => {

@@ -10,9 +10,11 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     invertColorsWhenDark: boolean;
     showTOC: boolean;
     showExportButtons: boolean;
-    autoSyncMarkdown: boolean;
+    isAutoSyncMarkdownEnabled: boolean;
     collapseRecognizedText: boolean,
     noteImageMaxDim: number;
+    isKeywordsAndLinksEnabled: boolean;
+    isHashtagsMentionsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -20,9 +22,11 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     invertColorsWhenDark: true,
     showTOC: true,
     showExportButtons: true,
-    autoSyncMarkdown: false,
+    isAutoSyncMarkdownEnabled: false,
     collapseRecognizedText: false,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
+    isKeywordsAndLinksEnabled: true,
+    isHashtagsMentionsEnabled: true,
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -111,9 +115,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
             )
             .addToggle((text) =>
                 text
-                    .setValue(this.plugin.settings.autoSyncMarkdown)
+                    .setValue(this.plugin.settings.isAutoSyncMarkdownEnabled)
                     .onChange(async (value) => {
-                        this.plugin.settings.autoSyncMarkdown = value;
+                        this.plugin.settings.isAutoSyncMarkdownEnabled = value;
                         await this.plugin.saveSettings();
                     }),
             );
@@ -138,6 +142,28 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.noteImageMaxDim)
                 .onChange(async (value) => {
                     this.plugin.settings.noteImageMaxDim = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+		new Setting(containerEl)
+            .setName('Convert Supernote keywords to tags and links to Wikilinks')
+            .setDesc('In exported markdown, turn starred keywords into Obsidian tags (e.g. #My_Tag) and Supernote internal links into Wikilinks (e.g. [[note#Page 1]]).')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.isKeywordsAndLinksEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.isKeywordsAndLinksEnabled = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Convert # and @ in recognized text to tags and Wikilinks')
+            .setDesc('In exported markdown, convert #Word into an Obsidian tag or heading, and @Word(s) into a Wikilink [[Word(s)]].')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.isHashtagsMentionsEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.isHashtagsMentionsEnabled = value;
                     await this.plugin.saveSettings();
                 })
             );
