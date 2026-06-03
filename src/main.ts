@@ -83,7 +83,7 @@ function processHashtagsAndMentions(
 			// Not a tag → Markdown heading.
 			return `# ${word}${next ?? ''}`;
 		})
-		.replace(/@(\w+)/g, '[[$1]]');
+		.replace(/@\s*(.+)/g, (_, text) => `[[${text.trim()}]]`);
 
 	return result;
 }
