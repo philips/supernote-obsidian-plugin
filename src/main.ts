@@ -2,6 +2,7 @@ import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame, ILink } from 'supernote-typescript';
+import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
@@ -657,7 +658,7 @@ export default class SupernotePlugin extends Plugin {
 					}
 					let image = await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
 
-					const file = await this.app.vault.createBinary(filename, image.toBuffer());
+					const file = await this.app.vault.createBinary(filename, encode(image).buffer);
 					const path = this.app.workspace.activeEditor?.file?.path;
 					if (!path) {
 						throw new Error("Active file path is null")

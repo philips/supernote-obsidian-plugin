@@ -27,7 +27,7 @@
 	"dependencies": {
 		"esbuild-plugin-inline-worker": "^0.1.1",
 		"fast-png": "^7.0.1",
-		"image-js": "^0.35.6",
+		"image-js": "1.2.0",
 		"jspdf": "^2.5.2",
 		"supernote": "github:philips/supernote-typescript"
 	}

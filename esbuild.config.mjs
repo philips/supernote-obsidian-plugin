@@ -2,6 +2,10 @@ import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
 import inlineWorkerPlugin from "esbuild-plugin-inline-worker";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const bresenhamMjs = require.resolve("bresenham-zingl/dist/index.mjs");
 
 const banner =
 `/*
@@ -18,10 +22,11 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	alias: {
-		'supernote-typescript': 'supernote-typescript'
+		'supernote-typescript': 'supernote-typescript',
+		'bresenham-zingl': bresenhamMjs,
 	},
 	bundle: true,
-	plugins: [inlineWorkerPlugin()],
+	plugins: [inlineWorkerPlugin({ alias: { 'bresenham-zingl': bresenhamMjs } })],
 	external: [
 		"obsidian",
 		"electron",
