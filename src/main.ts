@@ -753,16 +753,16 @@ export default class SupernotePlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.vault.on('create', (file) => {
-				if (!(file instanceof TFile) || file.extension !== 'note') return;
 				if (!this.settings.isAutoSyncMarkdownEnabled) return;
+				if (!(file instanceof TFile) || file.extension !== 'note') return;
 				vw.attachMarkdownFile(file, true).catch(e => console.error('Supernote auto-sync (create) error:', e));
 			})
 		);
 
 		this.registerEvent(
 			this.app.vault.on('modify', (file) => {
-				if (!(file instanceof TFile) || file.extension !== 'note') return;
 				if (!this.settings.isAutoSyncMarkdownEnabled) return;
+				if (!(file instanceof TFile) || file.extension !== 'note') return;
 				const existing = syncDebounceMap.get(file.path);
 				if (existing) clearTimeout(existing);
 				syncDebounceMap.set(file.path, setTimeout(() => {
