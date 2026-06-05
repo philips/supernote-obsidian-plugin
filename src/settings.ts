@@ -16,6 +16,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     isKeywordsAndLinksEnabled: boolean;
     isHashtagsMentionsEnabled: boolean;
     markdownMirrorFolder: string;
+    noteWatchFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     isKeywordsAndLinksEnabled: true,
     isHashtagsMentionsEnabled: true,
     markdownMirrorFolder: '',
+    noteWatchFolder: '',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -110,7 +112,11 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     }),
             );
 
-        new Setting(containerEl)
+        const autoSyncGroup = containerEl.createDiv();
+        autoSyncGroup.style.cssText =
+            'border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); overflow: hidden; margin-bottom: 16px;';
+
+        new Setting(autoSyncGroup)
             .setName('Auto-sync .note files to markdown')
             .setDesc(
                 'Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.',
@@ -120,9 +126,25 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.isAutoSyncMarkdownEnabled)
                     .onChange(async (value) => {
                         this.plugin.settings.isAutoSyncMarkdownEnabled = value;
+                        watchFolderSetting.settingEl.style.display = value ? '' : 'none';
                         await this.plugin.saveSettings();
                     }),
             );
+
+        const watchFolderSetting = new Setting(autoSyncGroup)
+            .setName('Watched folder')
+            .setDesc(
+                'Only auto-sync .note files inside this vault folder. Leave empty to watch the whole vault. When set alongside a mirror folder, the watched folder prefix is stripped from the mirror path. Example: Supernote',
+            )
+            .addText(text => text
+                .setPlaceholder('Supernote')
+                .setValue(this.plugin.settings.noteWatchFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.noteWatchFolder = value.trim().replace(/\/$/, '');
+                    await this.plugin.saveSettings();
+                })
+            );
+        watchFolderSetting.settingEl.style.display = this.plugin.settings.isAutoSyncMarkdownEnabled ? '' : 'none';
 
         new Setting(containerEl)
             .setName('Markdown mirror folder')

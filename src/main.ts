@@ -212,11 +212,24 @@ class VaultWriter {
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, overwrite = false) {
 		let content = '';
 
-		// Derive the output path. When a mirror folder is configured, replicate the
-		// note's relative path under that folder; otherwise save alongside the note.
+		// Derive the output path. The mirror folder applies only when the file is
+		// inside the watched folder (or no watched folder is set). Files outside the
+		// watched folder always save alongside the note. When both are set, the
+		// watched folder prefix is stripped from the mirror path to avoid duplication.
 		const relMdPath = file.path.replace(/\.note$/i, '.md');
 		const mirrorFolder = this.settings.markdownMirrorFolder;
-		const baseFilename = mirrorFolder ? `${mirrorFolder}/${relMdPath}` : relMdPath;
+		const watchFolder = this.settings.noteWatchFolder.replace(/\/$/, '');
+		let baseFilename: string;
+		if (mirrorFolder && (!watchFolder || file.path.startsWith(watchFolder + '/'))) {
+			let mirrorRelPath = relMdPath;
+			if (watchFolder) {
+				const prefix = watchFolder + '/';
+				if (mirrorRelPath.startsWith(prefix)) mirrorRelPath = mirrorRelPath.slice(prefix.length);
+			}
+			baseFilename = `${mirrorFolder}/${mirrorRelPath}`;
+		} else {
+			baseFilename = relMdPath;
+		}
 		const dir = baseFilename.slice(0, baseFilename.length - `${file.basename}.md`.length);
 		let filename = baseFilename;
 
@@ -755,6 +768,8 @@ export default class SupernotePlugin extends Plugin {
 			this.app.vault.on('create', (file) => {
 				if (!this.settings.isAutoSyncMarkdownEnabled) return;
 				if (!(file instanceof TFile) || file.extension !== 'note') return;
+				const wf = this.settings.noteWatchFolder.replace(/\/$/, '');
+				if (wf && !file.path.startsWith(wf + '/')) return;
 				vw.attachMarkdownFile(file, true).catch(e => console.error('Supernote auto-sync (create) error:', e));
 			})
 		);
@@ -763,6 +778,8 @@ export default class SupernotePlugin extends Plugin {
 			this.app.vault.on('modify', (file) => {
 				if (!this.settings.isAutoSyncMarkdownEnabled) return;
 				if (!(file instanceof TFile) || file.extension !== 'note') return;
+				const wf = this.settings.noteWatchFolder.replace(/\/$/, '');
+				if (wf && !file.path.startsWith(wf + '/')) return;
 				const existing = syncDebounceMap.get(file.path);
 				if (existing) clearTimeout(existing);
 				syncDebounceMap.set(file.path, setTimeout(() => {
