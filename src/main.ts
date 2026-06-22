@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { DownloadListModal, UploadListModal } from './FileListModal';
@@ -7,6 +7,10 @@ import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
+import {
+    parseDigest,
+    generateDigestMarkdown,
+} from './digestParser';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -549,10 +553,106 @@ export default class SupernotePlugin extends Plugin {
 				return false;
 			},
 		});
+
+		this.addCommand({
+			id: 'import-digest',
+			name: 'Import digest',
+			callback: async () => {
+				const input =
+					document.createElement('input');
+				input.type = 'file';
+				input.accept = '.txt';
+				input.addEventListener(
+					'change',
+					async () => {
+						const file =
+							input.files?.[0];
+						if (!file) return;
+						try {
+							const text =
+								await file.text();
+							const books =
+								parseDigest(text);
+							if (
+								books.length === 0
+							) {
+								new ErrorModal(
+									this.app,
+									new Error(
+										'No highlights'
+										+ ' found in'
+										+ ' digest'
+										+ ' file',
+									),
+								).open();
+								return;
+							}
+							await this
+								.importDigestBooks(
+									books,
+								);
+						} catch (err: any) {
+							new ErrorModal(
+								this.app,
+								err,
+							).open();
+						}
+					},
+				);
+				input.click();
+			},
+		});
 	}
 
 	onunload() {
 
+	}
+
+	async importDigestBooks(
+		books: import('./digestParser').DigestBook[],
+	) {
+		const folder =
+			this.settings.digestOutputFolder
+			|| 'Supernote Digests';
+
+		// Ensure output folder exists
+		if (
+			!this.app.vault
+				.getAbstractFileByPath(folder)
+		) {
+			await this.app.vault
+				.createFolder(folder);
+		}
+
+		let imported = 0;
+		for (const book of books) {
+			const markdown =
+				generateDigestMarkdown(book);
+			const sanitized = book.title
+				.replace(/[\\/:*?"<>|]/g, '-');
+			const filepath =
+				`${folder}/${sanitized}.md`;
+
+			const existing =
+				this.app.vault
+					.getFileByPath(filepath);
+			if (existing) {
+				await this.app.vault.modify(
+					existing,
+					markdown,
+				);
+			} else {
+				await this.app.vault.create(
+					filepath,
+					markdown,
+				);
+			}
+			imported++;
+		}
+
+		new Notice(
+			`Imported ${imported} book(s) from digest`,
+		);
 	}
 
 	async activateView() {

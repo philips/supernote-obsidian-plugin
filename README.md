@@ -16,6 +16,16 @@ This plugin has four main features:
 
 - ⬇️  Download & Upload files directly from your device via the Supernote [Browse & Access](https://support.supernote.com/en_US/Tools-Features/wi-fi-transfer) feature. ([demo video](https://www.youtube.com/watch?v=SEkp395hbBM))
 
+- 📖 Import digest highlights from your Supernote into
+  Obsidian as Readwise-style markdown. On your Supernote,
+  open the Digest app, select all highlights, and export
+  as `.txt`. Then in Obsidian, open the command palette
+  and run "Import digest" to select your exported file.
+  Highlights are grouped by book with metadata (author,
+  year, category) and sorted by chapter, page, then
+  modification time. Output folder is configurable in
+  Settings.
+
 **Video Demo**
 
 [![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=tEoW35fYVew)

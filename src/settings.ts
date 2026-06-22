@@ -12,6 +12,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     showExportButtons: boolean;
     collapseRecognizedText: boolean,
     noteImageMaxDim: number;
+    digestOutputFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -21,6 +22,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     showExportButtons: true,
     collapseRecognizedText: false,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
+    digestOutputFolder: 'Supernote Digests',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -122,6 +124,25 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.noteImageMaxDim)
                 .onChange(async (value) => {
                     this.plugin.settings.noteImageMaxDim = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Digest output folder')
+            .setDesc(
+                'Folder in your vault where imported digest'
+                + ' highlights will be saved. One file per'
+                + ' book/document.',
+            )
+            .addText(text => text
+                .setPlaceholder('Supernote Digests')
+                .setValue(
+                    this.plugin.settings.digestOutputFolder,
+                )
+                .onChange(async (value) => {
+                    this.plugin.settings
+                        .digestOutputFolder = value;
                     await this.plugin.saveSettings();
                 })
             );
