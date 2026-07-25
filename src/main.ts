@@ -36,6 +36,17 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
     return bytes.buffer;
 }
 
+// app.fileManager.generateMarkdownLink() follows the vault's "Use Wikilinks"
+// setting, producing `![[...]]` for users who have that on. The images here
+// are ones we just created as attachments, so embed them with explicit
+// markdown image syntax regardless of that setting, for a consistent,
+// portable result. `alt` doubles as a CSS-selector hook (see styles.css)
+// for the dark-mode color inversion toggle.
+function generateMarkdownImageEmbed(app: App, file: TFile, sourcePath: string, alt = ''): string {
+    const linktext = app.metadataCache.fileToLinktext(file, sourcePath);
+    return `![${alt}](${encodeURI(linktext)})`;
+}
+
 // Uint8Array.buffer isn't safe to hand to APIs wanting a plain ArrayBuffer
 // when the array is a view over a larger/offset buffer (not guaranteed for
 // pdf-lib's PDFDocument.save() output, so don't assume it). This always
@@ -192,12 +203,12 @@ class VaultWriter {
 				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 			if (imgs) {
-				let subpath = '';
+				let alt = '';
 				if (this.settings.invertColorsWhenDark) {
-					subpath = '#supernote-invert-dark';
+					alt = 'supernote-invert-dark';
 				}
 
-				const link = this.app.fileManager.generateMarkdownLink(imgs[i], filename, subpath);
+				const link = generateMarkdownImageEmbed(this.app, imgs[i], filename, alt);
 				content += `${link}\n`;
 			}
 		}
@@ -257,11 +268,11 @@ class VaultWriter {
 				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 
-			let subpath = '';
+			let alt = '';
 			if (this.settings.invertColorsWhenDark) {
-				subpath = '#supernote-invert-dark';
+				alt = 'supernote-invert-dark';
 			}
-			const link = this.app.fileManager.generateMarkdownLink(imgs[i], targetPath, subpath);
+			const link = generateMarkdownImageEmbed(this.app, imgs[i], targetPath, alt);
 			content += `${link}\n`;
 		}
 		return content;
@@ -1155,7 +1166,7 @@ export default class SupernotePlugin extends Plugin {
 					if (!path) {
 						throw new Error("Active file path is null")
 					}
-					const link = this.app.fileManager.generateMarkdownLink(file, path);
+					const link = generateMarkdownImageEmbed(this.app, file, path);
 					editor.replaceRange(link, editor.getCursor());
 				} catch (err: any) {
 					new DirectConnectErrorModal(this.app, this.settings, err).open();
