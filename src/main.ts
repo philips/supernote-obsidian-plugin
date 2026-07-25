@@ -433,6 +433,7 @@ export class SupernoteView extends FileView {
 	private pageJumpInput: HTMLInputElement | null = null;
 	private scrollUpdateScheduled = false;
 
+	private findToggleBtn: HTMLElement | null = null;
 	private findBarEl: HTMLElement | null = null;
 	private findInput: SearchComponent | null = null;
 	private findMatchCountEl: HTMLElement | null = null;
@@ -711,13 +712,27 @@ export class SupernoteView extends FileView {
 		const width = Math.max(1, Math.round(state.nativeWidth * scale));
 		const height = Math.max(1, Math.round(state.nativeHeight * scale));
 
-		state.canvas.width = width;
-		state.canvas.height = height;
+		// The canvas's backing store (width/height attributes) previously
+		// matched its CSS display size 1:1, so on a high-DPR mobile screen the
+		// browser had to upscale it to cover the physical pixels — the "chunky
+		// artifacts" that make handwritten strokes hard to read. Rendering the
+		// backing store at devicePixelRatio and leaving the CSS size alone
+		// (via explicit style, since an unstyled <canvas> otherwise takes its
+		// size from its width/height attributes) fixes that; capped at 3 so an
+		// extreme DPR display doesn't blow up canvas memory for no visible
+		// benefit.
+		const dpr = Math.min(window.devicePixelRatio || 1, 3);
+		const bitmapWidth = Math.max(1, Math.round(width * dpr));
+		const bitmapHeight = Math.max(1, Math.round(height * dpr));
+
+		state.canvas.width = bitmapWidth;
+		state.canvas.height = bitmapHeight;
+		state.canvas.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.canvasWrap.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.textLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
 
 		if (state.imageBitmap) {
-			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, width, height);
+			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
 		}
 	}
 
@@ -794,6 +809,14 @@ export class SupernoteView extends FileView {
 		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
 		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
 		this.updateLayerModeButtons();
+
+		// Mod+F (registered in onOpen) already toggles the find bar, but that
+		// hotkey has no mobile equivalent — without a button, search is
+		// unreachable on touch devices. Toolbar button covers both.
+		const findGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
+		this.findToggleBtn = findGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Find in note' } });
+		setIcon(this.findToggleBtn, 'search');
+		this.findToggleBtn.addEventListener('click', () => this.toggleFindBar());
 
 		if (pageCount > 1) {
 			const jumpGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
@@ -935,7 +958,12 @@ export class SupernoteView extends FileView {
 			this.updateFitWidthButton();
 		}
 
-		this.zoomScale = Math.min(5, Math.max(0.25, newScale));
+		// Floor lowered from a former 0.25: "Fit width" (on by default) computes
+		// whatever zoom is needed to match the available viewport width, and on
+		// a narrow mobile screen — especially with the thumbnail sidebar open,
+		// or a wide/landscape note — that can legitimately need to go below
+		// 25%. Clamping it there just forced horizontal scrolling instead.
+		this.zoomScale = Math.min(5, Math.max(0.05, newScale));
 		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
 
 		// Instant CSS-scale feedback while the user is still zooming; the real
@@ -1028,6 +1056,7 @@ export class SupernoteView extends FileView {
 			return;
 		}
 		this.findBarEl.show();
+		this.findToggleBtn?.toggleClass('is-active', true);
 		this.findInput?.inputEl.focus();
 		this.findInput?.inputEl.select();
 		this.updateThumbSidebarOffset();
@@ -1036,6 +1065,7 @@ export class SupernoteView extends FileView {
 	private closeFindBar() {
 		this.clearFindHighlights();
 		this.findBarEl?.hide();
+		this.findToggleBtn?.toggleClass('is-active', false);
 		this.updateThumbSidebarOffset();
 	}
 
