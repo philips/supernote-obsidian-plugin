@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -656,7 +656,8 @@ export class SupernoteView extends FileView {
 
 		if (pageCount > 1) {
 			const thumbGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
-			this.thumbToggleBtn = thumbGroup.createEl('button', { text: 'Thumbnails', cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
+			this.thumbToggleBtn = thumbGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
+			setIcon(this.thumbToggleBtn, 'layout-list');
 			this.thumbToggleBtn.addEventListener('click', () => this.toggleThumbnails());
 		}
 
