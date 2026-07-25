@@ -3,7 +3,7 @@
 // with the same clear message instead of hanging until the OS's TCP timeout
 // (which can take a minute or more on an unreachable device and, to the
 // user, looks indistinguishable from the plugin just doing nothing).
-export const DEVICE_REQUEST_TIMEOUT_MS = 8000;
+export const DEVICE_REQUEST_TIMEOUT_MS = 3000;
 
 export async function fetchFromDevice(
     ip: string,
