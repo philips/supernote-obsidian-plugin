@@ -109,7 +109,7 @@ export class WorkerPool {
         );
     }
 
-    private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<any[]> {
+    private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<string[]> {
         return new Promise((resolve, reject) => {
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
                 if (e.data.type === 'error') {
@@ -121,7 +121,7 @@ export class WorkerPool {
 
             worker.onerror = (error) => {
                 console.error('Worker error:', error);
-                reject(error);
+                reject(new Error(error.message));
             };
 
             const message: SupernoteWorkerMessage = {
@@ -134,7 +134,7 @@ export class WorkerPool {
         });
     }
 
-    async processPages(note: SupernoteX, allPageNumbers: number[]): Promise<any[]> {
+    async processPages(note: SupernoteX, allPageNumbers: number[]): Promise<string[]> {
         //console.time('Total processing time');
 
         const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
@@ -165,7 +165,7 @@ export class ImageConverter {
         this.workerPool = new WorkerPool(maxWorkers);
     }
 
-    async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<any[]> {
+    async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
         const results = await this.workerPool.processPages(note, pages);
         return results;
@@ -214,7 +214,7 @@ class VaultWriter {
 			}
 		}
 
-		this.app.vault.create(filename, content);
+		await this.app.vault.create(filename, content);
 	}
 
 	async writeImageFiles(basename: string, sn: SupernoteX): Promise<TFile[]> {
@@ -241,7 +241,7 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		this.writeMarkdownFile(file, sn, null);
+		await this.writeMarkdownFile(file, sn, null);
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -249,7 +249,7 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(note));
 
 		const imgs = await this.writeImageFiles(file.basename, sn);
-		this.writeMarkdownFile(file, sn, imgs);
+		await this.writeMarkdownFile(file, sn, imgs);
 	}
 
 	/**
@@ -302,13 +302,51 @@ class VaultWriter {
 	}
 }
 
+// Obsidian's loadPdfJs() returns `any` since it hands back whatever pdf.js
+// build happens to be bundled with the user's Obsidian install, unpinned.
+// These types cover just the subset of that API this file touches, so calls
+// against it are type-checked without assuming a specific pdfjs-dist version
+// that may not match what's actually loaded at runtime.
+type PdfJsViewport = unknown; // opaque here — only ever handed back to pdf.js's own APIs
+
+interface PdfJsTextContentItem {
+	str?: string;
+}
+
+interface PdfJsTextContent {
+	items: PdfJsTextContentItem[];
+}
+
+interface PdfJsPage {
+	getViewport(params: { scale: number }): PdfJsViewport;
+	getTextContent(): Promise<PdfJsTextContent>;
+}
+
+interface PdfJsDocument {
+	getPage(pageNumber: number): Promise<PdfJsPage>;
+}
+
+interface PdfJsTextLayer {
+	render(): Promise<void>;
+}
+
+interface PdfJsRenderTextLayerTask {
+	promise: Promise<void>;
+}
+
+interface PdfJsLib {
+	getDocument(params: { data: Uint8Array }): { promise: Promise<PdfJsDocument> };
+	TextLayer?: new (params: { textContentSource: PdfJsTextContent; container: HTMLElement; viewport: PdfJsViewport }) => PdfJsTextLayer;
+	renderTextLayer?: (params: { textContentSource: PdfJsTextContent; container: HTMLElement; viewport: PdfJsViewport }) => PdfJsRenderTextLayerTask;
+}
+
 // Renders a pdf.js text layer into `container`, preferring the modern
 // `TextLayer` class (pdf.js >=3.4) and falling back to the older
 // `renderTextLayer()` function on earlier bundles. Obsidian's `loadPdfJs()`
 // only promises the core pdfjsLib, not a pinned version, so neither API is
 // guaranteed — if neither exists, pages still render, they just lose
 // selectable text and find-in-note for that session.
-async function renderTextLayer(pdfjsLib: any, textContent: any, container: HTMLElement, viewport: any): Promise<boolean> {
+async function renderTextLayer(pdfjsLib: PdfJsLib, textContent: PdfJsTextContent, container: HTMLElement, viewport: PdfJsViewport): Promise<boolean> {
 	container.empty();
 
 	if (typeof pdfjsLib.TextLayer === 'function') {
@@ -329,7 +367,7 @@ async function renderTextLayer(pdfjsLib: any, textContent: any, container: HTMLE
 type PageRenderState = {
 	pageNumber: number;
 	// Fetched lazily — see SupernoteView.ensureTextLayer(). null until then.
-	pdfPage: any;
+	pdfPage: PdfJsPage | null;
 	baseScale: number;
 	nativeWidth: number;
 	nativeHeight: number;
@@ -359,7 +397,7 @@ export class SupernoteView extends FileView {
 	declare file: TFile;
 	settings: SupernotePluginSettings;
 
-	private pdfjsLib: any;
+	private pdfjsLib: PdfJsLib | null = null;
 	private pageStates: PageRenderState[] = [];
 	private pagesEl: HTMLElement | null = null;
 
@@ -379,7 +417,7 @@ export class SupernoteView extends FileView {
 	// (see drawPageImage()), which doesn't depend on this at all. Only the
 	// text layer (selection/search) needs it, and only when a given page is
 	// actually loaded — see ensureTextLayer()/pageObserver.
-	private pdfDocPromise: Promise<any> | null = null;
+	private pdfDocPromise: Promise<PdfJsDocument> | null = null;
 	private pageObserver: IntersectionObserver | null = null;
 
 	private layerMode: 'image' | 'text' = 'image';
@@ -416,7 +454,7 @@ export class SupernoteView extends FileView {
 
 	getDisplayText() {
 		if (!this.file) {
-			return "Supernote View"
+			return "Supernote view"
 		}
 		return this.file.basename;
 	}
@@ -472,7 +510,7 @@ export class SupernoteView extends FileView {
 		this.registerDomEvent(this.contentEl, 'scroll', () => {
 			if (this.scrollUpdateScheduled) return;
 			this.scrollUpdateScheduled = true;
-			requestAnimationFrame(() => {
+			window.requestAnimationFrame(() => {
 				this.scrollUpdateScheduled = false;
 				this.updateCurrentPageIndicator();
 			});
@@ -539,27 +577,27 @@ export class SupernoteView extends FileView {
 		// search) needs this, lazily, per page — see ensureTextLayer().
 		this.pdfDocPromise = (async () => {
 			const pdfBytes = await assemblePdfFromImages(sn, images);
-			this.pdfjsLib = await loadPdfJs();
+			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
 			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
 		})();
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
-				text: "Attach markdown to vault",
+				text: "Attach Markdown to vault",
 				cls: "mod-cta",
 			});
 
-			exportNoteBtn.addEventListener("click", async () => {
-				vw.attachMarkdownFile(file);
+			exportNoteBtn.addEventListener("click", () => {
+				void vw.attachMarkdownFile(file);
 			});
 
 			const exportAllBtn = container.createEl("p").createEl("button", {
-				text: "Attach markdown and images to vault",
+				text: "Attach Markdown and images to vault",
 				cls: "mod-cta",
 			});
 
-			exportAllBtn.addEventListener("click", async () => {
-				vw.attachNoteFiles(file);
+			exportAllBtn.addEventListener("click", () => {
+				void vw.attachNoteFiles(file);
 			});
 
 			const exportPDFBtn = container.createEl("p").createEl("button", {
@@ -567,22 +605,22 @@ export class SupernoteView extends FileView {
 				cls: "mod-cta",
 			});
 
-			exportPDFBtn.addEventListener("click", async () => {
-				vw.exportToPDF(file);
+			exportPDFBtn.addEventListener("click", () => {
+				void vw.exportToPDF(file);
 			});
 		}
 
 		// Sticky header so the toolbar (and find bar, when open) stay visible
 		// while scrolling through a long note instead of scrolling away with it.
-		this.headerEl = container.createEl("div", { cls: 'supernote-header' });
+		this.headerEl = container.createDiv({ cls: 'supernote-header' });
 		this.buildToolbar(this.headerEl, images.length);
 		this.buildFindBar(this.headerEl);
 		this.updateThumbSidebarOffset();
 
-		const body = container.createEl("div", { cls: 'supernote-body' });
+		const body = container.createDiv({ cls: 'supernote-body' });
 		this.buildThumbSidebar(body, images);
 
-		this.pagesEl = body.createEl("div", { cls: 'supernote-pages' });
+		this.pagesEl = body.createDiv({ cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
 
 		// Same for every page in a note (sn.pageWidth/pageHeight are note-level,
@@ -593,11 +631,11 @@ export class SupernoteView extends FileView {
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
 
-			const pageContainer = this.pagesEl.createEl("div", {
+			const pageContainer = this.pagesEl.createDiv({
 				cls: 'page-container',
 			})
 
-			const canvasWrap = pageContainer.createEl("div", { cls: 'supernote-canvas-wrap' });
+			const canvasWrap = pageContainer.createDiv({ cls: 'supernote-canvas-wrap' });
 			const canvas = canvasWrap.createEl("canvas");
 			if (this.settings.invertColorsWhenDark) {
 				canvas.addClass("supernote-invert-dark");
@@ -616,7 +654,7 @@ export class SupernoteView extends FileView {
 				evt.dataTransfer.setDragImage(canvas, 0, 0);
 			});
 
-			const textLayerDiv = canvasWrap.createEl("div", { cls: 'textLayer' });
+			const textLayerDiv = canvasWrap.createDiv({ cls: 'textLayer' });
 
 			const state: PageRenderState = {
 				pageNumber: i + 1,
@@ -651,11 +689,11 @@ export class SupernoteView extends FileView {
 					cls: "mod-cta",
 				});
 
-				saveButton.addEventListener("click", async () => {
+				saveButton.addEventListener("click", () => void (async () => {
 					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
 					const buffer = dataUrlToBuffer(imageDataUrl);
 					await this.app.vault.createBinary(filename, buffer);
-				});
+				})());
 			}
 		}
 
@@ -686,11 +724,13 @@ export class SupernoteView extends FileView {
 	// (Re)builds the selectable/searchable text layer at the given viewport.
 	// Shared by ensureTextLayer() (first load) and commitZoom() (rebuild at
 	// the new scale for pages that were already loaded).
-	private async buildTextLayerForState(state: PageRenderState, viewport: any): Promise<void> {
-		const textContent = await state.pdfPage.getTextContent();
-		state.text = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join('');
+	private async buildTextLayerForState(pdfPage: PdfJsPage, state: PageRenderState, viewport: PdfJsViewport): Promise<void> {
+		const textContent = await pdfPage.getTextContent();
+		state.text = textContent.items.map(item => item.str ?? '').join('');
 
-		const hasTextLayer = await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport);
+		const hasTextLayer = this.pdfjsLib
+			? await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport)
+			: false;
 		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
 	}
 
@@ -709,9 +749,10 @@ export class SupernoteView extends FileView {
 			if (!state.pdfPage) {
 				state.pdfPage = await pdfDoc.getPage(state.pageNumber);
 			}
+			const pdfPage = state.pdfPage;
 
-			const viewport = state.pdfPage.getViewport({ scale: state.baseScale * this.zoomScale });
-			await this.buildTextLayerForState(state, viewport);
+			const viewport = pdfPage.getViewport({ scale: state.baseScale * this.zoomScale });
+			await this.buildTextLayerForState(pdfPage, state, viewport);
 		} catch (error) {
 			console.error(`Failed to build text layer for page ${state.pageNumber}:`, error);
 		}
@@ -719,18 +760,18 @@ export class SupernoteView extends FileView {
 
 	private buildToolbar(container: HTMLElement, pageCount: number) {
 		this.pageJumpInput = null;
-		const toolbar = container.createEl('div', { cls: 'supernote-toolbar' });
+		const toolbar = container.createDiv({ cls: 'supernote-toolbar' });
 
 		if (pageCount > 1) {
-			const thumbGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+			const thumbGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
 			this.thumbToggleBtn = thumbGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
 			setIcon(this.thumbToggleBtn, 'layout-list');
 			this.thumbToggleBtn.addEventListener('click', () => this.toggleThumbnails());
 		}
 
-		const zoomGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+		const zoomGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
 		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
-		this.zoomLabelEl = zoomGroup.createEl('span', { cls: 'supernote-zoom-label', text: '100%' });
+		this.zoomLabelEl = zoomGroup.createSpan({ cls: 'supernote-zoom-label', text: '100%' });
 		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
 		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
 		this.fitWidthBtn = zoomGroup.createEl('button', { text: 'Fit width', cls: 'clickable-icon', attr: { 'aria-label': 'Fit page to viewport width' } });
@@ -747,7 +788,7 @@ export class SupernoteView extends FileView {
 		});
 		this.updateFitWidthButton();
 
-		const layerGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+		const layerGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
 		this.imageModeBtn = layerGroup.createEl('button', { text: 'Image', cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
 		this.textModeBtn = layerGroup.createEl('button', { text: 'Text', cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text' } });
 		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
@@ -755,14 +796,14 @@ export class SupernoteView extends FileView {
 		this.updateLayerModeButtons();
 
 		if (pageCount > 1) {
-			const jumpGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
-			jumpGroup.createEl('span', { text: 'Page', cls: 'supernote-page-jump-label' });
+			const jumpGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
+			jumpGroup.createSpan({ text: 'Page', cls: 'supernote-page-jump-label' });
 			const pageInput = jumpGroup.createEl('input', {
 				cls: 'supernote-page-jump-input',
 				attr: { type: 'number', min: '1', max: String(pageCount), value: '1' },
 			});
 			this.pageJumpInput = pageInput;
-			jumpGroup.createEl('span', { text: `/ ${pageCount}`, cls: 'supernote-page-jump-total' });
+			jumpGroup.createSpan({ text: `/ ${pageCount}`, cls: 'supernote-page-jump-total' });
 
 			const jumpToPage = () => {
 				const requested = Number(pageInput.value);
@@ -802,15 +843,15 @@ export class SupernoteView extends FileView {
 	// them down. Built up front (images are ready before pdf.js even starts),
 	// independent of the pdf.js page-render loop below.
 	private buildThumbSidebar(body: HTMLElement, images: string[]) {
-		const thumbSidebarEl = body.createEl('div', { cls: 'supernote-thumb-sidebar' });
+		const thumbSidebarEl = body.createDiv({ cls: 'supernote-thumb-sidebar' });
 		this.thumbSidebarEl = thumbSidebarEl;
 		this.thumbItems = [];
 
 		images.forEach((dataUrl, i) => {
-			const item = thumbSidebarEl.createEl('div', { cls: 'supernote-thumb-item' });
+			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
 			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
 			img.src = dataUrl;
-			item.createEl('span', { cls: 'supernote-thumb-label', text: String(i + 1) });
+			item.createSpan({ cls: 'supernote-thumb-label', text: String(i + 1) });
 
 			item.addEventListener('click', () => {
 				const state = this.pageStates[i];
@@ -919,8 +960,9 @@ export class SupernoteView extends FileView {
 			// pages not yet loaded (ensureTextLayer() never ran) will build
 			// theirs at whatever zoom is current when they eventually do.
 			if (state.textLayerLoaded && state.pdfPage) {
-				const viewport = state.pdfPage.getViewport({ scale: state.baseScale * targetZoom });
-				await this.buildTextLayerForState(state, viewport);
+				const pdfPage = state.pdfPage;
+				const viewport = pdfPage.getViewport({ scale: state.baseScale * targetZoom });
+				await this.buildTextLayerForState(pdfPage, state, viewport);
 			}
 		}
 		this.renderedZoomScale = targetZoom;
@@ -950,7 +992,7 @@ export class SupernoteView extends FileView {
 	}
 
 	private buildFindBar(container: HTMLElement) {
-		const bar = container.createEl('div', { cls: 'supernote-find-bar' });
+		const bar = container.createDiv({ cls: 'supernote-find-bar' });
 		bar.hide();
 		this.findBarEl = bar;
 
@@ -958,7 +1000,7 @@ export class SupernoteView extends FileView {
 		this.findInput.setPlaceholder('Find in note…');
 		this.findInput.onChange((value) => this.runFind(value));
 
-		this.findMatchCountEl = bar.createEl('span', { cls: 'supernote-find-count' });
+		this.findMatchCountEl = bar.createSpan({ cls: 'supernote-find-count' });
 
 		const prevBtn = bar.createEl('button', { text: '↑', cls: 'clickable-icon', attr: { 'aria-label': 'Previous match' } });
 		const nextBtn = bar.createEl('button', { text: '↓', cls: 'clickable-icon', attr: { 'aria-label': 'Next match' } });
@@ -1116,7 +1158,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'attach-supernote-file-from-device',
-			name: 'Attach Supernote file from device',
+			name: 'Attach supernote file from device',
 			callback: () => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
@@ -1128,7 +1170,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'upload-file-to-supernote',
-			name: 'Upload the current file to a Supernote device',
+			name: 'Upload the current file to a supernote device',
 			callback: () => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
@@ -1149,7 +1191,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'insert-supernote-screen-mirror-image',
-			name: 'Insert a Supernote screen mirroring image as attachment',
+			name: 'Insert a supernote screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				// generate a unique filename for the mirror based on the current note path
 				const ts = generateTimestamp();
@@ -1169,15 +1211,15 @@ export default class SupernotePlugin extends Plugin {
 					}
 					const link = generateMarkdownImageEmbed(this.app, file, path);
 					editor.replaceRange(link, editor.getCursor());
-				} catch (err: any) {
-					new DirectConnectErrorModal(this.app, this.settings, err).open();
+				} catch (err) {
+					new DirectConnectErrorModal(this.app, this.settings, err instanceof Error ? err : new Error(String(err))).open();
 				}
 			},
 		});
 
 		this.addCommand({
 			id: 'export-supernote-note-as-files',
-			name: 'Export this Supernote note as a markdown and PNG files as attachments',
+			name: 'Export this supernote note as a Markdown and PNG files as attachments',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -1186,13 +1228,12 @@ export default class SupernotePlugin extends Plugin {
 					if (checking) {
 						return true
 					}
-					try {
-						if (!file) {
-							throw new Error("No file to attach");
-						}
-						vw.attachNoteFiles(file);
-					} catch (err: any) {
-						new ErrorModal(this.app, err).open();
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.attachNoteFiles(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
 					}
 					return true;
 				}
@@ -1203,7 +1244,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'export-supernote-note-as-pdf',
-			name: 'Export this Supernote note as PDF',
+			name: 'Export this supernote note as PDF',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -1212,13 +1253,12 @@ export default class SupernotePlugin extends Plugin {
 					if (checking) {
 						return true
 					}
-					try {
-						if (!file) {
-							throw new Error("No file to attach");
-						}
-						vw.exportToPDF(file);
-					} catch (err: any) {
-						new ErrorModal(this.app, err).open();
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.exportToPDF(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
 					}
 					return true;
 				}
@@ -1229,7 +1269,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'export-supernote-note-as-markdown',
-			name: 'Export this Supernote note as a markdown file attachment',
+			name: 'Export this supernote note as a Markdown file attachment',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -1238,13 +1278,12 @@ export default class SupernotePlugin extends Plugin {
 					if (checking) {
 						return true
 					}
-					try {
-						if (!file) {
-							throw new Error("No file to attach");
-						}
-						vw.attachMarkdownFile(file);
-					} catch (err: any) {
-						new ErrorModal(this.app, err).open();
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.attachMarkdownFile(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
 					}
 					return true;
 				}
@@ -1255,7 +1294,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-todays-supernote-pages',
-			name: "Import new or edited Supernote pages by date as images",
+			name: "Import new or edited supernote pages by date as images",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
@@ -1295,11 +1334,11 @@ export default class SupernotePlugin extends Plugin {
 		}
 
 		// "Reveal" the leaf in case it is in a collapsed sidebar
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<SupernotePluginSettings>);
 	}
 
 	async saveSettings() {

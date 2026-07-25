@@ -1,3 +1,7 @@
+.supernote-settings-hidden {
+    display: none;
+}
+
 .theme-dark img[alt*="supernote-invert-dark"] {
     filter: invert(1);
 }

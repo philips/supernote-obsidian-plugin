@@ -39,7 +39,7 @@ export async function fetchSupernoteDirectory(ip: string, path: string): Promise
         throw new Error("Could not find file list data");
     }
 
-    const data: SupernoteResponse = JSON.parse(match[1]);
+    const data = JSON.parse(match[1]) as SupernoteResponse;
     return data.fileList.sort(compareByDirectoryThenNameThenDate);
 }
 
@@ -113,13 +113,15 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
         return (bytes / 1073741824).toFixed(2) + ' GB';
     }
 
-    async onChooseSuggestion(file: SupernoteFile) {
+    onChooseSuggestion(file: SupernoteFile): void {
         if (file.isDirectory) {
-            // Navigate into directory
-            this.currentPath = file.uri;
-            await this.loadFiles();
-            // Reopen the modal to show new directory contents
-            this.open();
+            void (async () => {
+                // Navigate into directory
+                this.currentPath = file.uri;
+                await this.loadFiles();
+                // Reopen the modal to show new directory contents
+                this.open();
+            })();
         }
     }
 }
@@ -130,33 +132,35 @@ export class DownloadListModal extends FileListModal {
         super(app, plugin);
     }
 
-    async onChooseSuggestion(file: SupernoteFile) {
-        if (file.isDirectory) {
-            // Navigate into directory
-            this.currentPath = file.uri;
-            await this.loadFiles();
-            // Reopen the modal to show new directory contents
-            this.open();
-        } else {
-            try {
-                const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file');
-                if (!fileResponse.ok) {
-                    throw new Error(`Failed to download file: Supernote responded with an error (${fileResponse.statusText}).`);
-                }
+    onChooseSuggestion(file: SupernoteFile): void {
+        void (async () => {
+            if (file.isDirectory) {
+                // Navigate into directory
+                this.currentPath = file.uri;
+                await this.loadFiles();
+                // Reopen the modal to show new directory contents
+                this.open();
+            } else {
+                try {
+                    const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file');
+                    if (!fileResponse.ok) {
+                        throw new Error(`Failed to download file: Supernote responded with an error (${fileResponse.statusText}).`);
+                    }
 
-                const buffer = await fileResponse.arrayBuffer();
-                const filename = await this.app.fileManager.getAvailablePathForAttachment(file.name);
-                const tfile = await this.app.vault.createBinary(filename, buffer);
-                new Notice(`Downloaded ${file.name}`);
-                const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (view) {
-                    const link = this.app.fileManager.generateMarkdownLink(tfile, filename);
-                    view.editor.replaceSelection(link);
+                    const buffer = await fileResponse.arrayBuffer();
+                    const filename = await this.app.fileManager.getAvailablePathForAttachment(file.name);
+                    const tfile = await this.app.vault.createBinary(filename, buffer);
+                    new Notice(`Downloaded ${file.name}`);
+                    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+                    if (view) {
+                        const link = this.app.fileManager.generateMarkdownLink(tfile, filename);
+                        view.editor.replaceSelection(link);
+                    }
+                } catch (err) {
+                    new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
                 }
-            } catch (err) {
-                new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
             }
-        }
+        })();
     }
 }
 export class UploadListModal extends FileListModal {
@@ -210,51 +214,53 @@ export class UploadListModal extends FileListModal {
         }
     }
 
-    override async onChooseSuggestion(file: SupernoteFile) {
+    override onChooseSuggestion(file: SupernoteFile): void {
         if (file.name === '[UPLOAD HERE]') {
-            try {
-                if (!IP_VALIDATION_PATTERN.test(this.settings.directConnectIP)) {
-                    new Notice("Invalid Supernote IP address configured");
-                    return;
+            void (async () => {
+                try {
+                    if (!IP_VALIDATION_PATTERN.test(this.settings.directConnectIP)) {
+                        new Notice("Invalid supernote IP address configured");
+                        return;
+                    }
+
+                    // Create FormData with file payload
+                    // Generate filename with .txt extension for markdown files
+                    const uploadFilename = this.currentFile.extension === "md"
+                        ? `${this.currentFile.basename}.txt`  // Change extension to .txt
+                        : this.currentFile.name;
+
+                    const formData = new FormData();
+                    const fileContent = this.currentFile.extension === "md"
+                        ? await this.app.vault.read(this.currentFile)
+                        : await this.app.vault.readBinary(this.currentFile);
+
+                    const mimeType = this.currentFile.extension === "md"
+                        ? 'text/plain'  // Use text/plain for compatibility
+                        : 'application/octet-stream';
+
+                    // Use modified filename in the FormData
+                    formData.append('file', new Blob([fileContent], { type: mimeType }), uploadFilename);
+
+                    const response = await fetchFromDevice(this.settings.directConnectIP, this.currentPath, 'Upload failed', {
+                        method: "POST",
+                        mode: 'cors',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`Upload failed: ${errorText}`);
+                    }
+
+                    new Notice(`Successfully uploaded ${uploadFilename} to Supernote`);
+                    this.close();
+                } catch (err) {
+                    new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
                 }
-
-                // Create FormData with file payload
-                // Generate filename with .txt extension for markdown files
-                const uploadFilename = this.currentFile.extension === "md"
-                    ? `${this.currentFile.basename}.txt`  // Change extension to .txt
-                    : this.currentFile.name;
-
-                const formData = new FormData();
-                const fileContent = this.currentFile.extension === "md"
-                    ? await this.app.vault.read(this.currentFile)
-                    : await this.app.vault.readBinary(this.currentFile);
-
-                const mimeType = this.currentFile.extension === "md"
-                    ? 'text/plain'  // Use text/plain for compatibility
-                    : 'application/octet-stream';
-
-                // Use modified filename in the FormData
-                formData.append('file', new Blob([fileContent], { type: mimeType }), uploadFilename);
-
-                const response = await fetchFromDevice(this.settings.directConnectIP, this.currentPath, 'Upload failed', {
-                    method: "POST",
-                    mode: 'cors',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`Upload failed: ${errorText}`);
-                }
-
-                new Notice(`Successfully uploaded ${uploadFilename} to Supernote`);
-                this.close();
-            } catch (err) {
-                new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
-            }
+            })();
         } else if (file.isDirectory) {
             // Navigate into directory using parent behavior
-            await super.onChooseSuggestion(file);
+            super.onChooseSuggestion(file);
         }
     }
 }
