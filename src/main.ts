@@ -394,7 +394,6 @@ export class SupernoteView extends FileView {
 	async onLoadFile(file: TFile): Promise<void> {
 		const container = this.contentEl;
 		container.empty();
-		container.createEl("h1", { text: file.name });
 
 		window.clearTimeout(this.zoomDebounceTimer);
 		this.pageStates = [];
