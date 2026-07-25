@@ -7,6 +7,7 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"lint": "eslint src --ext .ts",
+		"test": "vitest run",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"push-android": "adb push main.js /sdcard/Documents/SupernoteTest/.obsidian/plugins/supernote"
 	},
@@ -23,7 +24,8 @@
 		"esbuild": "^0.17.3",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
-		"typescript": "6.0.3"
+		"typescript": "6.0.3",
+		"vitest": "4.1.10"
 	},
 	"dependencies": {
 		"esbuild-plugin-inline-worker": "^0.1.1",

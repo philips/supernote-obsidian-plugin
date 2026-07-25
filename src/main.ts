@@ -4,6 +4,7 @@ import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from '
 import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
+import { ImportTodayModal } from './ImportTodayModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
@@ -33,6 +34,17 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
         bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
+}
+
+// app.fileManager.generateMarkdownLink() follows the vault's "Use Wikilinks"
+// setting, producing `![[...]]` for users who have that on. The images here
+// are ones we just created as attachments, so embed them with explicit
+// markdown image syntax regardless of that setting, for a consistent,
+// portable result. `alt` doubles as a CSS-selector hook (see styles.css)
+// for the dark-mode color inversion toggle.
+function generateMarkdownImageEmbed(app: App, file: TFile, sourcePath: string, alt = ''): string {
+    const linktext = app.metadataCache.fileToLinktext(file, sourcePath);
+    return `![${alt}](${encodeURI(linktext)})`;
 }
 
 // Uint8Array.buffer isn't safe to hand to APIs wanting a plain ArrayBuffer
@@ -191,12 +203,12 @@ class VaultWriter {
 				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 			if (imgs) {
-				let subpath = '';
+				let alt = '';
 				if (this.settings.invertColorsWhenDark) {
-					subpath = '#supernote-invert-dark';
+					alt = 'supernote-invert-dark';
 				}
 
-				const link = this.app.fileManager.generateMarkdownLink(imgs[i], filename, subpath);
+				const link = generateMarkdownImageEmbed(this.app, imgs[i], filename, alt);
 				content += `${link}\n`;
 			}
 		}
@@ -204,7 +216,7 @@ class VaultWriter {
 		this.app.vault.create(filename, content);
 	}
 
-	async writeImageFiles(file: TFile, sn: SupernoteX): Promise<TFile[]> {
+	async writeImageFiles(basename: string, sn: SupernoteX): Promise<TFile[]> {
 		let images: string[] = [];
 
 		const converter = new ImageConverter();
@@ -217,7 +229,7 @@ class VaultWriter {
 
 		const imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
-			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i}.png`);
 			const buffer = dataUrlToBuffer(images[i]);
 			imgs.push(await this.app.vault.createBinary(filename, buffer));
 		}
@@ -235,8 +247,35 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		const imgs = await this.writeImageFiles(file, sn);
+		const imgs = await this.writeImageFiles(file.basename, sn);
 		this.writeMarkdownFile(file, sn, imgs);
+	}
+
+	/**
+	 * Converts a Supernote .note file (fetched from a device, not yet in the
+	 * vault) into images and returns markdown for inserting its pages inline
+	 * into another note, rather than creating a new .md file for it.
+	 */
+	async buildInsertableMarkdown(deviceFileName: string, noteBuffer: ArrayBuffer, targetPath: string): Promise<string> {
+		const sn = new SupernoteX(new Uint8Array(noteBuffer));
+		const basename = deviceFileName.replace(/\.note$/i, '');
+		const imgs = await this.writeImageFiles(basename, sn);
+
+		let content = `## ${basename}\n\n`;
+		for (let i = 0; i < sn.pages.length; i++) {
+			content += `### Page ${i + 1}\n\n`;
+			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+			}
+
+			let alt = '';
+			if (this.settings.invertColorsWhenDark) {
+				alt = 'supernote-invert-dark';
+			}
+			const link = generateMarkdownImageEmbed(this.app, imgs[i], targetPath, alt);
+			content += `${link}\n`;
+		}
+		return content;
 	}
 
 	async exportToPDF(file: TFile) {
@@ -1062,6 +1101,7 @@ export class SupernoteView extends FileView {
 
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
+	vaultWriter!: VaultWriter;
 
 	async onload() {
         // Install polyfills before any other code runs
@@ -1069,6 +1109,7 @@ export default class SupernotePlugin extends Plugin {
 
 		await this.loadSettings();
 		vw = new VaultWriter(this.app, this.settings);
+		this.vaultWriter = vw;
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 
@@ -1125,7 +1166,7 @@ export default class SupernotePlugin extends Plugin {
 					if (!path) {
 						throw new Error("Active file path is null")
 					}
-					const link = this.app.fileManager.generateMarkdownLink(file, path);
+					const link = generateMarkdownImageEmbed(this.app, file, path);
 					editor.replaceRange(link, editor.getCursor());
 				} catch (err: any) {
 					new DirectConnectErrorModal(this.app, this.settings, err).open();
@@ -1208,6 +1249,23 @@ export default class SupernotePlugin extends Plugin {
 				}
 
 				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'import-todays-supernote-pages',
+			name: "Import new or edited Supernote pages by date as images",
+			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
+				if (this.settings.directConnectIP.length === 0) {
+					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
+					return;
+				}
+				const targetPath = view.file?.path;
+				if (!targetPath) {
+					new ErrorModal(this.app, new Error("Active file path is null")).open();
+					return;
+				}
+				new ImportTodayModal(this.app, this, editor, targetPath).open();
 			},
 		});
 	}

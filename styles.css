@@ -249,3 +249,34 @@ div.supernote-canvas-wrap canvas {
 	--icon-color: var(--text-on-accent);
     background-color: var(--interactive-accent);
 }
+
+/* "Import Supernote pages" modal */
+.supernote-import-date-row {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-1);
+    margin-bottom: var(--size-4-3);
+}
+
+.supernote-import-controls {
+    display: flex;
+    gap: var(--size-4-2);
+    margin-bottom: var(--size-4-2);
+}
+
+.supernote-import-list {
+    max-height: 50vh;
+    overflow-y: auto;
+    margin-bottom: var(--size-4-2);
+}
+
+.supernote-import-row {
+    padding: var(--size-2-1) 0;
+}
+
+.supernote-import-row label {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-1);
+    cursor: pointer;
+}

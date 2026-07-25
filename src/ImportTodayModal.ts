@@ -1,0 +1,174 @@
+import { App, Modal, Notice, Editor } from 'obsidian';
+import SupernotePlugin from './main';
+import { SupernoteFile, fetchSupernoteDirectory } from './FileListModal';
+import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
+
+interface ScannedNote {
+    file: SupernoteFile;
+    date: Date;
+}
+
+export class ImportTodayModal extends Modal {
+    plugin: SupernotePlugin;
+    editor: Editor;
+    targetPath: string;
+    allNotes: ScannedNote[] = [];
+    files: SupernoteFile[] = [];
+    selected: Set<string> = new Set();
+    selectedDate: Date = todayLocalMidnight();
+    listEl!: HTMLElement;
+    resultsEl!: HTMLElement;
+    importBtn!: HTMLButtonElement;
+
+    constructor(app: App, plugin: SupernotePlugin, editor: Editor, targetPath: string) {
+        super(app);
+        this.plugin = plugin;
+        this.editor = editor;
+        this.targetPath = targetPath;
+    }
+
+    async onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h2', { text: 'Import Supernote pages' });
+        const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
+
+        try {
+            this.allNotes = await this.scanAllNotes('/', new Set());
+        } catch (err) {
+            status.setText(`Failed to scan device: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
+
+        status.remove();
+
+        const dateRow = contentEl.createDiv({ cls: 'supernote-import-date-row' });
+        dateRow.createEl('label', { text: 'Import notes from: ', attr: { for: 'supernote-import-date' } });
+        const dateInput = dateRow.createEl('input', {
+            type: 'date',
+            attr: { id: 'supernote-import-date' },
+        }) as HTMLInputElement;
+        dateInput.value = formatDateInputValue(this.selectedDate);
+        dateInput.max = formatDateInputValue(todayLocalMidnight());
+        dateInput.addEventListener('change', () => {
+            const parsed = parseDateInputValue(dateInput.value);
+            if (parsed) {
+                this.selectedDate = parsed;
+                this.renderForSelectedDate();
+            }
+        });
+
+        this.resultsEl = contentEl.createDiv();
+        this.renderForSelectedDate();
+    }
+
+    private renderForSelectedDate() {
+        this.resultsEl.empty();
+
+        this.files = this.allNotes
+            .filter(n => isSameLocalDay(n.date, this.selectedDate))
+            .map(n => n.file);
+        this.selected = new Set(this.files.map(f => f.uri));
+
+        if (this.files.length === 0) {
+            this.resultsEl.createEl('p', {
+                text: `No notes created or modified on ${this.selectedDate.toLocaleDateString()} were found on the device.`,
+            });
+            return;
+        }
+
+        const controls = this.resultsEl.createDiv({ cls: 'supernote-import-controls' });
+        controls.createEl('button', { text: 'Select all' }).addEventListener('click', () => {
+            this.files.forEach(f => this.selected.add(f.uri));
+            this.renderList();
+        });
+        controls.createEl('button', { text: 'Select none' }).addEventListener('click', () => {
+            this.selected.clear();
+            this.renderList();
+        });
+
+        this.listEl = this.resultsEl.createDiv({ cls: 'supernote-import-list' });
+        this.renderList();
+
+        this.importBtn = this.resultsEl.createEl('button', { text: 'Import selected', cls: 'mod-cta' });
+        this.importBtn.addEventListener('click', () => this.importSelected());
+    }
+
+    private renderList() {
+        this.listEl.empty();
+        for (const file of this.files) {
+            const row = this.listEl.createDiv({ cls: 'supernote-import-row' });
+            const label = row.createEl('label');
+            const checkbox = label.createEl('input', { type: 'checkbox' });
+            checkbox.checked = this.selected.has(file.uri);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    this.selected.add(file.uri);
+                } else {
+                    this.selected.delete(file.uri);
+                }
+            });
+            label.createSpan({ text: ` ${file.name} — ${file.date}` });
+        }
+    }
+
+    // Walks the whole device tree once and records every .note file's parsed
+    // date, so switching the date picker only needs to re-filter in memory
+    // instead of re-fetching the device's directory tree over HTTP each time.
+    private async scanAllNotes(path: string, visited: Set<string>): Promise<ScannedNote[]> {
+        if (visited.has(path)) return [];
+        visited.add(path);
+
+        const entries = await fetchSupernoteDirectory(this.plugin.settings.directConnectIP, path);
+        const results: ScannedNote[] = [];
+
+        for (const entry of entries) {
+            if (entry.isDirectory) {
+                results.push(...await this.scanAllNotes(entry.uri, visited));
+            } else if (entry.name.toLowerCase().endsWith('.note')) {
+                const modified = parseDeviceDate(entry.date);
+                if (modified) {
+                    results.push({ file: entry, date: modified });
+                }
+            }
+        }
+        return results;
+    }
+
+    private async importSelected() {
+        const chosen = this.files.filter(f => this.selected.has(f.uri));
+        if (chosen.length === 0) {
+            new Notice('No notes selected');
+            return;
+        }
+
+        this.importBtn.disabled = true;
+        this.importBtn.setText('Importing…');
+
+        const ip = this.plugin.settings.directConnectIP;
+        let combined = '';
+        try {
+            for (const file of chosen) {
+                const response = await fetch(`http://${ip}:8089${file.uri}`);
+                if (!response.ok) {
+                    throw new Error(`Failed to download ${file.name}: ${response.statusText}`);
+                }
+                const buffer = await response.arrayBuffer();
+                combined += await this.plugin.vaultWriter.buildInsertableMarkdown(file.name, buffer, this.targetPath);
+                combined += '\n';
+            }
+
+            this.editor.replaceRange(combined, this.editor.getCursor());
+            new Notice(`Imported ${chosen.length} note${chosen.length === 1 ? '' : 's'}`);
+            this.close();
+        } catch (err) {
+            new Notice(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.importBtn.disabled = false;
+            this.importBtn.setText('Import selected');
+        }
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}

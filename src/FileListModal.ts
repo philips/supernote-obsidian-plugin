@@ -2,7 +2,7 @@ import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
 import { SupernotePluginSettings, IP_VALIDATION_PATTERN } from 'settings';
 
-interface SupernoteFile {
+export interface SupernoteFile {
     name: string;
     size: number;
     date: string;
@@ -20,6 +20,26 @@ interface SupernoteResponse {
     usedMemory: number;
 }
 
+// Fetches and parses one directory listing from the Supernote "Browse and
+// Access" HTTP server. Shared by the file-browsing modals below and by
+// ImportTodayModal, which walks the whole tree looking for today's notes.
+export async function fetchSupernoteDirectory(ip: string, path: string): Promise<SupernoteFile[]> {
+    const response = await fetch(`http://${ip}:8089${path}`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch file list: ${response.statusText}`);
+    }
+    const html = await response.text();
+
+    // Extract the JSON data from the script tag
+    const match = html.match(/const json = '(.+?)'/);
+    if (!match) {
+        throw new Error("Could not find file list data");
+    }
+
+    const data: SupernoteResponse = JSON.parse(match[1]);
+    return data.fileList;
+}
+
 export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     settings: SupernotePluginSettings;
     files: SupernoteFile[] = [];
@@ -33,20 +53,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
 
     async loadFiles() {
         try {
-            const response = await fetch(`http://${this.settings.directConnectIP}:8089${this.currentPath}`);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch file list: ${response.statusText}`);
-            }
-            const html = await response.text();
-
-            // Extract the JSON data from the script tag
-            const match = html.match(/const json = '(.+?)'/);
-            if (!match) {
-                throw new Error("Could not find file list data");
-            }
-
-            const data: SupernoteResponse = JSON.parse(match[1]);
-            this.files = data.fileList;
+            this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath);
         } catch (err) {
             new Notice(`Failed to load files: ${err instanceof Error ? err.message : String(err)}`);
             this.close();
