@@ -9,14 +9,12 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
-    noteImageMaxDim: number;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
     showExportButtons: true,
-    noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -82,19 +80,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         this.plugin.settings.showExportButtons = value;
                         await this.plugin.saveSettings();
                     }),
-            );
-
-        new Setting(containerEl)
-            .setName('Max image side length in .note files')
-            .setDesc('Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.')
-            .addSlider(text => text
-                .setLimits(200, 1900, 100) // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
-                .setDynamicTooltip()
-                .setValue(this.plugin.settings.noteImageMaxDim)
-                .onChange(async (value) => {
-                    this.plugin.settings.noteImageMaxDim = value;
-                    await this.plugin.saveSettings();
-                })
             );
 
 		// Add custom dictionary settings to the settings tab

@@ -393,6 +393,14 @@ type FindMatch = {
 let vw: VaultWriter;
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
 
+// Reference CSS-pixel size a page renders at when zoomScale is 1 (100%).
+// Used to be a user-facing setting, but "Fit width" (on by default) rescales
+// the page to the viewport immediately anyway, and drawPageImage() now
+// renders the canvas backing store at devicePixelRatio regardless of this
+// value, so it no longer trades off visible sharpness — just the initial
+// size before fit-width/zoom kicks in.
+const NOTE_PAGE_BASE_DIM = 800;
+
 export class SupernoteView extends FileView {
 	declare file: TFile;
 	settings: SupernotePluginSettings;
@@ -627,7 +635,7 @@ export class SupernoteView extends FileView {
 		// Same for every page in a note (sn.pageWidth/pageHeight are note-level,
 		// not per-page) — computed once from data already in memory, no pdf.js
 		// or rasterization needed just to know how big to lay pages out.
-		const baseScale = this.settings.noteImageMaxDim / Math.max(sn.pageWidth, sn.pageHeight);
+		const baseScale = NOTE_PAGE_BASE_DIM / Math.max(sn.pageWidth, sn.pageHeight);
 
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
@@ -1000,7 +1008,7 @@ export class SupernoteView extends FileView {
 	// Scales the page so its rendered width matches however much horizontal
 	// space is actually available (pagesEl's content box, which already
 	// accounts for the thumbnail sidebar if it's open) minus the page
-	// container's own margin, rather than the fixed noteImageMaxDim cap.
+	// container's own margin, rather than the fixed NOTE_PAGE_BASE_DIM cap.
 	private applyFitWidth() {
 		const state = this.pageStates[0];
 		if (!state || !this.pagesEl || state.nativeWidth <= 0) return;
