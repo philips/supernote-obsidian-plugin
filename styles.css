@@ -33,9 +33,86 @@ button.mod-cta {
 }
 
 div.page-container {
-    display: inline-block; 
+    display: inline-block;
     vertical-align: top;
     margin: 1.2em;
+}
+
+div.supernote-canvas-wrap {
+    position: relative;
+    display: inline-block;
+    transform-origin: top left;
+}
+
+div.supernote-canvas-wrap canvas {
+    display: block;
+    max-width: 100%;
+}
+
+/* Mirrors pdf.js's own text_layer_builder.css: canvas carries the pixels,
+   this transparent layer carries selectable/searchable text on top of it. */
+.textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    line-height: 1;
+    text-align: initial;
+    transform-origin: 0 0;
+}
+
+.textLayer span,
+.textLayer br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+}
+
+.textLayer ::selection {
+    background: var(--text-selection);
+}
+
+.textLayer .supernote-find-match {
+    background: rgba(255, 224, 0, 0.4);
+    border-radius: 2px;
+}
+
+.textLayer .supernote-find-match-current {
+    background: rgba(255, 145, 0, 0.7);
+}
+
+.supernote-zoom-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    margin: 0.5em 0;
+}
+
+.supernote-zoom-label {
+    min-width: 3.5em;
+    text-align: center;
+}
+
+.supernote-find-bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4em;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    margin-bottom: 0.5em;
+    width: fit-content;
+}
+
+.supernote-find-count {
+    min-width: 5em;
+    color: var(--text-muted);
+    font-size: var(--font-smaller);
 }
 
 /* Custom dictionary settings styles */

@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -260,15 +260,73 @@ class VaultWriter {
 	}
 }
 
+// Renders a pdf.js text layer into `container`, preferring the modern
+// `TextLayer` class (pdf.js >=3.4) and falling back to the older
+// `renderTextLayer()` function on earlier bundles. Obsidian's `loadPdfJs()`
+// only promises the core pdfjsLib, not a pinned version, so neither API is
+// guaranteed — if neither exists, pages still render, they just lose
+// selectable text and find-in-note for that session.
+async function renderTextLayer(pdfjsLib: any, textContent: any, container: HTMLElement, viewport: any): Promise<boolean> {
+	container.empty();
+
+	if (typeof pdfjsLib.TextLayer === 'function') {
+		const textLayer = new pdfjsLib.TextLayer({ textContentSource: textContent, container, viewport });
+		await textLayer.render();
+		return true;
+	}
+
+	if (typeof pdfjsLib.renderTextLayer === 'function') {
+		const task = pdfjsLib.renderTextLayer({ textContentSource: textContent, container, viewport });
+		await task.promise;
+		return true;
+	}
+
+	return false;
+}
+
+type PageRenderState = {
+	pdfPage: any;
+	baseScale: number;
+	pageContainer: HTMLElement;
+	canvasWrap: HTMLElement;
+	canvas: HTMLCanvasElement;
+	textLayerDiv: HTMLElement;
+	text: string;
+	spans: HTMLSpanElement[];
+};
+
+type FindMatch = {
+	pageIndex: number;
+	spanIndex: number;
+};
+
 let vw: VaultWriter;
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
 
 export class SupernoteView extends FileView {
 	declare file: TFile;
 	settings: SupernotePluginSettings;
+
+	private pdfjsLib: any;
+	private pageStates: PageRenderState[] = [];
+
+	private zoomScale = 1;
+	private renderedZoomScale = 1;
+	private zoomDebounceTimer: number | undefined;
+	private zoomLabelEl: HTMLElement | null = null;
+
+	private findBarEl: HTMLElement | null = null;
+	private findInput: SearchComponent | null = null;
+	private findMatchCountEl: HTMLElement | null = null;
+	private findMatches: FindMatch[] = [];
+	private findMatchCursor = -1;
+
 	constructor(leaf: WorkspaceLeaf, settings: SupernotePluginSettings) {
 		super(leaf);
 		this.settings = settings;
+		// Documented pattern (obsidian.d.ts View.scope) for registering hotkeys
+		// that are only active while this view has focus.
+		this.scope = new Scope(this.app.scope);
 	}
 
 	getViewType() {
@@ -282,10 +340,35 @@ export class SupernoteView extends FileView {
 		return this.file.basename;
 	}
 
+	async onOpen(): Promise<void> {
+		this.scope?.register(['Mod'], 'f', (evt) => {
+			evt.preventDefault();
+			this.toggleFindBar();
+			return false;
+		});
+
+		// Ctrl/Cmd+scroll to zoom; plain scroll keeps paging through the note as
+		// before. contentEl persists across file loads (onLoadFile only rebuilds
+		// its children), so this only needs registering once.
+		this.registerDomEvent(this.contentEl, 'wheel', (evt: WheelEvent) => {
+			if (!(evt.ctrlKey || evt.metaKey)) return;
+			evt.preventDefault();
+			const factor = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
+			this.setZoom(this.zoomScale * factor);
+		}, { passive: false });
+	}
+
 	async onLoadFile(file: TFile): Promise<void> {
-		const container = this.containerEl.children[1];
+		const container = this.contentEl;
 		container.empty();
 		container.createEl("h1", { text: file.name });
+
+		window.clearTimeout(this.zoomDebounceTimer);
+		this.pageStates = [];
+		this.zoomScale = 1;
+		this.renderedZoomScale = 1;
+		this.findMatches = [];
+		this.findMatchCursor = -1;
 
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
@@ -304,8 +387,8 @@ export class SupernoteView extends FileView {
 		// and file-backed, but `loadPdfJs()` exposes the underlying pdfjsLib it uses,
 		// so pages can be rendered here without ever writing a file to the vault.
 		const pdf = buildNotePdf(sn, images, this.settings);
-		const pdfjsLib = await loadPdfJs();
-		const pdfDoc = await pdfjsLib.getDocument({ data: pdf.output('arraybuffer') }).promise;
+		this.pdfjsLib = await loadPdfJs();
+		const pdfDoc = await this.pdfjsLib.getDocument({ data: pdf.output('arraybuffer') }).promise;
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
@@ -336,6 +419,9 @@ export class SupernoteView extends FileView {
 			});
 		}
 
+		this.buildZoomBar(container);
+		this.buildFindBar(container);
+
 		if (images.length > 1 && this.settings.showTOC) {
 			const atoc = container.createEl("a");
 			atoc.id = "toc";
@@ -348,13 +434,14 @@ export class SupernoteView extends FileView {
 			}
 		}
 
+		const pagesEl = container.createEl("div", { cls: 'supernote-pages' });
+
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
 
-			const pageContainer = container.createEl("div", {
+			const pageContainer = pagesEl.createEl("div", {
 				cls: 'page-container',
 			})
-			pageContainer.setAttr('style', 'max-width: ' + this.settings.noteImageMaxDim + 'px;')
 
 			if (images.length > 1 && this.settings.showTOC) {
 				const a = pageContainer.createEl("a");
@@ -386,21 +473,42 @@ export class SupernoteView extends FileView {
 			// instead of dropping in the raw page image.
 			const pdfPage = await pdfDoc.getPage(i + 1);
 			const unscaledViewport = pdfPage.getViewport({ scale: 1 });
-			const scale = this.settings.noteImageMaxDim / Math.max(unscaledViewport.width, unscaledViewport.height);
-			const viewport = pdfPage.getViewport({ scale });
+			const baseScale = this.settings.noteImageMaxDim / Math.max(unscaledViewport.width, unscaledViewport.height);
 
-			const canvas = pageContainer.createEl("canvas");
-			canvas.width = viewport.width;
-			canvas.height = viewport.height;
+			const canvasWrap = pageContainer.createEl("div", { cls: 'supernote-canvas-wrap' });
+			const canvas = canvasWrap.createEl("canvas");
 			if (this.settings.invertColorsWhenDark) {
 				canvas.addClass("supernote-invert-dark");
 			}
-			canvas.setAttr('style', 'max-height: ' + this.settings.noteImageMaxDim + 'px; max-width: 100%;')
 
-			const canvasContext = canvas.getContext("2d");
-			if (canvasContext) {
-				await pdfPage.render({ canvasContext, viewport }).promise;
-			}
+			// Canvas doesn't get native image drag-out the way <img> did; wire it up
+			// manually against the same page PNG the canvas is rendered from. This
+			// is best-effort — worth confirming it actually reproduces useful
+			// drag-and-drop behavior in a real vault, since the pre-canvas <img>
+			// drag may not have produced a proper vault attachment link either.
+			canvas.draggable = true;
+			canvas.addEventListener('dragstart', (evt) => {
+				if (!evt.dataTransfer) return;
+				evt.dataTransfer.setData('text/uri-list', imageDataUrl);
+				evt.dataTransfer.setData('text/plain', imageDataUrl);
+				evt.dataTransfer.setDragImage(canvas, 0, 0);
+			});
+
+			const textLayerDiv = canvasWrap.createEl("div", { cls: 'textLayer' });
+
+			const state: PageRenderState = {
+				pdfPage,
+				baseScale,
+				pageContainer,
+				canvasWrap,
+				canvas,
+				textLayerDiv,
+				text: '',
+				spans: [],
+			};
+			this.pageStates.push(state);
+
+			await this.renderPage(state, baseScale * this.zoomScale);
 
 			// Create a button to save image to vault
 			if (this.settings.showExportButtons) {
@@ -418,7 +526,195 @@ export class SupernoteView extends FileView {
 		}
 	}
 
-	async onClose() { }
+	private async renderPage(state: PageRenderState, scale: number): Promise<void> {
+		const viewport = state.pdfPage.getViewport({ scale });
+
+		state.canvas.width = viewport.width;
+		state.canvas.height = viewport.height;
+		state.canvasWrap.setCssStyles({ width: `${viewport.width}px`, height: `${viewport.height}px` });
+
+		const canvasContext = state.canvas.getContext("2d");
+		if (canvasContext) {
+			await state.pdfPage.render({ canvasContext, viewport }).promise;
+		}
+
+		const textContent = await state.pdfPage.getTextContent();
+		state.text = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join('');
+
+		const hasTextLayer = await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport);
+		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
+	}
+
+	private buildZoomBar(container: HTMLElement) {
+		const zoomBar = container.createEl('div', { cls: 'supernote-zoom-bar' });
+		const zoomOutBtn = zoomBar.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
+		this.zoomLabelEl = zoomBar.createEl('span', { cls: 'supernote-zoom-label', text: '100%' });
+		const zoomInBtn = zoomBar.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
+		const zoomResetBtn = zoomBar.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
+
+		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
+		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
+		zoomResetBtn.addEventListener('click', () => this.setZoom(1));
+	}
+
+	private setZoom(newScale: number) {
+		this.zoomScale = Math.min(5, Math.max(0.25, newScale));
+		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
+
+		// Instant CSS-scale feedback while the user is still zooming; the real
+		// re-render (crisp at the new resolution, text layer repositioned) is
+		// debounced below so rapid wheel/button input doesn't thrash pdf.js.
+		const instantFactor = this.zoomScale / this.renderedZoomScale;
+		for (const state of this.pageStates) {
+			state.canvasWrap.setCssStyles({ transform: `scale(${instantFactor})`, transformOrigin: 'top left' });
+		}
+
+		window.clearTimeout(this.zoomDebounceTimer);
+		this.zoomDebounceTimer = window.setTimeout(() => this.commitZoom(), 200);
+	}
+
+	private async commitZoom(): Promise<void> {
+		const targetZoom = this.zoomScale;
+		for (const state of this.pageStates) {
+			await this.renderPage(state, state.baseScale * targetZoom);
+			state.canvasWrap.setCssStyles({ transform: '', transformOrigin: '' });
+		}
+		this.renderedZoomScale = targetZoom;
+	}
+
+	private buildFindBar(container: HTMLElement) {
+		const bar = container.createEl('div', { cls: 'supernote-find-bar' });
+		bar.hide();
+		this.findBarEl = bar;
+
+		this.findInput = new SearchComponent(bar);
+		this.findInput.setPlaceholder('Find in note…');
+		this.findInput.onChange((value) => this.runFind(value));
+
+		this.findMatchCountEl = bar.createEl('span', { cls: 'supernote-find-count' });
+
+		const prevBtn = bar.createEl('button', { text: '↑', cls: 'clickable-icon', attr: { 'aria-label': 'Previous match' } });
+		const nextBtn = bar.createEl('button', { text: '↓', cls: 'clickable-icon', attr: { 'aria-label': 'Next match' } });
+		const closeBtn = bar.createEl('button', { text: '✕', cls: 'clickable-icon', attr: { 'aria-label': 'Close find bar' } });
+
+		prevBtn.addEventListener('click', () => this.stepFind(-1));
+		nextBtn.addEventListener('click', () => this.stepFind(1));
+		closeBtn.addEventListener('click', () => this.closeFindBar());
+
+		bar.addEventListener('keydown', (evt: KeyboardEvent) => {
+			if (evt.key === 'Escape') {
+				evt.preventDefault();
+				this.closeFindBar();
+			} else if (evt.key === 'Enter') {
+				evt.preventDefault();
+				this.stepFind(evt.shiftKey ? -1 : 1);
+			}
+		});
+	}
+
+	private toggleFindBar() {
+		if (!this.findBarEl) return;
+		if (this.findBarEl.isShown()) {
+			this.closeFindBar();
+			return;
+		}
+		this.findBarEl.show();
+		this.findInput?.inputEl.focus();
+		this.findInput?.inputEl.select();
+	}
+
+	private closeFindBar() {
+		this.clearFindHighlights();
+		this.findBarEl?.hide();
+	}
+
+	private clearFindHighlights() {
+		for (const state of this.pageStates) {
+			for (const span of state.spans) {
+				span.removeClass('supernote-find-match');
+				span.removeClass('supernote-find-match-current');
+			}
+		}
+		this.findMatches = [];
+		this.findMatchCursor = -1;
+		this.findMatchCountEl?.setText('');
+	}
+
+	// Maps a character offset within state.text back to the span that contains
+	// it. Assumes pdf.js's text layer renders one span per text-content item in
+	// order, which holds for the common case; a mismatch here just means a
+	// match highlights the wrong span rather than crashing.
+	private findSpanForOffset(state: PageRenderState, offset: number): number {
+		let cumulative = 0;
+		for (let i = 0; i < state.spans.length; i++) {
+			const len = state.spans[i].textContent?.length ?? 0;
+			if (offset < cumulative + len) return i;
+			cumulative += len;
+		}
+		return -1;
+	}
+
+	private runFind(query: string) {
+		this.clearFindHighlights();
+		if (!query) return;
+
+		const lowerQuery = query.toLowerCase();
+		for (let pageIndex = 0; pageIndex < this.pageStates.length; pageIndex++) {
+			const state = this.pageStates[pageIndex];
+			const lowerText = state.text.toLowerCase();
+
+			let searchStart = 0;
+			while (true) {
+				const matchOffset = lowerText.indexOf(lowerQuery, searchStart);
+				if (matchOffset === -1) break;
+
+				const spanIndex = this.findSpanForOffset(state, matchOffset);
+				if (spanIndex !== -1) {
+					this.findMatches.push({ pageIndex, spanIndex });
+					state.spans[spanIndex].addClass('supernote-find-match');
+				}
+				searchStart = matchOffset + lowerQuery.length;
+			}
+		}
+
+		if (this.findMatches.length > 0) {
+			this.findMatchCursor = 0;
+			this.highlightCurrentMatch();
+		}
+		this.updateFindCount();
+	}
+
+	private stepFind(direction: 1 | -1) {
+		if (this.findMatches.length === 0) return;
+		this.findMatchCursor = (this.findMatchCursor + direction + this.findMatches.length) % this.findMatches.length;
+		this.highlightCurrentMatch();
+		this.updateFindCount();
+	}
+
+	private highlightCurrentMatch() {
+		for (const state of this.pageStates) {
+			for (const span of state.spans) {
+				span.removeClass('supernote-find-match-current');
+			}
+		}
+
+		const match = this.findMatches[this.findMatchCursor];
+		if (!match) return;
+
+		const state = this.pageStates[match.pageIndex];
+		const span = state.spans[match.spanIndex];
+		span.addClass('supernote-find-match-current');
+		state.pageContainer.scrollIntoView({ block: 'center', behavior: 'smooth' });
+	}
+
+	private updateFindCount() {
+		if (!this.findMatchCountEl) return;
+		this.findMatchCountEl.setText(this.findMatches.length === 0 ? 'No matches' : `${this.findMatchCursor + 1}/${this.findMatches.length}`);
+	}
+
+	async onClose() {
+		window.clearTimeout(this.zoomDebounceTimer);
+	}
 }
 
 export default class SupernotePlugin extends Plugin {
