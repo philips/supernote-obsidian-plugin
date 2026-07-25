@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
-import { SupernoteX, fetchMirrorFrame, toPdf } from 'supernote-typescript';
+import { SupernoteX, fetchMirrorFrame, extractPageRenderData, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
@@ -43,6 +43,31 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+// Reimplements supernote-typescript's toPdf() convenience wrapper, but
+// rendering pages across this plugin's existing Web Worker pool instead of
+// one at a time on the main thread — using the library's worker-parallel
+// split (createPdfContext/addPdfPage/extractPageRenderData) added for
+// exactly this purpose. Assembly (createPdfContext/addPdfPage/pdfDoc.save())
+// still runs on the main thread regardless, since pdf-lib's objects aren't
+// structured-clone-safe.
+async function toPdfParallel(sn: SupernoteX): Promise<Uint8Array> {
+    const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
+
+    const pool = new WorkerPool();
+    let pngBuffers: Uint8Array[];
+    try {
+        pngBuffers = await pool.renderPdfPages(sn, pageNumbers);
+    } finally {
+        pool.terminate();
+    }
+
+    const ctx = await createPdfContext();
+    for (let i = 0; i < sn.pages.length; i++) {
+        await addPdfPage(ctx, sn.pages[i], pngBuffers[i]);
+    }
+    return ctx.pdfDoc.save();
+}
+
 /**
  * Processes the Supernote text based on the provided settings.
  * 
@@ -58,6 +83,20 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 	return processedText;
 }
 
+// Splits pageNumbers into at most `workerCount` chunks. Callers that then map
+// chunks[i] -> workers[i % workers.length] are guaranteed each worker gets at
+// most one chunk (chunks.length <= workers.length), so processing chunks
+// concurrently via Promise.all never has two in-flight calls fighting over
+// the same worker's onmessage handler.
+function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][] {
+    const chunkSize = Math.ceil(pageNumbers.length / workerCount);
+    const chunks: number[][] = [];
+    for (let i = 0; i < pageNumbers.length; i += chunkSize) {
+        chunks.push(pageNumbers.slice(i, i + chunkSize));
+    }
+    return chunks;
+}
+
 export class WorkerPool {
     private workers: Worker[];
 
@@ -70,9 +109,9 @@ export class WorkerPool {
     private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<any[]> {
         return new Promise((resolve, reject) => {
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
-                if (e.data.error) {
+                if (e.data.type === 'error') {
                     reject(new Error(e.data.error));
-                } else {
+                } else if (e.data.type === 'result') {
                     resolve(e.data.images);
                 }
             };
@@ -95,13 +134,7 @@ export class WorkerPool {
     async processPages(note: SupernoteX, allPageNumbers: number[]): Promise<any[]> {
         //console.time('Total processing time');
 
-        // Split pages into chunks based on number of workers
-        const chunkSize = Math.ceil(allPageNumbers.length / this.workers.length);
-        const chunks: number[][] = [];
-
-        for (let i = 0; i < allPageNumbers.length; i += chunkSize) {
-            chunks.push(allPageNumbers.slice(i, i + chunkSize));
-        }
+        const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
 
         //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
 
@@ -114,6 +147,48 @@ export class WorkerPool {
 
         //console.timeEnd('Total processing time');
         return results.flat();
+    }
+
+    private renderPdfPage(worker: Worker, pageRenderData: ReturnType<typeof extractPageRenderData>): Promise<Uint8Array> {
+        return new Promise((resolve, reject) => {
+            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+                if (e.data.type === 'error') {
+                    reject(new Error(e.data.error));
+                } else if (e.data.type === 'pdfPageResult') {
+                    resolve(e.data.pngBytes);
+                }
+            };
+
+            worker.onerror = (error) => {
+                console.error('Worker error:', error);
+                reject(error);
+            };
+
+            const message: SupernoteWorkerMessage = { type: 'renderPdfPage', pageRenderData };
+            worker.postMessage(message);
+        });
+    }
+
+    // Renders each page number to PNG bytes (via extractPageRenderData +
+    // toImage + encodePng, all off-main-thread) in parallel across the pool.
+    // Pages assigned to the same worker render sequentially (one postMessage
+    // round trip at a time), same safety reasoning as chunkPageNumbers above
+    // — only different *workers* run concurrently with each other.
+    async renderPdfPages(note: SupernoteX, allPageNumbers: number[]): Promise<Uint8Array[]> {
+        const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
+
+        const chunkResults = await Promise.all(
+            chunks.map(async (chunk, index) => {
+                const worker = this.workers[index % this.workers.length];
+                const pages: Uint8Array[] = [];
+                for (const pageNumber of chunk) {
+                    pages.push(await this.renderPdfPage(worker, extractPageRenderData(note, pageNumber)));
+                }
+                return pages;
+            })
+        );
+
+        return chunkResults.flat();
     }
 
     terminate() {
@@ -220,10 +295,8 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// toPdf() rasterizes internally (via the library's own toImage), so no
-		// separate ImageConverter pass is needed here like the other export
-		// paths — this is the only consumer of the PDF bytes.
-		const pdfBytes = await toPdf(sn);
+		// Renders pages across the Worker pool in parallel; see toPdfParallel().
+		const pdfBytes = await toPdfParallel(sn);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
@@ -428,11 +501,11 @@ export class SupernoteView extends FileView {
 		// pdf.js as an in-memory byte array — Obsidian's own PDF viewer is internal
 		// and file-backed, but `loadPdfJs()` exposes the underlying pdfjsLib it uses,
 		// so pages can be rendered here without ever writing a file to the vault.
-		// toPdf() rasterizes internally, separately from the `images` above (which
-		// exist for the thumbnail sidebar, save-to-vault, and drag-out) — a small
-		// duplicated render pass, traded for not having to thread pre-rendered
-		// images through the library's PDF builder.
-		const pdfBytes = await toPdf(sn);
+		// toPdfParallel() rasterizes on its own Worker pool, separately from the
+		// `images` above (which exist for the thumbnail sidebar, save-to-vault,
+		// and drag-out) — a small duplicated render pass, traded for not having
+		// to thread pre-rendered images through the library's PDF builder.
+		const pdfBytes = await toPdfParallel(sn);
 		this.pdfjsLib = await loadPdfJs();
 		const pdfDoc = await this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
