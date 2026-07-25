@@ -289,7 +289,7 @@ export class SupernoteView extends FileView {
 	private zoomDebounceTimer: number | undefined;
 	private zoomLabelEl: HTMLElement | null = null;
 
-	private fitWidthEnabled = false;
+	private fitWidthEnabled = true;
 	private fitWidthBtn: HTMLElement | null = null;
 	private fitWidthDebounceTimer: number | undefined;
 	private resizeObserver: ResizeObserver | null = null;
