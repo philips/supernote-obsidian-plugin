@@ -640,11 +640,12 @@ export class SupernoteView extends FileView {
 	// them down. Built up front (images are ready before pdf.js even starts),
 	// independent of the pdf.js page-render loop below.
 	private buildThumbSidebar(body: HTMLElement, images: string[]) {
-		this.thumbSidebarEl = body.createEl('div', { cls: 'supernote-thumb-sidebar' });
+		const thumbSidebarEl = body.createEl('div', { cls: 'supernote-thumb-sidebar' });
+		this.thumbSidebarEl = thumbSidebarEl;
 		this.thumbItems = [];
 
 		images.forEach((dataUrl, i) => {
-			const item = this.thumbSidebarEl!.createEl('div', { cls: 'supernote-thumb-item' });
+			const item = thumbSidebarEl.createEl('div', { cls: 'supernote-thumb-item' });
 			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
 			img.src = dataUrl;
 			item.createEl('span', { cls: 'supernote-thumb-label', text: String(i + 1) });
@@ -848,8 +849,7 @@ export class SupernoteView extends FileView {
 			const state = this.pageStates[pageIndex];
 			const lowerText = state.text.toLowerCase();
 
-			let searchStart = 0;
-			while (true) {
+			for (let searchStart = 0; ;) {
 				const matchOffset = lowerText.indexOf(lowerQuery, searchStart);
 				if (matchOffset === -1) break;
 
