@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -34,6 +34,35 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
         bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
+}
+
+// Assembles a searchable PDF (page image plus an invisible OCR text layer) from
+// already-rendered page images. Shared by the vault "Attach as PDF" export and the
+// in-memory pdf.js preview in SupernoteView, so both stay byte-for-byte consistent.
+function buildNotePdf(sn: SupernoteX, images: string[], settings: SupernotePluginSettings): jsPDF {
+    const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: [sn.pageWidth, sn.pageHeight]
+    });
+
+    for (let i = 0; i < images.length; i++) {
+        if (i > 0) {
+            pdf.addPage();
+        }
+
+        if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+            pdf.setFontSize(100);
+            pdf.setTextColor(0, 0, 0, 0); // Transparent text
+            pdf.text(processSupernoteText(sn.pages[i].text, settings), 20, 20, { maxWidth: sn.pageWidth });
+            pdf.setTextColor(0, 0, 0, 1);
+        }
+
+        // Add image first
+        pdf.addImage(images[i], 'PNG', 0, 0, sn.pageWidth, sn.pageHeight);
+    }
+
+    return pdf;
 }
 
 /**
@@ -213,13 +242,6 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Create PDF document
-		const pdf = new jsPDF({
-			orientation: 'portrait',
-			unit: 'px',
-			format: [sn.pageWidth, sn.pageHeight] // A4 size in pixels
-		});
-
 		// Convert note pages to images
 		const converter = new ImageConverter();
 		let images: string[] = [];
@@ -229,22 +251,7 @@ class VaultWriter {
 			converter.terminate();
 		}
 
-		// Add each page to PDF
-		for (let i = 0; i < images.length; i++) {
-			if (i > 0) {
-				pdf.addPage();
-			}
-
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				pdf.setFontSize(100);
-				pdf.setTextColor(0, 0, 0, 0); // Transparent text
-				pdf.text(processSupernoteText(sn.pages[i].text, this.settings), 20, 20, { maxWidth: sn.pageWidth });
-				pdf.setTextColor(0, 0, 0, 1);
-			}
-
-			// Add image first
-			pdf.addImage(images[i], 'PNG', 0, 0, sn.pageWidth, sn.pageHeight);
-		}
+		const pdf = buildNotePdf(sn, images, this.settings);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
@@ -291,6 +298,14 @@ export class SupernoteView extends FileView {
 			// Clean up the worker when done
 			converter.terminate();
 		}
+
+		// Build the same searchable PDF as "Attach as PDF" and hand it straight to
+		// pdf.js as an in-memory ArrayBuffer — Obsidian's own PDF viewer is internal
+		// and file-backed, but `loadPdfJs()` exposes the underlying pdfjsLib it uses,
+		// so pages can be rendered here without ever writing a file to the vault.
+		const pdf = buildNotePdf(sn, images, this.settings);
+		const pdfjsLib = await loadPdfJs();
+		const pdfDoc = await pdfjsLib.getDocument({ data: pdf.output('arraybuffer') }).promise;
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
@@ -367,14 +382,25 @@ export class SupernoteView extends FileView {
 				}
 			}
 
-			// Show the img of the page
-			const imgElement = pageContainer.createEl("img");
-			imgElement.src = imageDataUrl;
+			// Render the page through pdf.js against the in-memory PDF built above,
+			// instead of dropping in the raw page image.
+			const pdfPage = await pdfDoc.getPage(i + 1);
+			const unscaledViewport = pdfPage.getViewport({ scale: 1 });
+			const scale = this.settings.noteImageMaxDim / Math.max(unscaledViewport.width, unscaledViewport.height);
+			const viewport = pdfPage.getViewport({ scale });
+
+			const canvas = pageContainer.createEl("canvas");
+			canvas.width = viewport.width;
+			canvas.height = viewport.height;
 			if (this.settings.invertColorsWhenDark) {
-				imgElement.addClass("supernote-invert-dark");
+				canvas.addClass("supernote-invert-dark");
 			}
-			imgElement.setAttr('style', 'max-height: ' + this.settings.noteImageMaxDim + 'px;')
-			imgElement.draggable = true;
+			canvas.setAttr('style', 'max-height: ' + this.settings.noteImageMaxDim + 'px; max-width: 100%;')
+
+			const canvasContext = canvas.getContext("2d");
+			if (canvasContext) {
+				await pdfPage.render({ canvasContext, viewport }).promise;
+			}
 
 			// Create a button to save image to vault
 			if (this.settings.showExportButtons) {

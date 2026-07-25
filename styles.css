@@ -14,6 +14,14 @@
     filter: invert(1);
 }
 
+.theme-dark canvas.supernote-invert-dark {
+    filter: invert(1);
+}
+
+.theme-light canvas.supernote-invert-light {
+    filter: invert(1);
+}
+
 button.mod-cta {
     display: block;
 }
