@@ -1,18 +1,16 @@
 import { installAtPolyfill } from 'polyfills';
 installAtPolyfill();
 
-import { SupernoteX, toImage, IRenderableNote } from 'supernote-typescript';
-import { encodeDataURL, encodePng } from 'image-js';
+import { SupernoteX, toImage } from 'supernote-typescript';
+import { encodeDataURL } from 'image-js';
 
 export { };
 
 export type SupernoteWorkerMessage =
-    | { type: 'convert'; note: SupernoteX; pageNumbers?: number[] }
-    | { type: 'renderPdfPage'; pageRenderData: IRenderableNote };
+    | { type: 'convert'; note: SupernoteX; pageNumbers?: number[] };
 
 export type SupernoteWorkerResponse =
     | { type: 'result'; images: string[] }
-    | { type: 'pdfPageResult'; pngBytes: Uint8Array }
     | { type: 'error'; error: string };
 
 self.onmessage = async (e: MessageEvent<SupernoteWorkerMessage>) => {
@@ -24,11 +22,6 @@ self.onmessage = async (e: MessageEvent<SupernoteWorkerMessage>) => {
             // Convert canvas/images to data URLs before sending
             const images = results.map(result => encodeDataURL(result));
             const response: SupernoteWorkerResponse = { type: 'result', images };
-            self.postMessage(response);
-        } else if (data.type === 'renderPdfPage') {
-            const [image] = await toImage(data.pageRenderData, [1]);
-            const pngBytes = encodePng(image);
-            const response: SupernoteWorkerResponse = { type: 'pdfPageResult', pngBytes };
             self.postMessage(response);
         }
     } catch (error) {

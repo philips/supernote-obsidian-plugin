@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
-import { SupernoteX, fetchMirrorFrame, extractPageRenderData, createPdfContext, addPdfPage } from 'supernote-typescript';
+import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
@@ -43,27 +43,17 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-// Reimplements supernote-typescript's toPdf() convenience wrapper, but
-// rendering pages across this plugin's existing Web Worker pool instead of
-// one at a time on the main thread — using the library's worker-parallel
-// split (createPdfContext/addPdfPage/extractPageRenderData) added for
-// exactly this purpose. Assembly (createPdfContext/addPdfPage/pdfDoc.save())
-// still runs on the main thread regardless, since pdf-lib's objects aren't
-// structured-clone-safe.
-async function toPdfParallel(sn: SupernoteX): Promise<Uint8Array> {
-    const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
-
-    const pool = new WorkerPool();
-    let pngBuffers: Uint8Array[];
-    try {
-        pngBuffers = await pool.renderPdfPages(sn, pageNumbers);
-    } finally {
-        pool.terminate();
-    }
-
+// Assembles a PDF from pages already rasterized elsewhere (the `images`
+// array from ImageConverter, used for thumbnails/save-to-vault/drag-out),
+// instead of rasterizing a second time. addPdfPage() accepts pre-encoded PNG
+// bytes directly, so this just needs to decode the data URLs already sitting
+// in memory back to bytes (a cheap base64 decode, not a re-render) and hand
+// them to the library's own createPdfContext/addPdfPage assembly.
+async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     for (let i = 0; i < sn.pages.length; i++) {
-        await addPdfPage(ctx, sn.pages[i], pngBuffers[i]);
+        const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
+        await addPdfPage(ctx, sn.pages[i], pngBytes);
     }
     return ctx.pdfDoc.save();
 }
@@ -147,48 +137,6 @@ export class WorkerPool {
 
         //console.timeEnd('Total processing time');
         return results.flat();
-    }
-
-    private renderPdfPage(worker: Worker, pageRenderData: ReturnType<typeof extractPageRenderData>): Promise<Uint8Array> {
-        return new Promise((resolve, reject) => {
-            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
-                if (e.data.type === 'error') {
-                    reject(new Error(e.data.error));
-                } else if (e.data.type === 'pdfPageResult') {
-                    resolve(e.data.pngBytes);
-                }
-            };
-
-            worker.onerror = (error) => {
-                console.error('Worker error:', error);
-                reject(error);
-            };
-
-            const message: SupernoteWorkerMessage = { type: 'renderPdfPage', pageRenderData };
-            worker.postMessage(message);
-        });
-    }
-
-    // Renders each page number to PNG bytes (via extractPageRenderData +
-    // toImage + encodePng, all off-main-thread) in parallel across the pool.
-    // Pages assigned to the same worker render sequentially (one postMessage
-    // round trip at a time), same safety reasoning as chunkPageNumbers above
-    // — only different *workers* run concurrently with each other.
-    async renderPdfPages(note: SupernoteX, allPageNumbers: number[]): Promise<Uint8Array[]> {
-        const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
-
-        const chunkResults = await Promise.all(
-            chunks.map(async (chunk, index) => {
-                const worker = this.workers[index % this.workers.length];
-                const pages: Uint8Array[] = [];
-                for (const pageNumber of chunk) {
-                    pages.push(await this.renderPdfPage(worker, extractPageRenderData(note, pageNumber)));
-                }
-                return pages;
-            })
-        );
-
-        return chunkResults.flat();
     }
 
     terminate() {
@@ -295,8 +243,18 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Renders pages across the Worker pool in parallel; see toPdfParallel().
-		const pdfBytes = await toPdfParallel(sn);
+		// Rasterizes across the Worker pool in parallel (same pass the other
+		// export paths use), then assembles the PDF from those images rather
+		// than rendering a second time.
+		const converter = new ImageConverter();
+		let images: string[] = [];
+		try {
+			images = await converter.convertToImages(sn);
+		} finally {
+			converter.terminate();
+		}
+
+		const pdfBytes = await assemblePdfFromImages(sn, images);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
@@ -329,6 +287,8 @@ async function renderTextLayer(pdfjsLib: any, textContent: any, container: HTMLE
 }
 
 type PageRenderState = {
+	pageNumber: number;
+	// Fetched lazily — see SupernoteView.ensureTextLayer(). null until then.
 	pdfPage: any;
 	baseScale: number;
 	nativeWidth: number;
@@ -337,6 +297,12 @@ type PageRenderState = {
 	canvasWrap: HTMLElement;
 	canvas: HTMLCanvasElement;
 	textLayerDiv: HTMLElement;
+	// Decoded once from the already-rasterized page image and reused for
+	// every zoom redraw (see drawPageImage()) — no pdf.js/decode work on the
+	// zoom-critical path.
+	imageBitmap: ImageBitmap | null;
+	// Guards ensureTextLayer()'s one-time (per page) work.
+	textLayerLoaded: boolean;
 	text: string;
 	spans: HTMLSpanElement[];
 };
@@ -367,6 +333,15 @@ export class SupernoteView extends FileView {
 	private fitWidthDebounceTimer: number | undefined;
 	private resizeObserver: ResizeObserver | null = null;
 
+	// The combined PDF (image + invisible RTR text per page) is assembled
+	// and loaded into pdf.js in the background, not awaited before the first
+	// paint — pages are visible immediately from their own rasterized image
+	// (see drawPageImage()), which doesn't depend on this at all. Only the
+	// text layer (selection/search) needs it, and only when a given page is
+	// actually loaded — see ensureTextLayer()/pageObserver.
+	private pdfDocPromise: Promise<any> | null = null;
+	private pageObserver: IntersectionObserver | null = null;
+
 	private layerMode: 'image' | 'text' = 'image';
 	private imageModeBtn: HTMLElement | null = null;
 	private textModeBtn: HTMLElement | null = null;
@@ -385,6 +360,7 @@ export class SupernoteView extends FileView {
 	private findMatchCountEl: HTMLElement | null = null;
 	private findMatches: FindMatch[] = [];
 	private findMatchCursor = -1;
+	private findRequestId = 0;
 
 	constructor(leaf: WorkspaceLeaf, settings: SupernotePluginSettings) {
 		super(leaf);
@@ -472,6 +448,20 @@ export class SupernoteView extends FileView {
 			this.fitWidthDebounceTimer = window.setTimeout(() => this.applyFitWidth(), 150);
 		});
 		this.resizeObserver.observe(this.contentEl);
+
+		// Loads each page's selectable text lazily, only once it's about to
+		// scroll into view (rootMargin prefetches a screen ahead/behind so it
+		// feels instant by the time you actually get there) — for a long note,
+		// building N pages' worth of text-layer DOM upfront is real, mostly
+		// wasted work if you only ever look at the first few. Re-observes
+		// fresh page containers each file load; see onLoadFile().
+		this.pageObserver = new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				if (!entry.isIntersecting) continue;
+				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
+				if (state) void this.ensureTextLayer(state);
+			}
+		}, { root: this.contentEl, rootMargin: '100% 0px' });
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -479,11 +469,16 @@ export class SupernoteView extends FileView {
 		container.empty();
 
 		window.clearTimeout(this.zoomDebounceTimer);
+		this.pageObserver?.disconnect();
 		this.pageStates = [];
 		this.zoomScale = 1;
 		this.renderedZoomScale = 1;
 		this.findMatches = [];
 		this.findMatchCursor = -1;
+		// Invalidates any in-flight runFind() from a file the user just
+		// navigated away from, so it can't resolve later and touch this one's
+		// (unrelated) pageStates.
+		this.findRequestId++;
 
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
@@ -497,17 +492,16 @@ export class SupernoteView extends FileView {
 			converter.terminate();
 		}
 
-		// Build the same searchable PDF as "Attach as PDF" and hand it straight to
-		// pdf.js as an in-memory byte array — Obsidian's own PDF viewer is internal
-		// and file-backed, but `loadPdfJs()` exposes the underlying pdfjsLib it uses,
-		// so pages can be rendered here without ever writing a file to the vault.
-		// toPdfParallel() rasterizes on its own Worker pool, separately from the
-		// `images` above (which exist for the thumbnail sidebar, save-to-vault,
-		// and drag-out) — a small duplicated render pass, traded for not having
-		// to thread pre-rendered images through the library's PDF builder.
-		const pdfBytes = await toPdfParallel(sn);
-		this.pdfjsLib = await loadPdfJs();
-		const pdfDoc = await this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+		// Kicked off now but not awaited: pages are visible immediately from
+		// their own rasterized image (drawPageImage(), no pdf.js involved at
+		// all), so there's no reason to block the first paint on assembling a
+		// PDF and loading it into pdf.js. Only the text layer (selection/
+		// search) needs this, lazily, per page — see ensureTextLayer().
+		this.pdfDocPromise = (async () => {
+			const pdfBytes = await assemblePdfFromImages(sn, images);
+			this.pdfjsLib = await loadPdfJs();
+			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+		})();
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
@@ -551,18 +545,17 @@ export class SupernoteView extends FileView {
 		this.pagesEl = body.createEl("div", { cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
 
+		// Same for every page in a note (sn.pageWidth/pageHeight are note-level,
+		// not per-page) — computed once from data already in memory, no pdf.js
+		// or rasterization needed just to know how big to lay pages out.
+		const baseScale = this.settings.noteImageMaxDim / Math.max(sn.pageWidth, sn.pageHeight);
+
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
 
 			const pageContainer = this.pagesEl.createEl("div", {
 				cls: 'page-container',
 			})
-
-			// Render the page through pdf.js against the in-memory PDF built above,
-			// instead of dropping in the raw page image.
-			const pdfPage = await pdfDoc.getPage(i + 1);
-			const unscaledViewport = pdfPage.getViewport({ scale: 1 });
-			const baseScale = this.settings.noteImageMaxDim / Math.max(unscaledViewport.width, unscaledViewport.height);
 
 			const canvasWrap = pageContainer.createEl("div", { cls: 'supernote-canvas-wrap' });
 			const canvas = canvasWrap.createEl("canvas");
@@ -586,20 +579,30 @@ export class SupernoteView extends FileView {
 			const textLayerDiv = canvasWrap.createEl("div", { cls: 'textLayer' });
 
 			const state: PageRenderState = {
-				pdfPage,
+				pageNumber: i + 1,
+				pdfPage: null,
 				baseScale,
-				nativeWidth: unscaledViewport.width,
-				nativeHeight: unscaledViewport.height,
+				nativeWidth: sn.pageWidth,
+				nativeHeight: sn.pageHeight,
 				pageContainer,
 				canvasWrap,
 				canvas,
 				textLayerDiv,
+				imageBitmap: null,
+				textLayerLoaded: false,
 				text: '',
 				spans: [],
 			};
 			this.pageStates.push(state);
 
-			await this.renderPage(state, baseScale * this.zoomScale);
+			// Decodes the same PNG already sitting in `images[i]` — no pdf.js,
+			// no re-rasterization. Cached on the state and reused for every
+			// zoom redraw (drawPageImage()).
+			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
+			state.imageBitmap = await createImageBitmap(blob);
+			this.drawPageImage(state, baseScale * this.zoomScale);
+
+			this.pageObserver?.observe(pageContainer);
 
 			// Create a button to save image to vault
 			if (this.settings.showExportButtons) {
@@ -622,23 +625,56 @@ export class SupernoteView extends FileView {
 		this.updateCurrentPageIndicator();
 	}
 
-	private async renderPage(state: PageRenderState, scale: number): Promise<void> {
-		const viewport = state.pdfPage.getViewport({ scale });
+	// Draws the page's own already-decoded bitmap at the given scale — no
+	// pdf.js involved. Synchronous (drawImage from an ImageBitmap doesn't
+	// need awaiting), so redrawing on every zoom tick is cheap; pdf.js's own
+	// pdfPage.render() had to redecode the embedded PDF image every time.
+	private drawPageImage(state: PageRenderState, scale: number) {
+		const width = Math.max(1, Math.round(state.nativeWidth * scale));
+		const height = Math.max(1, Math.round(state.nativeHeight * scale));
 
-		state.canvas.width = viewport.width;
-		state.canvas.height = viewport.height;
-		state.canvasWrap.setCssStyles({ width: `${viewport.width}px`, height: `${viewport.height}px` });
+		state.canvas.width = width;
+		state.canvas.height = height;
+		state.canvasWrap.setCssStyles({ width: `${width}px`, height: `${height}px` });
+		state.textLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
 
-		const canvasContext = state.canvas.getContext("2d");
-		if (canvasContext) {
-			await state.pdfPage.render({ canvasContext, viewport }).promise;
+		if (state.imageBitmap) {
+			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, width, height);
 		}
+	}
 
+	// (Re)builds the selectable/searchable text layer at the given viewport.
+	// Shared by ensureTextLayer() (first load) and commitZoom() (rebuild at
+	// the new scale for pages that were already loaded).
+	private async buildTextLayerForState(state: PageRenderState, viewport: any): Promise<void> {
 		const textContent = await state.pdfPage.getTextContent();
 		state.text = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join('');
 
 		const hasTextLayer = await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport);
 		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
+	}
+
+	// Loads this page's text layer if it hasn't been already — triggered by
+	// pageObserver as a page nears the viewport, or forced immediately by
+	// page-jump/thumbnail-click/find-in-note so those don't have to wait on
+	// scroll+observer timing. Idempotent and safe to call speculatively.
+	private async ensureTextLayer(state: PageRenderState): Promise<void> {
+		if (state.textLayerLoaded) return;
+		state.textLayerLoaded = true; // set eagerly: no double-trigger race
+
+		try {
+			const pdfDoc = await this.pdfDocPromise;
+			if (!pdfDoc) return;
+
+			if (!state.pdfPage) {
+				state.pdfPage = await pdfDoc.getPage(state.pageNumber);
+			}
+
+			const viewport = state.pdfPage.getViewport({ scale: state.baseScale * this.zoomScale });
+			await this.buildTextLayerForState(state, viewport);
+		} catch (error) {
+			console.error(`Failed to build text layer for page ${state.pageNumber}:`, error);
+		}
 	}
 
 	private buildToolbar(container: HTMLElement, pageCount: number) {
@@ -693,7 +729,11 @@ export class SupernoteView extends FileView {
 				if (!Number.isFinite(requested)) return;
 				const target = Math.min(pageCount, Math.max(1, Math.round(requested)));
 				pageInput.value = String(target);
-				this.pageStates[target - 1]?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+				const state = this.pageStates[target - 1];
+				state?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+				// Don't wait on scroll+observer timing for a page the user
+				// explicitly asked to jump to.
+				if (state) void this.ensureTextLayer(state);
 			};
 
 			pageInput.addEventListener('keydown', (evt: KeyboardEvent) => {
@@ -733,7 +773,9 @@ export class SupernoteView extends FileView {
 			item.createEl('span', { cls: 'supernote-thumb-label', text: String(i + 1) });
 
 			item.addEventListener('click', () => {
-				this.pageStates[i]?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+				const state = this.pageStates[i];
+				state?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+				if (state) void this.ensureTextLayer(state);
 			});
 
 			this.thumbItems.push(item);
@@ -830,8 +872,16 @@ export class SupernoteView extends FileView {
 	private async commitZoom(): Promise<void> {
 		const targetZoom = this.zoomScale;
 		for (const state of this.pageStates) {
-			await this.renderPage(state, state.baseScale * targetZoom);
+			this.drawPageImage(state, state.baseScale * targetZoom);
 			state.canvasWrap.setCssStyles({ transform: '', transformOrigin: '' });
+
+			// Only rebuild the text layer for pages that already had one —
+			// pages not yet loaded (ensureTextLayer() never ran) will build
+			// theirs at whatever zoom is current when they eventually do.
+			if (state.textLayerLoaded && state.pdfPage) {
+				const viewport = state.pdfPage.getViewport({ scale: state.baseScale * targetZoom });
+				await this.buildTextLayerForState(state, viewport);
+			}
 		}
 		this.renderedZoomScale = targetZoom;
 		this.updateCurrentPageIndicator();
@@ -933,9 +983,21 @@ export class SupernoteView extends FileView {
 		return -1;
 	}
 
-	private runFind(query: string) {
+	private async runFind(query: string) {
+		const requestId = ++this.findRequestId;
+
 		this.clearFindHighlights();
 		if (!query) return;
+
+		// Search needs every page's text, not just whatever's been lazily
+		// loaded so far — force any not-yet-loaded pages to load now rather
+		// than silently missing matches on pages the user hasn't scrolled to.
+		// Already-loaded pages resolve near-instantly, so this only really
+		// costs anything on the first search of a long, mostly-unscrolled note.
+		await Promise.all(this.pageStates.map((state) => this.ensureTextLayer(state)));
+		// A newer search may have started (and even finished) while this one
+		// was waiting on that — don't clobber its results with stale ones.
+		if (requestId !== this.findRequestId) return;
 
 		const lowerQuery = query.toLowerCase();
 		for (let pageIndex = 0; pageIndex < this.pageStates.length; pageIndex++) {
@@ -994,6 +1056,7 @@ export class SupernoteView extends FileView {
 		window.clearTimeout(this.zoomDebounceTimer);
 		window.clearTimeout(this.fitWidthDebounceTimer);
 		this.resizeObserver?.disconnect();
+		this.pageObserver?.disconnect();
 	}
 }
 
