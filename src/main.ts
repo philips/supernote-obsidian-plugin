@@ -434,7 +434,16 @@ export class SupernoteView extends FileView {
 		this.registerDomEvent(this.contentEl, 'wheel', (evt: WheelEvent) => {
 			if (!(evt.ctrlKey || evt.metaKey)) return;
 			evt.preventDefault();
-			const factor = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
+
+			// Trackpads report a pinch-to-zoom gesture as a wheel event with
+			// ctrlKey set — the same flag an ordinary two-finger scroll can
+			// spuriously carry for a stray event or two right as the scroll
+			// hits a boundary (e.g. scrolling up to the very top). A fixed
+			// per-event zoom step let a short burst of those misfires snowball
+			// straight to the zoom cap. Scaling the step by the event's own
+			// deltaY keeps a real, sustained pinch feeling responsive while
+			// capping how much a single misfired event can do.
+			const factor = Math.min(1.05, Math.max(0.95, 1 - evt.deltaY * 0.01));
 			this.setZoom(this.zoomScale * factor);
 		}, { passive: false });
 
