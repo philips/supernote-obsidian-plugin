@@ -1,10 +1,9 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
-import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
+import { SupernoteX, fetchMirrorFrame, toPdf } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
-import { jsPDF } from 'jspdf';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
@@ -36,105 +35,12 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
     return bytes.buffer;
 }
 
-// Assembles a searchable PDF (page image plus an invisible OCR text layer) from
-// already-rendered page images. Shared by the vault "Attach as PDF" export and the
-// in-memory pdf.js preview in SupernoteView, so both stay byte-for-byte consistent.
-type NotePage = SupernoteX['pages'][number];
-
-// supernote-typescript's recognitionElements carry a per-word bounding box
-// (page.recognitionElements[].words[].['bounding-box']), but those units are
-// noticeably smaller than page pixels — word heights come out ~8-20 units
-// regardless of whether the note's native page is 1404x1872 or 1920x2560 px,
-// which only makes sense if recognition runs against a downscaled canvas.
-// This constant is an approximation, not a documented Supernote constant:
-// fitting it against supernote-typescript's own test fixtures (checked out
-// as a submodule here), scale 13.5 puts recognized-word extents at ~93-96%
-// of tests/input/rtr.note's page dimensions with no words landing outside
-// the page — the closest fit found among a few fixtures tried. If the note
-// view's "Text" mode shows words drifting away from the handwriting they
-// came from, tune this first.
-const RECOGNITION_BOX_SCALE = 13.5;
-
-// Matches supernote-typescript's own _extractText/_extractParagraphs decode
-// step (src/parsing.ts) for recognized labels.
-function decodeRecognizedLabel(label: string): string {
-    return decodeURIComponent(escape(label));
-}
-
-// Draws each recognized word as invisible text positioned directly over the
-// handwriting it was recognized from, instead of one flowed block — this is
-// what lets a PDF viewer (or this plugin's own find-in-note) land on the
-// right word in the right place rather than just confirming the word exists
-// somewhere on the page.
-function drawPositionedRecognizedText(pdf: jsPDF, page: NotePage): boolean {
-    const elements = page.recognitionElements ?? [];
-    let drewAny = false;
-
-    pdf.setTextColor(0, 0, 0, 0); // Transparent text
-
-    for (const element of elements) {
-        if (element.type !== 'Text') continue;
-
-        for (const word of element.words ?? []) {
-            const box = word['bounding-box'];
-            const label = word.label?.trim();
-            if (!box || !label) continue;
-
-            const x = box.x * RECOGNITION_BOX_SCALE;
-            const y = box.y * RECOGNITION_BOX_SCALE;
-            const width = box.width * RECOGNITION_BOX_SCALE;
-            const height = box.height * RECOGNITION_BOX_SCALE;
-            // No page-bounds cutoff here: with an approximate scale factor,
-            // legitimate words (especially on the last couple of lines,
-            // where y is largest) can land right at or just past the
-            // computed page edge. Drawing invisible text slightly outside
-            // the page is harmless — PDF viewers simply don't render past
-            // the MediaBox — but dropping the word entirely was silently
-            // losing whole bottom lines.
-            if (width <= 0 || height <= 0) continue;
-
-            // jsPDF's unit:'px' only applies to coordinates; setFontSize is
-            // always in points (72/in vs. px's 96/in), hence the 0.75 factor.
-            pdf.setFontSize(height * 0.75);
-            // y is the text baseline in jsPDF, not the box's top.
-            pdf.text(decodeRecognizedLabel(label), x, y + height, { maxWidth: Math.max(width, 1) });
-            drewAny = true;
-        }
-    }
-
-    pdf.setTextColor(0, 0, 0, 1);
-    return drewAny;
-}
-
-function buildNotePdf(sn: SupernoteX, images: string[], settings: SupernotePluginSettings): jsPDF {
-    const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'px',
-        format: [sn.pageWidth, sn.pageHeight]
-    });
-
-    for (let i = 0; i < images.length; i++) {
-        if (i > 0) {
-            pdf.addPage();
-        }
-
-        const page = sn.pages[i];
-        const positioned = drawPositionedRecognizedText(pdf, page);
-
-        // Fall back to one flowed invisible block when there's no per-word
-        // position data, so text still exists somewhere for search/copy.
-        if (!positioned && page.text !== undefined && page.text.length > 0) {
-            pdf.setFontSize(100);
-            pdf.setTextColor(0, 0, 0, 0); // Transparent text
-            pdf.text(processSupernoteText(page.text, settings), 20, 20, { maxWidth: sn.pageWidth });
-            pdf.setTextColor(0, 0, 0, 1);
-        }
-
-        // Add image first
-        pdf.addImage(images[i], 'PNG', 0, 0, sn.pageWidth, sn.pageHeight);
-    }
-
-    return pdf;
+// Uint8Array.buffer isn't safe to hand to APIs wanting a plain ArrayBuffer
+// when the array is a view over a larger/offset buffer (not guaranteed for
+// pdf-lib's PDFDocument.save() output, so don't assume it). This always
+// returns a buffer sized to exactly this array's bytes.
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 /**
@@ -314,21 +220,14 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Convert note pages to images
-		const converter = new ImageConverter();
-		let images: string[] = [];
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
-
-		const pdf = buildNotePdf(sn, images, this.settings);
+		// toPdf() rasterizes internally (via the library's own toImage), so no
+		// separate ImageConverter pass is needed here like the other export
+		// paths — this is the only consumer of the PDF bytes.
+		const pdfBytes = await toPdf(sn);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
-		const pdfOutput = pdf.output('arraybuffer');
-		await this.app.vault.createBinary(filename, pdfOutput);
+		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 	}
 }
 
@@ -517,12 +416,16 @@ export class SupernoteView extends FileView {
 		}
 
 		// Build the same searchable PDF as "Attach as PDF" and hand it straight to
-		// pdf.js as an in-memory ArrayBuffer — Obsidian's own PDF viewer is internal
+		// pdf.js as an in-memory byte array — Obsidian's own PDF viewer is internal
 		// and file-backed, but `loadPdfJs()` exposes the underlying pdfjsLib it uses,
 		// so pages can be rendered here without ever writing a file to the vault.
-		const pdf = buildNotePdf(sn, images, this.settings);
+		// toPdf() rasterizes internally, separately from the `images` above (which
+		// exist for the thumbnail sidebar, save-to-vault, and drag-out) — a small
+		// duplicated render pass, traded for not having to thread pre-rendered
+		// images through the library's PDF builder.
+		const pdfBytes = await toPdf(sn);
 		this.pdfjsLib = await loadPdfJs();
-		const pdfDoc = await this.pdfjsLib.getDocument({ data: pdf.output('arraybuffer') }).promise;
+		const pdfDoc = await this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
