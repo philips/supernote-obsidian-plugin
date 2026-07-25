@@ -1,6 +1,7 @@
 import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
 import { SupernotePluginSettings, IP_VALIDATION_PATTERN } from 'settings';
+import { parseDeviceDate } from './deviceDate';
 
 export interface SupernoteFile {
     name: string;
@@ -37,7 +38,16 @@ export async function fetchSupernoteDirectory(ip: string, path: string): Promise
     }
 
     const data: SupernoteResponse = JSON.parse(match[1]);
-    return data.fileList;
+    return data.fileList.sort(compareByNameThenDate);
+}
+
+function compareByNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
+    const nameCompare = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    if (nameCompare !== 0) return nameCompare;
+
+    const aDate = parseDeviceDate(a.date);
+    const bDate = parseDeviceDate(b.date);
+    return (aDate?.getTime() ?? 0) - (bDate?.getTime() ?? 0);
 }
 
 export abstract class FileListModal extends SuggestModal<SupernoteFile> {
