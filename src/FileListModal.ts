@@ -48,7 +48,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
             const data: SupernoteResponse = JSON.parse(match[1]);
             this.files = data.fileList;
         } catch (err) {
-            new Notice(`Failed to load files: ${err.message}`);
+            new Notice(`Failed to load files: ${err instanceof Error ? err.message : String(err)}`);
             this.close();
         }
     }
@@ -133,7 +133,7 @@ export class DownloadListModal extends FileListModal {
                     view.editor.replaceSelection(link);
                 }
             } catch (err) {
-                new Notice(`Failed to download file: ${err.message}`);
+                new Notice(`Failed to download file: ${err instanceof Error ? err.message : String(err)}`);
             }
         }
     }
@@ -231,7 +231,7 @@ export class UploadListModal extends FileListModal {
                 new Notice(`Successfully uploaded ${uploadFilename} to Supernote`);
                 this.close();
             } catch (err) {
-                new Notice(`Upload failed: ${err.message}`);
+                new Notice(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
                 console.error('Upload error:', err);
             }
         } else if (file.isDirectory) {

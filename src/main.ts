@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, WorkspaceLeaf, FileView } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame } from 'supernote-typescript';
 import { DownloadListModal, UploadListModal } from './FileListModal';
@@ -261,7 +261,7 @@ let vw: VaultWriter;
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
 
 export class SupernoteView extends FileView {
-	file: TFile;
+	declare file: TFile;
 	settings: SupernotePluginSettings;
 	constructor(leaf: WorkspaceLeaf, settings: SupernotePluginSettings) {
 		super(leaf);
@@ -400,7 +400,7 @@ export class SupernoteView extends FileView {
 }
 
 export default class SupernotePlugin extends Plugin {
-	settings: SupernotePluginSettings;
+	settings!: SupernotePluginSettings;
 
 	async onload() {
         // Install polyfills before any other code runs
@@ -447,7 +447,7 @@ export default class SupernotePlugin extends Plugin {
 		this.addCommand({
 			id: 'insert-supernote-screen-mirror-image',
 			name: 'Insert a Supernote screen mirroring image as attachment',
-			editorCallback: async (editor: Editor, view: MarkdownView) => {
+			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				// generate a unique filename for the mirror based on the current note path
 				let ts = generateTimestamp();
 				const f = this.app.workspace.activeEditor?.file?.basename || '';
@@ -611,7 +611,6 @@ class DirectConnectErrorModal extends Modal {
 
 class ErrorModal extends Modal {
 	error: Error;
-	settings: SupernotePluginSettings;
 
 	constructor(app: App, error: Error) {
 		super(app);

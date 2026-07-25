@@ -2,7 +2,7 @@
 // This is necessary for SuperNote devices with old WebView versions.
 export function installAtPolyfill() {
     if (!Array.prototype.at) {
-        const at = function(n: number) {
+        const at = function(this: ArrayLike<unknown>, n: number) {
             // ToInteger() abstract op
             n = Math.trunc(n) || 0;
             // Allow negative indexing from the end
@@ -25,7 +25,9 @@ export function installAtPolyfill() {
         Array.prototype.at = at;
         typedArrays.forEach(TypedArray => {
             if (TypedArray) {
-                TypedArray.prototype.at = at;
+                // A single polyfill implementation can't statically match every
+                // typed array's distinct `at` return type (number vs bigint).
+                TypedArray.prototype.at = at as typeof TypedArray.prototype.at;
             }
         });
     }
