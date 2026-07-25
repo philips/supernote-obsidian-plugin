@@ -1,13 +1,32 @@
 #!/bin/sh
+set -e
 
 git submodule init
 git submodule update
+
 cd supernote-typescript/
 git clean -x -f -d
-npm install --include=dev
+# v8-profiler-next (test-only) needs a native toolchain to compile; if that's
+# not available, fall back to --ignore-scripts. The library build itself
+# (tsc) doesn't need it, only `npm test` does.
+npm install --include=dev || npm install --include=dev --ignore-scripts
 npm run build
-npm link
-cd ..
-npm link supernote-typescript/
-npm install --include=dev
+
+# `npm link` needs write access to the global npm prefix (e.g. /usr/local/lib
+# /node_modules), which sandboxed/CI environments often don't have. Fall back
+# to linking supernote-typescript/ directly into this project's node_modules.
+if npm link 2>/dev/null; then
+    cd ..
+    npm link supernote-typescript/
+    npm install --include=dev
+else
+    echo "npm link unavailable (no write access to global npm prefix)," \
+        "falling back to a direct node_modules symlink" >&2
+    cd ..
+    npm install --include=dev
+    # Must run after npm install: plain `npm install` prunes symlinks it
+    # doesn't recognize as linked, so this can't happen earlier in the order.
+    ln -sfn ../supernote-typescript node_modules/supernote-typescript
+fi
+
 npm run build
