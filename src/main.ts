@@ -1254,7 +1254,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-todays-supernote-pages',
-			name: "Import today's new or edited Supernote pages as images",
+			name: "Import new or edited Supernote pages by date as images",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();

@@ -16,3 +16,25 @@ export function isSameLocalDay(a: Date, b: Date): boolean {
         && a.getMonth() === b.getMonth()
         && a.getDate() === b.getDate();
 }
+
+export function todayLocalMidnight(): Date {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+export function formatDateInputValue(d: Date): string {
+    const year = String(d.getFullYear()).padStart(4, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// `<input type="date">.valueAsDate` parses as UTC midnight, which shifts to
+// the wrong calendar day in negative-UTC-offset timezones. Parse the
+// "YYYY-MM-DD" string ourselves into a local-midnight Date instead.
+export function parseDateInputValue(value: string): Date | null {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return null;
+    const [, year, month, day] = match;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+}

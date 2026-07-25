@@ -250,7 +250,14 @@ div.supernote-canvas-wrap canvas {
     background-color: var(--interactive-accent);
 }
 
-/* "Import today's Supernote pages" modal */
+/* "Import Supernote pages" modal */
+.supernote-import-date-row {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-1);
+    margin-bottom: var(--size-4-3);
+}
+
 .supernote-import-controls {
     display: flex;
     gap: var(--size-4-2);

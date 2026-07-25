@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDeviceDate, isSameLocalDay } from './deviceDate';
+import { parseDeviceDate, isSameLocalDay, formatDateInputValue, parseDateInputValue } from './deviceDate';
 
 describe('parseDeviceDate', () => {
     it('parses the space-separated format the Supernote device sends', () => {
@@ -56,5 +56,36 @@ describe('isSameLocalDay', () => {
         const july = new Date(2026, 6, 25);
         const august = new Date(2026, 7, 25);
         expect(isSameLocalDay(july, august)).toBe(false);
+    });
+});
+
+describe('formatDateInputValue / parseDateInputValue', () => {
+    it('formats a Date as the YYYY-MM-DD value <input type="date"> expects', () => {
+        expect(formatDateInputValue(new Date(2026, 6, 5))).toBe('2026-07-05');
+    });
+
+    it('pads single-digit months and days', () => {
+        expect(formatDateInputValue(new Date(2026, 0, 1))).toBe('2026-01-01');
+    });
+
+    it('parses an input value back into a local-midnight Date', () => {
+        const d = parseDateInputValue('2026-07-25');
+        expect(d).not.toBeNull();
+        expect(d?.getFullYear()).toBe(2026);
+        expect(d?.getMonth()).toBe(6);
+        expect(d?.getDate()).toBe(25);
+        expect(d?.getHours()).toBe(0);
+    });
+
+    it('round-trips through format then parse', () => {
+        const original = new Date(2025, 11, 31);
+        const roundTripped = parseDateInputValue(formatDateInputValue(original));
+        expect(roundTripped && isSameLocalDay(roundTripped, original)).toBe(true);
+    });
+
+    it('returns null for a malformed input value', () => {
+        expect(parseDateInputValue('not-a-date')).toBeNull();
+        expect(parseDateInputValue('')).toBeNull();
+        expect(parseDateInputValue('2026/07/25')).toBeNull();
     });
 });

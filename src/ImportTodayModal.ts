@@ -1,15 +1,23 @@
 import { App, Modal, Notice, Editor } from 'obsidian';
 import SupernotePlugin from './main';
 import { SupernoteFile, fetchSupernoteDirectory } from './FileListModal';
-import { parseDeviceDate, isSameLocalDay } from './deviceDate';
+import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
+
+interface ScannedNote {
+    file: SupernoteFile;
+    date: Date;
+}
 
 export class ImportTodayModal extends Modal {
     plugin: SupernotePlugin;
     editor: Editor;
     targetPath: string;
+    allNotes: ScannedNote[] = [];
     files: SupernoteFile[] = [];
     selected: Set<string> = new Set();
+    selectedDate: Date = todayLocalMidnight();
     listEl!: HTMLElement;
+    resultsEl!: HTMLElement;
     importBtn!: HTMLButtonElement;
 
     constructor(app: App, plugin: SupernotePlugin, editor: Editor, targetPath: string) {
@@ -22,12 +30,11 @@ export class ImportTodayModal extends Modal {
     async onOpen() {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h2', { text: "Import today's Supernote pages" });
-        const status = contentEl.createEl('p', { text: 'Scanning device for notes created or modified today…' });
+        contentEl.createEl('h2', { text: 'Import Supernote pages' });
+        const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
 
-        let found: SupernoteFile[];
         try {
-            found = await this.scanForTodaysNotes('/', new Set());
+            this.allNotes = await this.scanAllNotes('/', new Set());
         } catch (err) {
             status.setText(`Failed to scan device: ${err instanceof Error ? err.message : String(err)}`);
             return;
@@ -35,15 +42,42 @@ export class ImportTodayModal extends Modal {
 
         status.remove();
 
-        if (found.length === 0) {
-            contentEl.createEl('p', { text: "No notes created or modified today were found on the device." });
+        const dateRow = contentEl.createDiv({ cls: 'supernote-import-date-row' });
+        dateRow.createEl('label', { text: 'Import notes from: ', attr: { for: 'supernote-import-date' } });
+        const dateInput = dateRow.createEl('input', {
+            type: 'date',
+            attr: { id: 'supernote-import-date' },
+        }) as HTMLInputElement;
+        dateInput.value = formatDateInputValue(this.selectedDate);
+        dateInput.max = formatDateInputValue(todayLocalMidnight());
+        dateInput.addEventListener('change', () => {
+            const parsed = parseDateInputValue(dateInput.value);
+            if (parsed) {
+                this.selectedDate = parsed;
+                this.renderForSelectedDate();
+            }
+        });
+
+        this.resultsEl = contentEl.createDiv();
+        this.renderForSelectedDate();
+    }
+
+    private renderForSelectedDate() {
+        this.resultsEl.empty();
+
+        this.files = this.allNotes
+            .filter(n => isSameLocalDay(n.date, this.selectedDate))
+            .map(n => n.file);
+        this.selected = new Set(this.files.map(f => f.uri));
+
+        if (this.files.length === 0) {
+            this.resultsEl.createEl('p', {
+                text: `No notes created or modified on ${this.selectedDate.toLocaleDateString()} were found on the device.`,
+            });
             return;
         }
 
-        this.files = found;
-        found.forEach(f => this.selected.add(f.uri));
-
-        const controls = contentEl.createDiv({ cls: 'supernote-import-controls' });
+        const controls = this.resultsEl.createDiv({ cls: 'supernote-import-controls' });
         controls.createEl('button', { text: 'Select all' }).addEventListener('click', () => {
             this.files.forEach(f => this.selected.add(f.uri));
             this.renderList();
@@ -53,10 +87,10 @@ export class ImportTodayModal extends Modal {
             this.renderList();
         });
 
-        this.listEl = contentEl.createDiv({ cls: 'supernote-import-list' });
+        this.listEl = this.resultsEl.createDiv({ cls: 'supernote-import-list' });
         this.renderList();
 
-        this.importBtn = contentEl.createEl('button', { text: 'Import selected', cls: 'mod-cta' });
+        this.importBtn = this.resultsEl.createEl('button', { text: 'Import selected', cls: 'mod-cta' });
         this.importBtn.addEventListener('click', () => this.importSelected());
     }
 
@@ -78,21 +112,23 @@ export class ImportTodayModal extends Modal {
         }
     }
 
-    private async scanForTodaysNotes(path: string, visited: Set<string>): Promise<SupernoteFile[]> {
+    // Walks the whole device tree once and records every .note file's parsed
+    // date, so switching the date picker only needs to re-filter in memory
+    // instead of re-fetching the device's directory tree over HTTP each time.
+    private async scanAllNotes(path: string, visited: Set<string>): Promise<ScannedNote[]> {
         if (visited.has(path)) return [];
         visited.add(path);
 
         const entries = await fetchSupernoteDirectory(this.plugin.settings.directConnectIP, path);
-        const now = new Date();
-        const results: SupernoteFile[] = [];
+        const results: ScannedNote[] = [];
 
         for (const entry of entries) {
             if (entry.isDirectory) {
-                results.push(...await this.scanForTodaysNotes(entry.uri, visited));
+                results.push(...await this.scanAllNotes(entry.uri, visited));
             } else if (entry.name.toLowerCase().endsWith('.note')) {
                 const modified = parseDeviceDate(entry.date);
-                if (modified && isSameLocalDay(modified, now)) {
-                    results.push(entry);
+                if (modified) {
+                    results.push({ file: entry, date: modified });
                 }
             }
         }
