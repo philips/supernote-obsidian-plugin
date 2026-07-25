@@ -72,23 +72,23 @@ function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionar
 		};
 		await plugin.saveSettings();
 	}
-	sourceInput.addEventListener('input', updateDictionaryEntry);
-	replaceInput.addEventListener('input', updateDictionaryEntry);
+	sourceInput.addEventListener('input', () => { void updateDictionaryEntry(); });
+	replaceInput.addEventListener('input', () => { void updateDictionaryEntry(); });
 
 	// Toggle match case when match case button is clicked
-	matchCaseButton.addEventListener('click', async () => {
+	matchCaseButton.addEventListener('click', () => void (async () => {
 		matchCaseButton.toggleClass('active', !matchCaseButton.hasClass('active'));
 		await updateDictionaryEntry();
-	});
+	})());
 
 	// Toggle match word when match word button is clicked
-	matchWordButton.addEventListener('click', async () => {
+	matchWordButton.addEventListener('click', () => void (async () => {
 		matchWordButton.toggleClass('active', !matchWordButton.hasClass('active'));
 		await updateDictionaryEntry();
-	});
+	})());
 
 	// Delete dictionary entry when delete button is clicked
-	deleteButton.addEventListener('click', async () => {
+	deleteButton.addEventListener('click', () => void (async () => {
 		const index = Array.from(tbody.children).indexOf(tr);
 		plugin.settings.customDictionary.splice(index, 1);
 		await plugin.saveSettings();
@@ -98,7 +98,7 @@ function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionar
 		} else {
 			tr.remove();
 		}
-	});
+	})());
 }
 
 // Create the UI for the dictionary table
@@ -112,7 +112,7 @@ function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlug
 	const dictionaryEntriesContainer = containerEl.createDiv();
 	dictionaryEntriesContainer
 		.addClasses(['setting-item', CONTAINER_CLASSNAME]);
-	dictionaryEntriesContainer.createDiv({ text: 'Custom Dictionary' })
+	dictionaryEntriesContainer.createDiv({ text: 'Custom dictionary' })
 		.addClass('setting-item-name');
 	dictionaryEntriesContainer.createDiv({ text: 'Add an entry for every text string you would like to replace from Supernote\'s recognized text. Note, all case-sensitive matches will run as a group before case-insensitive matches.' })
 		.addClasses(['setting-item-description']);
@@ -123,7 +123,7 @@ function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlug
 	const trHead = thead.createEl('tr');
 	const tbody = table.createEl('tbody');
 
-	trHead.createEl('th', { text: 'Source Text' });
+	trHead.createEl('th', { text: 'Source text' });
 	trHead.createEl('th', { text: 'Replacement' });
 	trHead.createEl('th', { text: 'Options' });
 
@@ -159,14 +159,14 @@ export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugi
 	const customDictionaryContainer = containerEl.createDiv();
 	customDictionaryContainer
 		.addClasses(['supernote-settings-custom-dictionary']);
-	customDictionaryContainer.createEl('h3', { text: 'Custom Dictionary' })
+	customDictionaryContainer.createEl('h3', { text: 'Custom dictionary' })
 		// .addClass('setting-item-name');
 	customDictionaryContainer.createDiv({ text: 'You can add custom entries to your dictionary to fix errors from Supernote\'s handwriting recognition. This also lets you automatically swap out certain text with your preferred wording, add special markdown characters, etc.' })
 		.addClasses(['setting-item-description', 'supernote-settings-custom-dictionary-subtitle']);
 		
 	// Create the "Enable Custom Dictionary" setting
 	new Setting(customDictionaryContainer)
-		.setName('Enable Custom Dictionary')
+		.setName('Enable custom dictionary')
 		.setDesc('Enable or disable the custom dictionary.')
 		.addToggle(text => text
 			.setValue(plugin.settings.isCustomDictionaryEnabled)

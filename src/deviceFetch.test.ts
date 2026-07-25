@@ -16,6 +16,7 @@ describe('fetchFromDevice', () => {
         expect(result).toBe(response);
         expect(fetchMock).toHaveBeenCalledWith(
             'http://192.168.1.50:8089/path',
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest types expect.any()'s return as `any` by design
             expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
     });
@@ -29,6 +30,7 @@ describe('fetchFromDevice', () => {
 
         expect(fetchMock).toHaveBeenCalledWith(
             'http://192.168.1.50:8089/path',
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest types expect.any()'s return as `any` by design
             expect.objectContaining({ method: 'POST', body, signal: expect.any(AbortSignal) }),
         );
     });

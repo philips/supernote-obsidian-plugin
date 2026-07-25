@@ -2,7 +2,7 @@
 	"id": "supernote",
 	"name": "Unofficial Supernote by Ratta Integration",
 	"version": "2.9.0",
-	"minAppVersion": "1.5.12",
+	"minAppVersion": "1.7.2",
 	"description": "View Supernote notes, generate markdown from note and capture screen mirror.",
 	"author": "Brandon Philips",
 	"authorUrl": "https://ifup.org",

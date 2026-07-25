@@ -36,17 +36,17 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('Supernote IP address')
-            .setDesc('(Optional) When using the Supernote "Browse and Access" for document upload/download or "Screen Mirroring" screenshot attachment this is the IP of the Supernote device')
+            .setDesc('(Optional) when using the supernote "browse and access" for document upload/download or "screen mirroring" screenshot attachment this is the IP of the supernote device')
             .addText(text => text
                 .setPlaceholder('IP only e.g. 192.168.1.2')
                 .setValue(this.plugin.settings.directConnectIP)
                 .onChange(async (value) => {
                     if (IP_VALIDATION_PATTERN.test(value) || value === '') {
                         this.plugin.settings.directConnectIP = value;
-                        alert.extraSettingsEl.style.display = 'none';
+                        alert.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
                         await this.plugin.saveSettings();
                     } else {
-                        alert.extraSettingsEl.style.display = 'inline';
+                        alert.extraSettingsEl.toggleClass('supernote-settings-hidden', false);
                     }
                 })
                 .inputEl.setAttribute('pattern', IP_VALIDATION_PATTERN.source)
@@ -54,14 +54,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
             .addExtraButton(btn => {
                 btn.setIcon('alert-triangle')
                     .setTooltip('Invalid IP format: must be xxx.xxx.xxx.xxx');
-                btn.extraSettingsEl.style.display = 'none';
+                btn.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
                 alert = btn
                 return btn;
             });
 
         new Setting(containerEl)
-            .setName('Invert colors in "Dark mode"')
-            .setDesc('When Obsidian is in "Dark mode" increase image visibility by inverting colors of images')
+            .setName('Invert colors in "dark mode"')
+            .setDesc('When Obsidian is in "dark mode" increase image visibility by inverting colors of images')
             .addToggle(text => text
                 .setValue(this.plugin.settings.invertColorsWhenDark)
                 .onChange(async (value) => {

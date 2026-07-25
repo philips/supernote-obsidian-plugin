@@ -31,7 +31,7 @@ export class ImportTodayModal extends Modal {
     async onOpen() {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h2', { text: 'Import Supernote pages' });
+        contentEl.createEl('h2', { text: 'Import supernote pages' });
         const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
 
         try {
@@ -48,7 +48,7 @@ export class ImportTodayModal extends Modal {
         const dateInput = dateRow.createEl('input', {
             type: 'date',
             attr: { id: 'supernote-import-date' },
-        }) as HTMLInputElement;
+        });
         dateInput.value = formatDateInputValue(this.selectedDate);
         dateInput.max = formatDateInputValue(todayLocalMidnight());
         dateInput.addEventListener('change', () => {
@@ -92,7 +92,7 @@ export class ImportTodayModal extends Modal {
         this.renderList();
 
         this.importBtn = this.resultsEl.createEl('button', { text: 'Import selected', cls: 'mod-cta' });
-        this.importBtn.addEventListener('click', () => this.importSelected());
+        this.importBtn.addEventListener('click', () => { void this.importSelected(); });
     }
 
     private renderList() {
