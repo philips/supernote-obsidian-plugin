@@ -359,6 +359,8 @@ async function renderTextLayer(pdfjsLib: any, textContent: any, container: HTMLE
 type PageRenderState = {
 	pdfPage: any;
 	baseScale: number;
+	nativeWidth: number;
+	nativeHeight: number;
 	pageContainer: HTMLElement;
 	canvasWrap: HTMLElement;
 	canvas: HTMLCanvasElement;
@@ -387,6 +389,11 @@ export class SupernoteView extends FileView {
 	private renderedZoomScale = 1;
 	private zoomDebounceTimer: number | undefined;
 	private zoomLabelEl: HTMLElement | null = null;
+
+	private fitWidthEnabled = false;
+	private fitWidthBtn: HTMLElement | null = null;
+	private fitWidthDebounceTimer: number | undefined;
+	private resizeObserver: ResizeObserver | null = null;
 
 	private layerMode: 'image' | 'text' = 'image';
 	private imageModeBtn: HTMLElement | null = null;
@@ -472,6 +479,17 @@ export class SupernoteView extends FileView {
 				this.updateCurrentPageIndicator();
 			});
 		}, { passive: true });
+
+		// While "Fit width" is on, keep the page matched to however much room
+		// is actually available as the pane resizes (split panes, sidebars
+		// opening/closing, window resize) — not just at the moment it was
+		// turned on. Debounced since resize fires continuously while dragging.
+		this.resizeObserver = new ResizeObserver(() => {
+			if (!this.fitWidthEnabled) return;
+			window.clearTimeout(this.fitWidthDebounceTimer);
+			this.fitWidthDebounceTimer = window.setTimeout(() => this.applyFitWidth(), 150);
+		});
+		this.resizeObserver.observe(this.contentEl);
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -585,6 +603,8 @@ export class SupernoteView extends FileView {
 			const state: PageRenderState = {
 				pdfPage,
 				baseScale,
+				nativeWidth: unscaledViewport.width,
+				nativeHeight: unscaledViewport.height,
 				pageContainer,
 				canvasWrap,
 				canvas,
@@ -611,6 +631,9 @@ export class SupernoteView extends FileView {
 			}
 		}
 
+		if (this.fitWidthEnabled) {
+			this.applyFitWidth();
+		}
 		this.updateCurrentPageIndicator();
 	}
 
@@ -637,15 +660,29 @@ export class SupernoteView extends FileView {
 		this.pageJumpInput = null;
 		const toolbar = container.createEl('div', { cls: 'supernote-toolbar' });
 
+		if (pageCount > 1) {
+			const thumbGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+			this.thumbToggleBtn = thumbGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
+			setIcon(this.thumbToggleBtn, 'layout-list');
+			this.thumbToggleBtn.addEventListener('click', () => this.toggleThumbnails());
+		}
+
 		const zoomGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
 		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
 		this.zoomLabelEl = zoomGroup.createEl('span', { cls: 'supernote-zoom-label', text: '100%' });
 		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
 		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
+		this.fitWidthBtn = zoomGroup.createEl('button', { text: 'Fit width', cls: 'clickable-icon', attr: { 'aria-label': 'Fit page to viewport width' } });
 
 		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
 		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
 		zoomResetBtn.addEventListener('click', () => this.setZoom(1));
+		this.fitWidthBtn.addEventListener('click', () => {
+			this.fitWidthEnabled = true;
+			this.applyFitWidth();
+			this.updateFitWidthButton();
+		});
+		this.updateFitWidthButton();
 
 		const layerGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
 		this.imageModeBtn = layerGroup.createEl('button', { text: 'Image', cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
@@ -653,13 +690,6 @@ export class SupernoteView extends FileView {
 		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
 		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
 		this.updateLayerModeButtons();
-
-		if (pageCount > 1) {
-			const thumbGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
-			this.thumbToggleBtn = thumbGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
-			setIcon(this.thumbToggleBtn, 'layout-list');
-			this.thumbToggleBtn.addEventListener('click', () => this.toggleThumbnails());
-		}
 
 		if (pageCount > 1) {
 			const jumpGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
@@ -773,7 +803,16 @@ export class SupernoteView extends FileView {
 		this.highlightThumbnail(current);
 	}
 
-	private setZoom(newScale: number) {
+	private setZoom(newScale: number, opts: { manual?: boolean } = {}) {
+		if (opts.manual !== false) {
+			// Any direct zoom action (buttons, wheel, reset) is the user taking
+			// manual control — stop auto-adjusting on resize until they ask for
+			// fit-width again. applyFitWidth() itself calls in with manual:false
+			// so it doesn't immediately cancel the mode it's trying to apply.
+			this.fitWidthEnabled = false;
+			this.updateFitWidthButton();
+		}
+
 		this.zoomScale = Math.min(5, Math.max(0.25, newScale));
 		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
 
@@ -797,6 +836,28 @@ export class SupernoteView extends FileView {
 		}
 		this.renderedZoomScale = targetZoom;
 		this.updateCurrentPageIndicator();
+	}
+
+	// Scales the page so its rendered width matches however much horizontal
+	// space is actually available (pagesEl's content box, which already
+	// accounts for the thumbnail sidebar if it's open) minus the page
+	// container's own margin, rather than the fixed noteImageMaxDim cap.
+	private applyFitWidth() {
+		const state = this.pageStates[0];
+		if (!state || !this.pagesEl || state.nativeWidth <= 0) return;
+
+		const availableWidth = this.pagesEl.clientWidth;
+		if (availableWidth <= 0) return;
+
+		const containerStyle = getComputedStyle(state.pageContainer);
+		const horizontalMargin = parseFloat(containerStyle.marginLeft || '0') + parseFloat(containerStyle.marginRight || '0');
+		const targetWidth = Math.max(availableWidth - horizontalMargin, 1);
+
+		this.setZoom(targetWidth / (state.nativeWidth * state.baseScale), { manual: false });
+	}
+
+	private updateFitWidthButton() {
+		this.fitWidthBtn?.toggleClass('is-active', this.fitWidthEnabled);
 	}
 
 	private buildFindBar(container: HTMLElement) {
@@ -933,6 +994,8 @@ export class SupernoteView extends FileView {
 
 	async onClose() {
 		window.clearTimeout(this.zoomDebounceTimer);
+		window.clearTimeout(this.fitWidthDebounceTimer);
+		this.resizeObserver?.disconnect();
 	}
 }
 
