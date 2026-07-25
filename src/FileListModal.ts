@@ -23,7 +23,7 @@ interface SupernoteResponse {
 export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     settings: SupernotePluginSettings;
     files: SupernoteFile[] = [];
-    currentPath: string = '/';
+    currentPath = '/';
 
     constructor(app: App, plugin: SupernotePlugin) {
         super(app);
