@@ -8,18 +8,14 @@ export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
-    showTOC: boolean;
     showExportButtons: boolean;
-    collapseRecognizedText: boolean,
     noteImageMaxDim: number;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
-    showTOC: true,
     showExportButtons: true,
-    collapseRecognizedText: false,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
@@ -75,20 +71,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Show table of contents and page headings')
-            .setDesc(
-                'When viewing .note files, show a table of contents and page number headings',
-            )
-            .addToggle((text) =>
-                text
-                    .setValue(this.plugin.settings.showTOC)
-                    .onChange(async (value) => {
-                        this.plugin.settings.showTOC = value;
-                        await this.plugin.saveSettings();
-                    }),
-            );
-
-        new Setting(containerEl)
             .setName('Show export buttons')
             .setDesc(
                 'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
@@ -100,17 +82,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         this.plugin.settings.showExportButtons = value;
                         await this.plugin.saveSettings();
                     }),
-            );
-
-        new Setting(containerEl)
-            .setName('Collapse recognized text')
-            .setDesc('When viewing .note files, hide recognized text in a collapsible element. This does not affect exported markdown.')
-            .addToggle(text => text
-                .setValue(this.plugin.settings.collapseRecognizedText)
-                .onChange(async (value) => {
-                    this.plugin.settings.collapseRecognizedText = value;
-                    await this.plugin.saveSettings();
-                })
             );
 
         new Setting(containerEl)

@@ -6,37 +6,29 @@ import { encodeDataURL } from 'image-js';
 
 export { };
 
-export type SupernoteWorkerMessage = {
-    type: 'convert';
-    note: SupernoteX;
-    pageNumbers?: number[];
-}
+export type SupernoteWorkerMessage =
+    | { type: 'convert'; note: SupernoteX; pageNumbers?: number[] };
 
-export type SupernoteWorkerResponse = {
-    type: 'result';
-    images: string[];
-    error?: string;
-}
+export type SupernoteWorkerResponse =
+    | { type: 'result'; images: string[] }
+    | { type: 'error'; error: string };
 
 self.onmessage = async (e: MessageEvent<SupernoteWorkerMessage>) => {
     try {
-        const { type, note, pageNumbers } = e.data;
+        const data = e.data;
 
-        if (type === 'convert') {
-            const results = await toImage(note, pageNumbers);
+        if (data.type === 'convert') {
+            const results = await toImage(data.note, data.pageNumbers);
             // Convert canvas/images to data URLs before sending
-            const dataUrls = results.map(result => encodeDataURL(result));
-
-            self.postMessage({
-                type: 'result',
-                images: dataUrls
-            });
+            const images = results.map(result => encodeDataURL(result));
+            const response: SupernoteWorkerResponse = { type: 'result', images };
+            self.postMessage(response);
         }
     } catch (error) {
-        self.postMessage({
-            type: 'result',
-            images: [],
+        const response: SupernoteWorkerResponse = {
+            type: 'error',
             error: error instanceof Error ? error.message : 'Unknown error occurred'
-        });
+        };
+        self.postMessage(response);
     }
 };

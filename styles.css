@@ -14,20 +14,197 @@
     filter: invert(1);
 }
 
+.theme-dark canvas.supernote-invert-dark {
+    filter: invert(1);
+}
+
+.theme-light canvas.supernote-invert-light {
+    filter: invert(1);
+}
+
 button.mod-cta {
     display: block;
 }
 
-.page-recognized-text {
-    user-select: text; 
-    white-space: pre-line; 
-    margin: 1.2em 0;
-}
-
 div.page-container {
-    display: inline-block; 
+    display: inline-block;
     vertical-align: top;
     margin: 1.2em;
+}
+
+div.supernote-canvas-wrap {
+    position: relative;
+    display: inline-block;
+    transform-origin: top left;
+}
+
+div.supernote-canvas-wrap canvas {
+    display: block;
+    max-width: 100%;
+}
+
+/* Mirrors pdf.js's own text_layer_builder.css: canvas carries the pixels,
+   this transparent layer carries selectable/searchable text on top of it. */
+.textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    line-height: 1;
+    text-align: initial;
+    transform-origin: 0 0;
+}
+
+.textLayer span,
+.textLayer br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+}
+
+.textLayer ::selection {
+    background: var(--text-selection);
+}
+
+.textLayer .supernote-find-match {
+    background: rgba(255, 224, 0, 0.4);
+    border-radius: 2px;
+}
+
+.textLayer .supernote-find-match-current {
+    background: rgba(255, 145, 0, 0.7);
+}
+
+.supernote-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--background-primary);
+    padding-top: 0.5em;
+    padding-bottom: 0.5em;
+}
+
+.supernote-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1em;
+    margin: 0.5em 0;
+}
+
+.supernote-toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+}
+
+.supernote-zoom-label {
+    min-width: 3.5em;
+    text-align: center;
+}
+
+.supernote-toolbar-group button.is-active {
+    color: var(--text-on-accent);
+    background-color: var(--interactive-accent);
+}
+
+.supernote-page-jump-input {
+    width: 4em;
+    text-align: center;
+}
+
+.supernote-page-jump-total {
+    color: var(--text-muted);
+}
+
+/* Text mode: hide the raster page, make the text layer's spans (otherwise
+   transparent, for overlaying selectable text on the image) actually
+   visible in roughly their original on-page layout. */
+.supernote-mode-text .supernote-canvas-wrap canvas {
+    display: none;
+}
+
+.supernote-mode-text .textLayer {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+}
+
+.supernote-mode-text .textLayer span {
+    color: var(--text-normal);
+}
+
+.supernote-find-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4em;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    width: fit-content;
+}
+
+.supernote-find-count {
+    min-width: 5em;
+    color: var(--text-muted);
+    font-size: var(--font-smaller);
+}
+
+.supernote-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 1em;
+}
+
+.supernote-pages {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.supernote-thumb-sidebar {
+    display: flex;
+    position: sticky;
+    align-self: flex-start;
+    flex-flow: column;
+    flex-shrink: 0;
+    width: 140px;
+    max-height: calc(100vh - 4em);
+    overflow-y: auto;
+    gap: 0.75em;
+    padding: 0.5em;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+}
+
+.supernote-thumb-item {
+    cursor: pointer;
+    text-align: center;
+    padding: 0.25em;
+    border: 2px solid transparent;
+    border-radius: var(--radius-s);
+}
+
+.supernote-thumb-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.supernote-thumb-item.is-active {
+    border-color: var(--interactive-accent);
+}
+
+.supernote-thumb-img {
+    display: block;
+    width: 100%;
+    border-radius: 2px;
+}
+
+.supernote-thumb-label {
+    display: block;
+    margin-top: 0.25em;
+    color: var(--text-muted);
+    font-size: var(--font-smaller);
 }
 
 /* Custom dictionary settings styles */
