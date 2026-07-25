@@ -39,6 +39,66 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
 // Assembles a searchable PDF (page image plus an invisible OCR text layer) from
 // already-rendered page images. Shared by the vault "Attach as PDF" export and the
 // in-memory pdf.js preview in SupernoteView, so both stay byte-for-byte consistent.
+type NotePage = SupernoteX['pages'][number];
+
+// supernote-typescript's recognitionElements carry a per-word bounding box
+// (page.recognitionElements[].words[].['bounding-box']), but those units are
+// noticeably smaller than page pixels — word heights come out ~8-20 units
+// regardless of whether the note's native page is 1404x1872 or 1920x2560 px,
+// which only makes sense if recognition runs against a downscaled canvas.
+// This constant is an approximation, not a documented Supernote constant:
+// fitting it against supernote-typescript's own test fixtures (checked out
+// as a submodule here), scale 13.5 puts recognized-word extents at ~93-96%
+// of tests/input/rtr.note's page dimensions with no words landing outside
+// the page — the closest fit found among a few fixtures tried. If the note
+// view's "Text" mode shows words drifting away from the handwriting they
+// came from, tune this first.
+const RECOGNITION_BOX_SCALE = 13.5;
+
+// Matches supernote-typescript's own _extractText/_extractParagraphs decode
+// step (src/parsing.ts) for recognized labels.
+function decodeRecognizedLabel(label: string): string {
+    return decodeURIComponent(escape(label));
+}
+
+// Draws each recognized word as invisible text positioned directly over the
+// handwriting it was recognized from, instead of one flowed block — this is
+// what lets a PDF viewer (or this plugin's own find-in-note) land on the
+// right word in the right place rather than just confirming the word exists
+// somewhere on the page.
+function drawPositionedRecognizedText(pdf: jsPDF, page: NotePage, pageWidth: number, pageHeight: number): boolean {
+    const elements = page.recognitionElements ?? [];
+    let drewAny = false;
+
+    pdf.setTextColor(0, 0, 0, 0); // Transparent text
+
+    for (const element of elements) {
+        if (element.type !== 'Text') continue;
+
+        for (const word of element.words ?? []) {
+            const box = word['bounding-box'];
+            const label = word.label?.trim();
+            if (!box || !label) continue;
+
+            const x = box.x * RECOGNITION_BOX_SCALE;
+            const y = box.y * RECOGNITION_BOX_SCALE;
+            const width = box.width * RECOGNITION_BOX_SCALE;
+            const height = box.height * RECOGNITION_BOX_SCALE;
+            if (x >= pageWidth || y >= pageHeight || width <= 0 || height <= 0) continue;
+
+            // jsPDF's unit:'px' only applies to coordinates; setFontSize is
+            // always in points (72/in vs. px's 96/in), hence the 0.75 factor.
+            pdf.setFontSize(height * 0.75);
+            // y is the text baseline in jsPDF, not the box's top.
+            pdf.text(decodeRecognizedLabel(label), x, y + height, { maxWidth: Math.max(width, 1) });
+            drewAny = true;
+        }
+    }
+
+    pdf.setTextColor(0, 0, 0, 1);
+    return drewAny;
+}
+
 function buildNotePdf(sn: SupernoteX, images: string[], settings: SupernotePluginSettings): jsPDF {
     const pdf = new jsPDF({
         orientation: 'portrait',
@@ -51,10 +111,15 @@ function buildNotePdf(sn: SupernoteX, images: string[], settings: SupernotePlugi
             pdf.addPage();
         }
 
-        if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+        const page = sn.pages[i];
+        const positioned = drawPositionedRecognizedText(pdf, page, sn.pageWidth, sn.pageHeight);
+
+        // Fall back to one flowed invisible block when there's no per-word
+        // position data, so text still exists somewhere for search/copy.
+        if (!positioned && page.text !== undefined && page.text.length > 0) {
             pdf.setFontSize(100);
             pdf.setTextColor(0, 0, 0, 0); // Transparent text
-            pdf.text(processSupernoteText(sn.pages[i].text, settings), 20, 20, { maxWidth: sn.pageWidth });
+            pdf.text(processSupernoteText(page.text, settings), 20, 20, { maxWidth: sn.pageWidth });
             pdf.setTextColor(0, 0, 0, 1);
         }
 
