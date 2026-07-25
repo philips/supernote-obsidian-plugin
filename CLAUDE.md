@@ -1,25 +1,36 @@
 # Development setup
 
-`src/main.ts` and `src/myworker.worker.ts` import from `supernote-typescript`, but
-`package.json`'s `dependencies.supernote` entry resolves to a stale pinned commit
-(see `package-lock.json`) from before the package was renamed from `supernote` to
-`supernote-typescript`. A plain `npm install` alone will never satisfy that import —
-`tsc` fails with `Cannot find module 'supernote-typescript'`.
-
-The real dependency lives as a git submodule at `supernote-typescript/` (see
-`.gitmodules`) and must be built and linked in manually. Run `./scripts/build` to do
-all of this:
+`src/main.ts` and `src/myworker.worker.ts` import from `supernote-typescript`. It's
+intentionally **not** an npm dependency in `package.json` — it's developed alongside
+this plugin as a git submodule at `supernote-typescript/` (see `.gitmodules`), so
+edits to the library and the plugin can happen together without publishing to npm
+first. Run `./scripts/build` to set it up and build everything:
 
 1. `git submodule init && git submodule update`
 2. Install + build the submodule (`npm run build` there, i.e. `tsc`)
-3. Link it into this project's `node_modules/supernote-typescript`
+3. `npm install` for this project, then symlink
+   `node_modules/supernote-typescript -> ../supernote-typescript` by hand (npm has
+   no declared dependency to link automatically, since none exists in
+   `package.json`)
+4. Build this project
 
-`scripts/build` prefers real `npm link`, but falls back to a direct
-`node_modules/supernote-typescript` symlink when the global npm prefix isn't
-writable (common in sandboxes/CI without root). If you ever hand-roll this step:
-create the symlink **after** `npm install`, not before — plain `npm install` prunes
-symlinks it doesn't recognize as npm-linked.
+Two things trip this up if you hand-roll it instead of using the script:
 
-The submodule's `v8-profiler-next` devDependency (used only by its test suite, not
-its build) needs a native toolchain to compile. If that's unavailable, install with
-`--ignore-scripts` — the library build itself doesn't need it, only `npm test` does.
+- **Order matters**: the symlink must be created *after* `npm install`, not before.
+  Plain `npm install` prunes symlinks in `node_modules` that it doesn't recognize as
+  declared dependencies.
+- **Don't switch this to `npm link` or a `file:` dependency.** `npm link` needs
+  write access to the global npm prefix, which sandboxes/CI/some setups don't have.
+  A `file:supernote-typescript` dependency seems cleaner, but npm's default
+  (symlink) mode for local directory dependencies also installs the *entire*
+  devDependency tree of the linked package into this project (jest, eslint,
+  prettier, and a native module requiring a C++ toolchain) — confirmed by testing,
+  it took root `node_modules` from ~280 packages to ~750. The manual symlink avoids
+  that entirely: it's a real live symlink (submodule rebuilds show up immediately,
+  no reinstall needed) with none of the extra weight.
+
+The submodule's `v8-profiler-next` devDependency (used only by its own test suite,
+not its build) needs a native toolchain to compile. If that's unavailable, install
+with `--ignore-scripts` — the library build itself doesn't need it, only
+`npm test` (inside `supernote-typescript/`) does. `scripts/build` does this
+automatically.
