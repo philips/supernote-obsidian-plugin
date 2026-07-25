@@ -66,7 +66,7 @@ function decodeRecognizedLabel(label: string): string {
 // what lets a PDF viewer (or this plugin's own find-in-note) land on the
 // right word in the right place rather than just confirming the word exists
 // somewhere on the page.
-function drawPositionedRecognizedText(pdf: jsPDF, page: NotePage, pageWidth: number, pageHeight: number): boolean {
+function drawPositionedRecognizedText(pdf: jsPDF, page: NotePage): boolean {
     const elements = page.recognitionElements ?? [];
     let drewAny = false;
 
@@ -84,7 +84,14 @@ function drawPositionedRecognizedText(pdf: jsPDF, page: NotePage, pageWidth: num
             const y = box.y * RECOGNITION_BOX_SCALE;
             const width = box.width * RECOGNITION_BOX_SCALE;
             const height = box.height * RECOGNITION_BOX_SCALE;
-            if (x >= pageWidth || y >= pageHeight || width <= 0 || height <= 0) continue;
+            // No page-bounds cutoff here: with an approximate scale factor,
+            // legitimate words (especially on the last couple of lines,
+            // where y is largest) can land right at or just past the
+            // computed page edge. Drawing invisible text slightly outside
+            // the page is harmless — PDF viewers simply don't render past
+            // the MediaBox — but dropping the word entirely was silently
+            // losing whole bottom lines.
+            if (width <= 0 || height <= 0) continue;
 
             // jsPDF's unit:'px' only applies to coordinates; setFontSize is
             // always in points (72/in vs. px's 96/in), hence the 0.75 factor.
@@ -112,7 +119,7 @@ function buildNotePdf(sn: SupernoteX, images: string[], settings: SupernotePlugi
         }
 
         const page = sn.pages[i];
-        const positioned = drawPositionedRecognizedText(pdf, page, sn.pageWidth, sn.pageHeight);
+        const positioned = drawPositionedRecognizedText(pdf, page);
 
         // Fall back to one flowed invisible block when there's no per-word
         // position data, so text still exists somewhere for search/copy.
