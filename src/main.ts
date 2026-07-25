@@ -392,6 +392,11 @@ export class SupernoteView extends FileView {
 	private imageModeBtn: HTMLElement | null = null;
 	private textModeBtn: HTMLElement | null = null;
 
+	private thumbnailsVisible = false;
+	private thumbToggleBtn: HTMLElement | null = null;
+	private thumbSidebarEl: HTMLElement | null = null;
+	private thumbItems: HTMLElement[] = [];
+
 	private headerEl: HTMLElement | null = null;
 	private pageJumpInput: HTMLInputElement | null = null;
 	private scrollUpdateScheduled = false;
@@ -535,8 +540,12 @@ export class SupernoteView extends FileView {
 		this.headerEl = container.createEl("div", { cls: 'supernote-header' });
 		this.buildToolbar(this.headerEl, images.length);
 		this.buildFindBar(this.headerEl);
+		this.updateThumbSidebarOffset();
 
-		this.pagesEl = container.createEl("div", { cls: 'supernote-pages' });
+		const body = container.createEl("div", { cls: 'supernote-body' });
+		this.buildThumbSidebar(body, images);
+
+		this.pagesEl = body.createEl("div", { cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
 
 		for (let i = 0; i < images.length; i++) {
@@ -646,6 +655,12 @@ export class SupernoteView extends FileView {
 		this.updateLayerModeButtons();
 
 		if (pageCount > 1) {
+			const thumbGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+			this.thumbToggleBtn = thumbGroup.createEl('button', { text: 'Thumbnails', cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
+			this.thumbToggleBtn.addEventListener('click', () => this.toggleThumbnails());
+		}
+
+		if (pageCount > 1) {
 			const jumpGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
 			jumpGroup.createEl('span', { text: 'Page', cls: 'supernote-page-jump-label' });
 			const pageInput = jumpGroup.createEl('input', {
@@ -684,6 +699,56 @@ export class SupernoteView extends FileView {
 		this.textModeBtn?.toggleClass('is-active', this.layerMode === 'text');
 	}
 
+	// Reuses the same page PNGs already generated for the save-to-vault/
+	// drag-out buttons — no separate low-res render pass, just let CSS scale
+	// them down. Built up front (images are ready before pdf.js even starts),
+	// independent of the pdf.js page-render loop below.
+	private buildThumbSidebar(body: HTMLElement, images: string[]) {
+		this.thumbSidebarEl = body.createEl('div', { cls: 'supernote-thumb-sidebar' });
+		this.thumbItems = [];
+
+		images.forEach((dataUrl, i) => {
+			const item = this.thumbSidebarEl!.createEl('div', { cls: 'supernote-thumb-item' });
+			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
+			img.src = dataUrl;
+			item.createEl('span', { cls: 'supernote-thumb-label', text: String(i + 1) });
+
+			item.addEventListener('click', () => {
+				this.pageStates[i]?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+			});
+
+			this.thumbItems.push(item);
+		});
+
+		this.applyThumbSidebarVisibility();
+	}
+
+	private toggleThumbnails() {
+		this.thumbnailsVisible = !this.thumbnailsVisible;
+		this.applyThumbSidebarVisibility();
+	}
+
+	private applyThumbSidebarVisibility() {
+		this.thumbSidebarEl?.toggle(this.thumbnailsVisible);
+		this.thumbToggleBtn?.toggleClass('is-active', this.thumbnailsVisible);
+		if (this.thumbnailsVisible) this.updateThumbSidebarOffset();
+	}
+
+	// The thumbnail sidebar is sticky below the header, not at top:0 like the
+	// header itself — otherwise it would stick right under the top edge of
+	// the view, overlapping the header instead of sitting below it. The find
+	// bar toggling open/closed changes the header's height, so this needs
+	// re-running whenever that happens, not just once at load.
+	private updateThumbSidebarOffset() {
+		if (!this.thumbSidebarEl) return;
+		const headerHeight = this.headerEl?.offsetHeight ?? 0;
+		this.thumbSidebarEl.setCssStyles({ top: `${headerHeight}px` });
+	}
+
+	private highlightThumbnail(index: number) {
+		this.thumbItems.forEach((item, i) => item.toggleClass('is-active', i === index));
+	}
+
 	// Scrollspy: find the last page whose top has scrolled up past the sticky
 	// header, and reflect it in the toolbar's page number — unless the user is
 	// actively typing in that field themselves.
@@ -704,6 +769,7 @@ export class SupernoteView extends FileView {
 		}
 
 		this.pageJumpInput.value = String(current + 1);
+		this.highlightThumbnail(current);
 	}
 
 	private setZoom(newScale: number) {
@@ -771,11 +837,13 @@ export class SupernoteView extends FileView {
 		this.findBarEl.show();
 		this.findInput?.inputEl.focus();
 		this.findInput?.inputEl.select();
+		this.updateThumbSidebarOffset();
 	}
 
 	private closeFindBar() {
 		this.clearFindHighlights();
 		this.findBarEl?.hide();
+		this.updateThumbSidebarOffset();
 	}
 
 	private clearFindHighlights() {

@@ -150,6 +150,62 @@ div.supernote-canvas-wrap canvas {
     font-size: var(--font-smaller);
 }
 
+.supernote-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 1em;
+}
+
+.supernote-pages {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.supernote-thumb-sidebar {
+    display: flex;
+    position: sticky;
+    align-self: flex-start;
+    flex-flow: column;
+    flex-shrink: 0;
+    width: 140px;
+    max-height: calc(100vh - 4em);
+    overflow-y: auto;
+    gap: 0.75em;
+    padding: 0.5em;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+}
+
+.supernote-thumb-item {
+    cursor: pointer;
+    text-align: center;
+    padding: 0.25em;
+    border: 2px solid transparent;
+    border-radius: var(--radius-s);
+}
+
+.supernote-thumb-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.supernote-thumb-item.is-active {
+    border-color: var(--interactive-accent);
+}
+
+.supernote-thumb-img {
+    display: block;
+    width: 100%;
+    border-radius: 2px;
+}
+
+.supernote-thumb-label {
+    display: block;
+    margin-top: 0.25em;
+    color: var(--text-muted);
+    font-size: var(--font-smaller);
+}
+
 /* Custom dictionary settings styles */
 .supernote-settings-custom-dictionary-subtitle {
 	padding: 0 0 0.75em;
