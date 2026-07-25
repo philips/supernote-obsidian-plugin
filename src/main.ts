@@ -695,6 +695,17 @@ export class SupernoteView extends FileView {
 		this.thumbSidebarEl?.toggle(this.thumbnailsVisible);
 		this.thumbToggleBtn?.toggleClass('is-active', this.thumbnailsVisible);
 		if (this.thumbnailsVisible) this.updateThumbSidebarOffset();
+
+		// Showing/hiding the sidebar changes how much horizontal room pagesEl
+		// actually has, but that's an internal flex redistribution within
+		// contentEl, not a change to contentEl's own box — the ResizeObserver
+		// driving auto-refit on window/pane resize never fires for it. Without
+		// this, a page already fit to the full width just sits there too wide
+		// once the sidebar eats into that space, spilling into horizontal
+		// scroll instead of shrinking to match.
+		if (this.fitWidthEnabled) {
+			this.applyFitWidth();
+		}
 	}
 
 	// The thumbnail sidebar is sticky below the header, not at top:0 like the
