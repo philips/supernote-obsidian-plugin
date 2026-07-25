@@ -320,6 +320,10 @@ export class SupernoteView extends FileView {
 	private imageModeBtn: HTMLElement | null = null;
 	private textModeBtn: HTMLElement | null = null;
 
+	private headerEl: HTMLElement | null = null;
+	private pageJumpInput: HTMLInputElement | null = null;
+	private scrollUpdateScheduled = false;
+
 	private findBarEl: HTMLElement | null = null;
 	private findInput: SearchComponent | null = null;
 	private findMatchCountEl: HTMLElement | null = null;
@@ -361,6 +365,17 @@ export class SupernoteView extends FileView {
 			const factor = evt.deltaY < 0 ? 1.1 : 1 / 1.1;
 			this.setZoom(this.zoomScale * factor);
 		}, { passive: false });
+
+		// Keep the toolbar's page number in sync with whatever page is actually
+		// scrolled into view, rAF-throttled since scroll fires very frequently.
+		this.registerDomEvent(this.contentEl, 'scroll', () => {
+			if (this.scrollUpdateScheduled) return;
+			this.scrollUpdateScheduled = true;
+			requestAnimationFrame(() => {
+				this.scrollUpdateScheduled = false;
+				this.updateCurrentPageIndicator();
+			});
+		}, { passive: true });
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -426,9 +441,9 @@ export class SupernoteView extends FileView {
 
 		// Sticky header so the toolbar (and find bar, when open) stay visible
 		// while scrolling through a long note instead of scrolling away with it.
-		const header = container.createEl("div", { cls: 'supernote-header' });
-		this.buildToolbar(header, images.length);
-		this.buildFindBar(header);
+		this.headerEl = container.createEl("div", { cls: 'supernote-header' });
+		this.buildToolbar(this.headerEl, images.length);
+		this.buildFindBar(this.headerEl);
 
 		this.pagesEl = container.createEl("div", { cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
@@ -495,6 +510,8 @@ export class SupernoteView extends FileView {
 				});
 			}
 		}
+
+		this.updateCurrentPageIndicator();
 	}
 
 	private async renderPage(state: PageRenderState, scale: number): Promise<void> {
@@ -517,6 +534,7 @@ export class SupernoteView extends FileView {
 	}
 
 	private buildToolbar(container: HTMLElement, pageCount: number) {
+		this.pageJumpInput = null;
 		const toolbar = container.createEl('div', { cls: 'supernote-toolbar' });
 
 		const zoomGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
@@ -541,8 +559,9 @@ export class SupernoteView extends FileView {
 			jumpGroup.createEl('span', { text: 'Page', cls: 'supernote-page-jump-label' });
 			const pageInput = jumpGroup.createEl('input', {
 				cls: 'supernote-page-jump-input',
-				attr: { type: 'number', min: '1', max: String(pageCount) },
+				attr: { type: 'number', min: '1', max: String(pageCount), value: '1' },
 			});
+			this.pageJumpInput = pageInput;
 			jumpGroup.createEl('span', { text: `/ ${pageCount}`, cls: 'supernote-page-jump-total' });
 
 			const jumpToPage = () => {
@@ -574,6 +593,28 @@ export class SupernoteView extends FileView {
 		this.textModeBtn?.toggleClass('is-active', this.layerMode === 'text');
 	}
 
+	// Scrollspy: find the last page whose top has scrolled up past the sticky
+	// header, and reflect it in the toolbar's page number — unless the user is
+	// actively typing in that field themselves.
+	private updateCurrentPageIndicator() {
+		if (!this.pageJumpInput || this.pageStates.length === 0) return;
+		if (document.activeElement === this.pageJumpInput) return;
+
+		const headerHeight = this.headerEl?.offsetHeight ?? 0;
+		const threshold = this.contentEl.getBoundingClientRect().top + headerHeight + 1;
+
+		let current = 0;
+		for (let i = 0; i < this.pageStates.length; i++) {
+			if (this.pageStates[i].pageContainer.getBoundingClientRect().top <= threshold) {
+				current = i;
+			} else {
+				break;
+			}
+		}
+
+		this.pageJumpInput.value = String(current + 1);
+	}
+
 	private setZoom(newScale: number) {
 		this.zoomScale = Math.min(5, Math.max(0.25, newScale));
 		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
@@ -597,6 +638,7 @@ export class SupernoteView extends FileView {
 			state.canvasWrap.setCssStyles({ transform: '', transformOrigin: '' });
 		}
 		this.renderedZoomScale = targetZoom;
+		this.updateCurrentPageIndicator();
 	}
 
 	private buildFindBar(container: HTMLElement) {
