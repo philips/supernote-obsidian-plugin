@@ -428,11 +428,21 @@ export class SupernoteView extends FileView {
 			return false;
 		});
 
-		// Ctrl/Cmd+scroll to zoom; plain scroll keeps paging through the note as
-		// before. contentEl persists across file loads (onLoadFile only rebuilds
-		// its children), so this only needs registering once.
+		// Ctrl+scroll to zoom (trackpad pinch-to-zoom is reported as a wheel
+		// event with ctrlKey set, on every platform); plain scroll keeps paging
+		// through the note as before. contentEl persists across file loads
+		// (onLoadFile only rebuilds its children), so this only needs
+		// registering once.
+		//
+		// Deliberately NOT metaKey (Cmd on macOS): Cmd is also the modifier
+		// held down through a whole Cmd+Tab app switch, and a wheel event from
+		// scroll momentum/inertia that happens to fire mid-switch — nothing to
+		// do with zooming — would still carry metaKey:true and get treated as
+		// a zoom gesture. Trackpad pinch never sets metaKey, only ctrlKey, so
+		// dropping metaKey here loses nothing for the gesture this is actually
+		// meant to support.
 		this.registerDomEvent(this.contentEl, 'wheel', (evt: WheelEvent) => {
-			if (!(evt.ctrlKey || evt.metaKey)) return;
+			if (!evt.ctrlKey) return;
 			evt.preventDefault();
 
 			// Trackpads report a pinch-to-zoom gesture as a wheel event with
