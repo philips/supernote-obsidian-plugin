@@ -15,19 +15,19 @@
 	"devDependencies": {
 		"@types/color": "^3.0.6",
 		"@types/jest": "^29.5.12",
-		"@types/node": "^20.0.0",
+		"@types/node": "20.19.43",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
 		"builtin-modules": "3.3.0",
 		"esbuild": "^0.17.3",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
-		"typescript": "4.7.4"
+		"typescript": "6.0.3"
 	},
 	"dependencies": {
 		"esbuild-plugin-inline-worker": "^0.1.1",
 		"fast-png": "^7.0.1",
-		"image-js": "^0.35.6",
+		"image-js": "^1.7.0",
 		"jspdf": "^2.5.2"
 	}
 }

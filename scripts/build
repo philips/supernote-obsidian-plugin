@@ -13,12 +13,11 @@ npm install --include=dev || npm install --include=dev --ignore-scripts
 npm run build
 cd ..
 
-# supernote-typescript isn't in package.json (it's not published to npm; the
-# whole point of the submodule is to develop it alongside this plugin), so
-# npm install doesn't know about it. Symlink it in ourselves, after install:
-# npm prunes symlinks it doesn't recognize as declared dependencies, so this
-# has to happen after, not before.
+# supernote-typescript isn't in package.json (it's not published to npm - the
+# whole point of the submodule is to develop it alongside this plugin).
+# tsconfig.json and esbuild.config.mjs both point at it directly rather than
+# a node_modules symlink: npm install reaches through symlinks it finds
+# there and deletes the submodule's own node_modules, which broke this
+# script in exactly that way before this comment existed.
 npm install --include=dev
-ln -sfn ../supernote-typescript node_modules/supernote-typescript
-
 npm run build
