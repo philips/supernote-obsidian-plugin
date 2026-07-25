@@ -81,13 +81,9 @@ I personally don't accept funding or donations for this project. However, if you
 - Setup the deps
 
 ```
-git submodule init
-git submodule update
-cd supernote-typescript/
+git submodule init && git submodule update
 npm run build
-npm link
-cd ..
-npm link supernote-typescript/
+npm install
 ```
 
 - `npm i` or `yarn` to install dependencies.
