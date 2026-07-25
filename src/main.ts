@@ -5,6 +5,7 @@ import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supe
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
+import { ErrorModal } from './ErrorModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
@@ -1320,25 +1321,6 @@ class DirectConnectErrorModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.setText(`Error: ${this.error.message}. Is the Supernote connected to Wifi on IP ${this.settings.directConnectIP} and running Screen Mirroring?`);
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
-	}
-}
-
-class ErrorModal extends Modal {
-	error: Error;
-
-	constructor(app: App, error: Error) {
-		super(app);
-		this.error = error;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText(`Error: ${this.error.message}.`);
 	}
 
 	onClose() {

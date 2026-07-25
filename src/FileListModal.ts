@@ -1,6 +1,9 @@
 import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
 import { SupernotePluginSettings, IP_VALIDATION_PATTERN } from 'settings';
+import { parseDeviceDate } from './deviceDate';
+import { fetchFromDevice } from './deviceFetch';
+import { ErrorModal } from './ErrorModal';
 
 export interface SupernoteFile {
     name: string;
@@ -24,9 +27,9 @@ interface SupernoteResponse {
 // Access" HTTP server. Shared by the file-browsing modals below and by
 // ImportTodayModal, which walks the whole tree looking for today's notes.
 export async function fetchSupernoteDirectory(ip: string, path: string): Promise<SupernoteFile[]> {
-    const response = await fetch(`http://${ip}:8089${path}`);
+    const response = await fetchFromDevice(ip, path, 'Failed to load file list');
     if (!response.ok) {
-        throw new Error(`Failed to fetch file list: ${response.statusText}`);
+        throw new Error(`Failed to load file list: Supernote responded with an error (${response.statusText}).`);
     }
     const html = await response.text();
 
@@ -37,7 +40,18 @@ export async function fetchSupernoteDirectory(ip: string, path: string): Promise
     }
 
     const data: SupernoteResponse = JSON.parse(match[1]);
-    return data.fileList;
+    return data.fileList.sort(compareByDirectoryThenNameThenDate);
+}
+
+function compareByDirectoryThenNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+
+    const nameCompare = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    if (nameCompare !== 0) return nameCompare;
+
+    const aDate = parseDeviceDate(a.date);
+    const bDate = parseDeviceDate(b.date);
+    return (aDate?.getTime() ?? 0) - (bDate?.getTime() ?? 0);
 }
 
 export abstract class FileListModal extends SuggestModal<SupernoteFile> {
@@ -55,8 +69,8 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
         try {
             this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath);
         } catch (err) {
-            new Notice(`Failed to load files: ${err instanceof Error ? err.message : String(err)}`);
             this.close();
+            new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
         }
     }
 
@@ -125,9 +139,9 @@ export class DownloadListModal extends FileListModal {
             this.open();
         } else {
             try {
-                const fileResponse = await fetch(`http://${this.settings.directConnectIP}:8089${file.uri}`);
+                const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file');
                 if (!fileResponse.ok) {
-                    throw new Error(`Failed to download file: ${fileResponse.statusText}`);
+                    throw new Error(`Failed to download file: Supernote responded with an error (${fileResponse.statusText}).`);
                 }
 
                 const buffer = await fileResponse.arrayBuffer();
@@ -140,7 +154,7 @@ export class DownloadListModal extends FileListModal {
                     view.editor.replaceSelection(link);
                 }
             } catch (err) {
-                new Notice(`Failed to download file: ${err instanceof Error ? err.message : String(err)}`);
+                new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
             }
         }
     }
@@ -204,8 +218,6 @@ export class UploadListModal extends FileListModal {
                     return;
                 }
 
-                const uploadURL = `http://${this.settings.directConnectIP}:8089${this.currentPath}`;
-
                 // Create FormData with file payload
                 // Generate filename with .txt extension for markdown files
                 const uploadFilename = this.currentFile.extension === "md"
@@ -224,7 +236,7 @@ export class UploadListModal extends FileListModal {
                 // Use modified filename in the FormData
                 formData.append('file', new Blob([fileContent], { type: mimeType }), uploadFilename);
 
-                const response = await fetch(uploadURL, {
+                const response = await fetchFromDevice(this.settings.directConnectIP, this.currentPath, 'Upload failed', {
                     method: "POST",
                     mode: 'cors',
                     body: formData
@@ -238,8 +250,7 @@ export class UploadListModal extends FileListModal {
                 new Notice(`Successfully uploaded ${uploadFilename} to Supernote`);
                 this.close();
             } catch (err) {
-                new Notice(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
-                console.error('Upload error:', err);
+                new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
             }
         } else if (file.isDirectory) {
             // Navigate into directory using parent behavior
