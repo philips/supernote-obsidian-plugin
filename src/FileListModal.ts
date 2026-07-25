@@ -38,10 +38,12 @@ export async function fetchSupernoteDirectory(ip: string, path: string): Promise
     }
 
     const data: SupernoteResponse = JSON.parse(match[1]);
-    return data.fileList.sort(compareByNameThenDate);
+    return data.fileList.sort(compareByDirectoryThenNameThenDate);
 }
 
-function compareByNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
+function compareByDirectoryThenNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+
     const nameCompare = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
     if (nameCompare !== 0) return nameCompare;
 
