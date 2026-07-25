@@ -678,8 +678,10 @@ export class SupernoteView extends FileView {
 		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
 		zoomResetBtn.addEventListener('click', () => this.setZoom(1));
 		this.fitWidthBtn.addEventListener('click', () => {
-			this.fitWidthEnabled = true;
-			this.applyFitWidth();
+			this.fitWidthEnabled = !this.fitWidthEnabled;
+			if (this.fitWidthEnabled) {
+				this.applyFitWidth();
+			}
 			this.updateFitWidthButton();
 		});
 		this.updateFitWidthButton();
