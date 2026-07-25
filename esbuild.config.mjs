@@ -1,7 +1,11 @@
 import esbuild from "esbuild";
 import process from "process";
+import path from "path";
+import { fileURLToPath } from "url";
 import builtins from "builtin-modules";
 import inlineWorkerPlugin from "esbuild-plugin-inline-worker";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const banner =
 `/*
@@ -18,7 +22,12 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	alias: {
-		'supernote-typescript': 'supernote-typescript'
+		// supernote-typescript is a git submodule developed alongside this
+		// plugin, not an npm dependency (see CLAUDE.md) - point straight at
+		// it rather than through a node_modules symlink, which npm install
+		// prunes/reaches through and deletes the submodule's own
+		// node_modules.
+		'supernote-typescript': path.join(__dirname, 'supernote-typescript'),
 	},
 	bundle: true,
 	plugins: [inlineWorkerPlugin()],

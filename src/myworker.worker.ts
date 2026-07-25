@@ -2,6 +2,7 @@ import { installAtPolyfill } from 'polyfills';
 installAtPolyfill();
 
 import { SupernoteX, toImage } from 'supernote-typescript';
+import { encodeDataURL } from 'image-js';
 
 export { };
 
@@ -24,13 +25,7 @@ self.onmessage = async (e: MessageEvent<SupernoteWorkerMessage>) => {
         if (type === 'convert') {
             const results = await toImage(note, pageNumbers);
             // Convert canvas/images to data URLs before sending
-            const dataUrls = results.map(result => {
-                if (result && typeof result.toDataURL === 'function') {
-                    return result.toDataURL();
-                }
-                console.error('Result is not a canvas or does not support toDataURL');
-                return null;
-            });
+            const dataUrls = results.map(result => encodeDataURL(result));
 
             self.postMessage({
                 type: 'result',

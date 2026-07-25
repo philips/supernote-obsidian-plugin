@@ -1,13 +1,23 @@
 #!/bin/sh
+set -e
 
 git submodule init
 git submodule update
+
 cd supernote-typescript/
 git clean -x -f -d
-npm install --include=dev
+# v8-profiler-next (test-only) needs a native toolchain to compile; if that's
+# not available, fall back to --ignore-scripts. The library build itself
+# (tsc) doesn't need it, only `npm test` does.
+npm install --include=dev || npm install --include=dev --ignore-scripts
 npm run build
-npm link
 cd ..
-npm link supernote-typescript/
+
+# supernote-typescript isn't in package.json (it's not published to npm - the
+# whole point of the submodule is to develop it alongside this plugin).
+# tsconfig.json and esbuild.config.mjs both point at it directly rather than
+# a node_modules symlink: npm install reaches through symlinks it finds
+# there and deletes the submodule's own node_modules, which broke this
+# script in exactly that way before this comment existed.
 npm install --include=dev
 npm run build

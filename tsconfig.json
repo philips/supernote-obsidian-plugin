@@ -1,29 +1,32 @@
 {
   "compilerOptions": {
+    "ignoreDeprecations": "6.0",
     "baseUrl": "./src/",
     "paths": {
-      "supernote-typescript": ["../supernote-typescript/src/"]
+      // supernote-typescript is a git submodule (see CLAUDE.md), not an npm
+      // dependency - point at its compiled output directly rather than a
+      // node_modules symlink, which npm install prunes/reaches through and
+      // deletes the submodule's own node_modules.
+      "supernote-typescript": ["../supernote-typescript/lib"]
     },
     "inlineSourceMap": true,
     "inlineSources": true,
     "module": "ESNext",
-    "target": "ES6",
+    "target": "ES2022",
     "allowJs": true,
     "allowSyntheticDefaultImports": true,
     "noImplicitAny": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "importHelpers": true,
     "isolatedModules": true,
     "strictNullChecks": true,
     "lib": [
       "DOM",
-      "ES5",
-      "ES6",
-      "ES7",
+      "ES2022",
       "DOM.Iterable"
     ]
   },
-  "exclude": [
-    "supernote-typescript/tests/*.ts"
+  "include": [
+    "src/**/*.ts"
   ]
 }

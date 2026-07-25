@@ -48,7 +48,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
             const data: SupernoteResponse = JSON.parse(match[1]);
             this.files = data.fileList;
         } catch (err) {
-            new Notice(`Failed to load files: ${err.message}`);
+            new Notice(`Failed to load files: ${err instanceof Error ? err.message : String(err)}`);
             this.close();
         }
     }
@@ -63,13 +63,13 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     }
 
     renderSuggestion(file: SupernoteFile, el: HTMLElement) {
-        const container = el.createDiv({ cls: "suggestion-item" });
-
-        // Add directory icon or file icon
-        const iconEl = container.createSpan({ cls: "suggestion-icon" });
+        // `el` is already the `.suggestion-item` row created by SuggestModal;
+        // rendering into a nested `.suggestion-item` div collapses the
+        // clickable/hoverable area to just the icon in some themes.
+        const iconEl = el.createSpan({ cls: "suggestion-icon" });
         iconEl.textContent = file.isDirectory ? "📁" : "📄";
 
-        const contentEl = container.createDiv({ cls: "suggestion-content" });
+        const contentEl = el.createDiv({ cls: "suggestion-content" });
         contentEl.createDiv({ text: file.name, cls: "suggestion-title" });
 
         if (!file.isDirectory) {
@@ -133,7 +133,7 @@ export class DownloadListModal extends FileListModal {
                     view.editor.replaceSelection(link);
                 }
             } catch (err) {
-                new Notice(`Failed to download file: ${err.message}`);
+                new Notice(`Failed to download file: ${err instanceof Error ? err.message : String(err)}`);
             }
         }
     }
@@ -168,16 +168,15 @@ export class UploadListModal extends FileListModal {
 
     override renderSuggestion(file: SupernoteFile, el: HTMLElement) {
         if (file.name === '[UPLOAD HERE]') {
-            el.createDiv({ cls: "suggestion-item upload-here" }, container => {
-                container.createSpan({
-                    cls: "suggestion-icon",
-                    text: "⬆️"
-                });
-                const content = container.createDiv({ cls: "suggestion-content" });
-                content.createDiv({
-                    cls: "suggestion-title",
-                    text: "Upload to current directory"
-                });
+            el.addClass("upload-here");
+            el.createSpan({
+                cls: "suggestion-icon",
+                text: "⬆️"
+            });
+            const content = el.createDiv({ cls: "suggestion-content" });
+            content.createDiv({
+                cls: "suggestion-title",
+                text: "Upload to current directory"
             });
         } else {
             super.renderSuggestion(file, el);
@@ -232,7 +231,7 @@ export class UploadListModal extends FileListModal {
                 new Notice(`Successfully uploaded ${uploadFilename} to Supernote`);
                 this.close();
             } catch (err) {
-                new Notice(`Upload failed: ${err.message}`);
+                new Notice(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
                 console.error('Upload error:', err);
             }
         } else if (file.isDirectory) {
