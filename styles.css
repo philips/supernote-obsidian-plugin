@@ -82,6 +82,11 @@ div.supernote-canvas-wrap canvas {
     z-index: 10;
     background: var(--background-primary);
     padding-bottom: 0.5em;
+    /* Guards against a subpixel seam at the sticky boundary letting page
+       content peek through by a fraction of a pixel — page dimensions come
+       from fractional zoom/scale math, so exact-pixel alignment isn't
+       guaranteed. */
+    box-shadow: 0 1px 0 0 var(--background-primary);
 }
 
 .supernote-toolbar {

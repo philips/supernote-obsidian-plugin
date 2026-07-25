@@ -458,6 +458,7 @@ export class SupernoteView extends FileView {
 		// Sticky header so the toolbar (and find bar, when open) stay visible
 		// while scrolling through a long note instead of scrolling away with it.
 		this.headerEl = container.createEl("div", { cls: 'supernote-header' });
+		this.pullHeaderFlushWithContent(this.headerEl);
 		this.buildToolbar(this.headerEl, images.length);
 		this.buildFindBar(this.headerEl);
 		this.updateThumbSidebarOffset();
@@ -556,6 +557,32 @@ export class SupernoteView extends FileView {
 
 		const hasTextLayer = await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport);
 		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
+	}
+
+	// Obsidian's .view-content has its own top/left/right padding, which left
+	// a gap between the pane's own header and this sticky toolbar — and,
+	// since `position: sticky` sticks relative to the padding edge of its
+	// scrolling ancestor, having the header sit inside that padding (instead
+	// of flush against the true top of the scrollport) is also the likely
+	// cause of page content occasionally rendering through/under it while
+	// scrolling. Cancel the padding out with a matching negative margin
+	// (computed at runtime so this doesn't hardcode a theme's padding value)
+	// and re-add it as the header's own padding, so it reads flush against
+	// the pane header while the toolbar's contents keep the same inset.
+	private pullHeaderFlushWithContent(header: HTMLElement) {
+		const contentStyle = getComputedStyle(this.contentEl);
+		const topPad = contentStyle.paddingTop || '0px';
+		const leftPad = contentStyle.paddingLeft || '0px';
+		const rightPad = contentStyle.paddingRight || '0px';
+
+		header.setCssStyles({
+			marginTop: `-${topPad}`,
+			marginLeft: `-${leftPad}`,
+			marginRight: `-${rightPad}`,
+			paddingTop: topPad,
+			paddingLeft: leftPad,
+			paddingRight: rightPad,
+		});
 	}
 
 	private buildToolbar(container: HTMLElement, pageCount: number) {
