@@ -62,12 +62,7 @@ export class WorkerPool {
 
     private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<any[]> {
         return new Promise((resolve, reject) => {
-            const startTime = Date.now();
-
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
-                const duration = Date.now() - startTime;
-                //console.log(`Processed pages ${pageNumbers.join(',')} in ${duration}ms`);
-
                 if (e.data.error) {
                     reject(new Error(e.data.error));
                 } else {
@@ -190,9 +185,9 @@ class VaultWriter {
 			converter.terminate();
 		}
 
-		let imgs: TFile[] = [];
+		const imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
-			let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
 			const buffer = dataUrlToBuffer(images[i]);
 			imgs.push(await this.app.vault.createBinary(filename, buffer));
 		}
@@ -201,14 +196,14 @@ class VaultWriter {
 
 	async attachMarkdownFile(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(new Uint8Array(note));
+		const sn = new SupernoteX(new Uint8Array(note));
 
 		this.writeMarkdownFile(file, sn, null);
 	}
 
 	async attachNoteFiles(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(new Uint8Array(note));
+		const sn = new SupernoteX(new Uint8Array(note));
 
 		const imgs = await this.writeImageFiles(file, sn);
 		this.writeMarkdownFile(file, sn, imgs);
@@ -216,7 +211,7 @@ class VaultWriter {
 
 	async exportToPDF(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(new Uint8Array(note));
+		const sn = new SupernoteX(new Uint8Array(note));
 
 		// Create PDF document
 		const pdf = new jsPDF({
@@ -252,7 +247,7 @@ class VaultWriter {
 		}
 
 		// Generate filename and save
-		let filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
 		const pdfOutput = pdf.output('arraybuffer');
 		await this.app.vault.createBinary(filename, pdfOutput);
 	}
@@ -286,7 +281,7 @@ export class SupernoteView extends FileView {
 		container.createEl("h1", { text: file.name });
 
 		const note = await this.app.vault.readBinary(file);
-		let sn = new SupernoteX(new Uint8Array(note));
+		const sn = new SupernoteX(new Uint8Array(note));
 		let images: string[] = [];
 
 		const converter = new ImageConverter();
@@ -332,7 +327,7 @@ export class SupernoteView extends FileView {
 			atoc.createEl("h2", { text: "Table of contents" });
 			const ul = container.createEl("ul");
 			for (let i = 0; i < images.length; i++) {
-				const a = container.createEl("li").createEl("a");
+				const a = ul.createEl("li").createEl("a");
 				a.href = `#page${i + 1}`
 				a.text = `Page ${i + 1}`
 			}
@@ -450,7 +445,7 @@ export default class SupernotePlugin extends Plugin {
 			name: 'Insert a Supernote screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				// generate a unique filename for the mirror based on the current note path
-				let ts = generateTimestamp();
+				const ts = generateTimestamp();
 				const f = this.app.workspace.activeEditor?.file?.basename || '';
 				const filename = await this.app.fileManager.getAvailablePathForAttachment(`supernote-mirror-${f}-${ts}.png`);
 
@@ -458,7 +453,7 @@ export default class SupernotePlugin extends Plugin {
 					if (this.settings.directConnectIP.length == 0) {
 						throw new Error("IP is unset, please set in Supernote plugin settings")
 					}
-					let image = await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
+					const image = await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
 
 					const file = await this.app.vault.createBinary(filename, encode(image).buffer as ArrayBuffer);
 					const path = this.app.workspace.activeEditor?.file?.path;
