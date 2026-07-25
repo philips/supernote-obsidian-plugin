@@ -151,6 +151,14 @@ div.supernote-canvas-wrap canvas {
     font-size: var(--font-smaller);
 }
 
+.supernote-load-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5em;
+    padding: 1em 0;
+}
+
 .supernote-body {
     display: flex;
     align-items: flex-start;

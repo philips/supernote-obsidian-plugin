@@ -10,6 +10,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
     noteImageMaxDim: number;
+    deferRenderOnStartup: boolean;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -17,6 +18,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     invertColorsWhenDark: true,
     showExportButtons: true,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
+    deferRenderOnStartup: false,
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -95,6 +97,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     this.plugin.settings.noteImageMaxDim = value;
                     await this.plugin.saveSettings();
                 })
+            );
+
+        new Setting(containerEl)
+            .setName('Defer rendering restored notes on startup')
+            .setDesc(
+                'When Obsidian reopens .note files left open from a previous session, show a "Load note" button instead of rendering immediately. Large notes can otherwise make startup noticeably slow, especially on mobile. Notes you open yourself during the session still render right away.',
+            )
+            .addToggle((text) =>
+                text
+                    .setValue(this.plugin.settings.deferRenderOnStartup)
+                    .onChange(async (value) => {
+                        this.plugin.settings.deferRenderOnStartup = value;
+                        await this.plugin.saveSettings();
+                    }),
             );
 
 		// Add custom dictionary settings to the settings tab

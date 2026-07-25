@@ -519,6 +519,37 @@ export class SupernoteView extends FileView {
 		// (unrelated) pageStates.
 		this.findRequestId++;
 
+		// Obsidian reconstructs every leaf left open from the previous
+		// session while restoring the saved workspace layout, calling
+		// onLoadFile() for each even if the user never asked to see it again
+		// this session — for a large note that means real rasterization work
+		// nobody wanted, which can stall startup or (on mobile) overwhelm the
+		// whole device. workspace.layoutReady is false only during that
+		// restore, so it's a reliable way to tell "being reopened by
+		// Obsidian" apart from "opened by the user" (by the time the user can
+		// click anything, layout restore has already finished).
+		if (this.settings.deferRenderOnStartup && !this.app.workspace.layoutReady) {
+			this.renderLoadPlaceholder(container, file);
+			return;
+		}
+
+		await this.renderNote(container, file);
+	}
+
+	private renderLoadPlaceholder(container: HTMLElement, file: TFile): void {
+		const placeholder = container.createEl('div', { cls: 'supernote-load-placeholder' });
+		placeholder.createEl('p', { text: `"${file.basename}" was left open from your last session.` });
+		const loadBtn = placeholder.createEl('button', {
+			text: 'Load note',
+			cls: 'mod-cta',
+		});
+		loadBtn.addEventListener('click', () => {
+			container.empty();
+			void this.renderNote(container, file);
+		});
+	}
+
+	private async renderNote(container: HTMLElement, file: TFile): Promise<void> {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 		let images: string[] = [];
