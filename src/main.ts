@@ -333,6 +333,16 @@ export class SupernoteView extends FileView {
 	}
 
 	async onOpen(): Promise<void> {
+		// Obsidian's .view-content has its own top padding, leaving a gap
+		// above the sticky toolbar. A previous attempt cancelled it with a
+		// negative margin on the (sticky) header itself, which fought with
+		// `position: sticky`'s own positioning math and let page content
+		// render through/above the stuck toolbar instead. Zeroing the
+		// ancestor's padding directly avoids combining sticky with a negative
+		// margin at all; .supernote-header's own (positive, sticky-safe)
+		// padding-top puts a little breathing room back.
+		this.contentEl.setCssStyles({ paddingTop: '0' });
+
 		this.scope?.register(['Mod'], 'f', (evt) => {
 			evt.preventDefault();
 			this.toggleFindBar();
@@ -458,7 +468,6 @@ export class SupernoteView extends FileView {
 		// Sticky header so the toolbar (and find bar, when open) stay visible
 		// while scrolling through a long note instead of scrolling away with it.
 		this.headerEl = container.createEl("div", { cls: 'supernote-header' });
-		this.pullHeaderFlushWithContent(this.headerEl);
 		this.buildToolbar(this.headerEl, images.length);
 		this.buildFindBar(this.headerEl);
 		this.updateThumbSidebarOffset();
@@ -557,32 +566,6 @@ export class SupernoteView extends FileView {
 
 		const hasTextLayer = await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport);
 		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
-	}
-
-	// Obsidian's .view-content has its own top/left/right padding, which left
-	// a gap between the pane's own header and this sticky toolbar — and,
-	// since `position: sticky` sticks relative to the padding edge of its
-	// scrolling ancestor, having the header sit inside that padding (instead
-	// of flush against the true top of the scrollport) is also the likely
-	// cause of page content occasionally rendering through/under it while
-	// scrolling. Cancel the padding out with a matching negative margin
-	// (computed at runtime so this doesn't hardcode a theme's padding value)
-	// and re-add it as the header's own padding, so it reads flush against
-	// the pane header while the toolbar's contents keep the same inset.
-	private pullHeaderFlushWithContent(header: HTMLElement) {
-		const contentStyle = getComputedStyle(this.contentEl);
-		const topPad = contentStyle.paddingTop || '0px';
-		const leftPad = contentStyle.paddingLeft || '0px';
-		const rightPad = contentStyle.paddingRight || '0px';
-
-		header.setCssStyles({
-			marginTop: `-${topPad}`,
-			marginLeft: `-${leftPad}`,
-			marginRight: `-${rightPad}`,
-			paddingTop: topPad,
-			paddingLeft: leftPad,
-			paddingRight: rightPad,
-		});
 	}
 
 	private buildToolbar(container: HTMLElement, pageCount: number) {
