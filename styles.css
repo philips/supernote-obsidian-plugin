@@ -76,6 +76,14 @@ div.supernote-canvas-wrap canvas {
     background: rgba(255, 145, 0, 0.7);
 }
 
+.supernote-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--background-primary);
+    padding-bottom: 0.5em;
+}
+
 .supernote-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -126,9 +134,6 @@ div.supernote-canvas-wrap canvas {
 }
 
 .supernote-find-bar {
-    position: sticky;
-    top: 0;
-    z-index: 10;
     display: flex;
     align-items: center;
     gap: 0.5em;
@@ -136,7 +141,6 @@ div.supernote-canvas-wrap canvas {
     background: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-s);
-    margin-bottom: 0.5em;
     width: fit-content;
 }
 

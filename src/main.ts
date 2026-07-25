@@ -424,8 +424,11 @@ export class SupernoteView extends FileView {
 			});
 		}
 
-		this.buildToolbar(container, images.length);
-		this.buildFindBar(container);
+		// Sticky header so the toolbar (and find bar, when open) stay visible
+		// while scrolling through a long note instead of scrolling away with it.
+		const header = container.createEl("div", { cls: 'supernote-header' });
+		this.buildToolbar(header, images.length);
+		this.buildFindBar(header);
 
 		this.pagesEl = container.createEl("div", { cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
