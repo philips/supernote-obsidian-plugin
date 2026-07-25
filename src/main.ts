@@ -309,11 +309,16 @@ export class SupernoteView extends FileView {
 
 	private pdfjsLib: any;
 	private pageStates: PageRenderState[] = [];
+	private pagesEl: HTMLElement | null = null;
 
 	private zoomScale = 1;
 	private renderedZoomScale = 1;
 	private zoomDebounceTimer: number | undefined;
 	private zoomLabelEl: HTMLElement | null = null;
+
+	private layerMode: 'image' | 'text' = 'image';
+	private imageModeBtn: HTMLElement | null = null;
+	private textModeBtn: HTMLElement | null = null;
 
 	private findBarEl: HTMLElement | null = null;
 	private findInput: SearchComponent | null = null;
@@ -419,55 +424,18 @@ export class SupernoteView extends FileView {
 			});
 		}
 
-		this.buildZoomBar(container);
+		this.buildToolbar(container, images.length);
 		this.buildFindBar(container);
 
-		if (images.length > 1 && this.settings.showTOC) {
-			const atoc = container.createEl("a");
-			atoc.id = "toc";
-			atoc.createEl("h2", { text: "Table of contents" });
-			const ul = container.createEl("ul");
-			for (let i = 0; i < images.length; i++) {
-				const a = ul.createEl("li").createEl("a");
-				a.href = `#page${i + 1}`
-				a.text = `Page ${i + 1}`
-			}
-		}
-
-		const pagesEl = container.createEl("div", { cls: 'supernote-pages' });
+		this.pagesEl = container.createEl("div", { cls: 'supernote-pages' });
+		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
 
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
 
-			const pageContainer = pagesEl.createEl("div", {
+			const pageContainer = this.pagesEl.createEl("div", {
 				cls: 'page-container',
 			})
-
-			if (images.length > 1 && this.settings.showTOC) {
-				const a = pageContainer.createEl("a");
-				a.id = `page${i + 1}`;
-				a.href = "#toc";
-				a.createEl("h3", { text: `Page ${i + 1}` });
-			}
-
-			// Show the text of the page, if any
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				let text;
-
-				// If Collapse Text setting is enabled, place the text into an HTML `details` element
-				if (this.settings.collapseRecognizedText) {
-					text = pageContainer.createEl('details', {
-						text: '\n' + processSupernoteText(sn.pages[i].text,this.settings),
-						cls: 'page-recognized-text',
-					});
-					text.createEl('summary', { text: `Page ${i + 1} Recognized Text` });
-				} else {
-					text = pageContainer.createEl('div', {
-						text: processSupernoteText(sn.pages[i].text, this.settings),
-						cls: 'page-recognized-text',
-					});
-				}
-			}
 
 			// Render the page through pdf.js against the in-memory PDF built above,
 			// instead of dropping in the raw page image.
@@ -545,16 +513,62 @@ export class SupernoteView extends FileView {
 		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
 	}
 
-	private buildZoomBar(container: HTMLElement) {
-		const zoomBar = container.createEl('div', { cls: 'supernote-zoom-bar' });
-		const zoomOutBtn = zoomBar.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
-		this.zoomLabelEl = zoomBar.createEl('span', { cls: 'supernote-zoom-label', text: '100%' });
-		const zoomInBtn = zoomBar.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
-		const zoomResetBtn = zoomBar.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
+	private buildToolbar(container: HTMLElement, pageCount: number) {
+		const toolbar = container.createEl('div', { cls: 'supernote-toolbar' });
+
+		const zoomGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
+		this.zoomLabelEl = zoomGroup.createEl('span', { cls: 'supernote-zoom-label', text: '100%' });
+		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
+		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
 
 		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
 		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
 		zoomResetBtn.addEventListener('click', () => this.setZoom(1));
+
+		const layerGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+		this.imageModeBtn = layerGroup.createEl('button', { text: 'Image', cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
+		this.textModeBtn = layerGroup.createEl('button', { text: 'Text', cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text' } });
+		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
+		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
+		this.updateLayerModeButtons();
+
+		if (pageCount > 1) {
+			const jumpGroup = toolbar.createEl('div', { cls: 'supernote-toolbar-group' });
+			jumpGroup.createEl('span', { text: 'Page', cls: 'supernote-page-jump-label' });
+			const pageInput = jumpGroup.createEl('input', {
+				cls: 'supernote-page-jump-input',
+				attr: { type: 'number', min: '1', max: String(pageCount) },
+			});
+			jumpGroup.createEl('span', { text: `/ ${pageCount}`, cls: 'supernote-page-jump-total' });
+
+			const jumpToPage = () => {
+				const requested = Number(pageInput.value);
+				if (!Number.isFinite(requested)) return;
+				const target = Math.min(pageCount, Math.max(1, Math.round(requested)));
+				pageInput.value = String(target);
+				this.pageStates[target - 1]?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+			};
+
+			pageInput.addEventListener('keydown', (evt: KeyboardEvent) => {
+				if (evt.key === 'Enter') {
+					evt.preventDefault();
+					jumpToPage();
+				}
+			});
+			pageInput.addEventListener('blur', jumpToPage);
+		}
+	}
+
+	private setLayerMode(mode: 'image' | 'text') {
+		this.layerMode = mode;
+		this.pagesEl?.toggleClass('supernote-mode-text', mode === 'text');
+		this.updateLayerModeButtons();
+	}
+
+	private updateLayerModeButtons() {
+		this.imageModeBtn?.toggleClass('is-active', this.layerMode === 'image');
+		this.textModeBtn?.toggleClass('is-active', this.layerMode === 'text');
 	}
 
 	private setZoom(newScale: number) {
