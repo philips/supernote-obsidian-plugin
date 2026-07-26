@@ -31,6 +31,10 @@ export class ImportTodayModal extends Modal {
     async onOpen() {
         const { contentEl } = this;
         contentEl.empty();
+        // Scopes styles.css's button.mod-cta display:block rule to just this
+        // modal, instead of it applying to every CTA button in Obsidian (see
+        // issue #74 — an unscoped rule shifted button text down app-wide).
+        contentEl.addClass('supernote-import-modal');
         contentEl.createEl('h2', { text: 'Import supernote pages' });
         const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
 

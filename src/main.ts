@@ -461,6 +461,11 @@ export class SupernoteView extends FileView {
 	}
 
 	async onOpen(): Promise<void> {
+		// Scopes styles.css's button.mod-cta display:block rule to just this
+		// view, instead of it applying to every CTA button in Obsidian (see
+		// issue #74 — an unscoped rule shifted button text down app-wide).
+		this.contentEl.addClass('supernote-view-content');
+
 		// Obsidian's .view-content has its own top padding, leaving a gap
 		// above the sticky toolbar. A previous attempt cancelled it with a
 		// negative margin on the (sticky) header itself, which fought with
