@@ -78,10 +78,14 @@ npm test          # vitest run
 
 ## Manifest & versioning
 
-- `manifest.json` / `manifest-beta.json`: keep `minAppVersion` accurate to
-  what the code actually calls — `eslint-plugin-obsidianmd`'s
-  `no-unsupported-api` rule checks this against `@since` tags in Obsidian's
-  own type declarations and will error on a mismatch.
+- `manifest.json`: keep `minAppVersion` accurate to what the code actually
+  calls — `eslint-plugin-obsidianmd`'s `no-unsupported-api` rule checks this
+  against `@since` tags in Obsidian's own type declarations and will error on
+  a mismatch.
+- There's no separate beta manifest. BRAT and Obsidian's updater both fetch
+  `manifest.json` from the release assets, not the repo, so beta releases
+  just tag a `manifest.json` version with a semver pre-release suffix (e.g.
+  `3.0.2-beta.1`) — see the "Releasing" section in `README.md`.
 - `npm run version` bumps `manifest.json` and appends to `versions.json`
   (`version-bump.mjs`), skipping the write if that version is already
   present — don't hand-edit `versions.json` (a hand-edit is exactly what

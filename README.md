@@ -97,4 +97,42 @@ npm install
 - Create a vault called "SupernoteTest"
 - Install the supernote plugin from the community store
 - Run `npm run push-android` to push main.js to the device
-- Run "Reload App without Saving" on Obsidian command palette 
+- Run "Reload App without Saving" on Obsidian command palette
+
+**Releasing**
+
+Pushing a tag is the only manual step; [`.github/workflows/release.yml`](.github/workflows/release.yml)
+builds the plugin and publishes the GitHub release with `main.js`, `manifest.json` and
+`styles.css` attached. [BRAT](https://tfthacker.com/BRAT) and Obsidian's own updater both
+fetch `manifest.json` straight from the release assets (not from the repo), so the tag must
+exactly match the version in `manifest.json` at that commit — the workflow fails instead of
+publishing if it doesn't.
+
+The tag's format decides the release channel:
+
+- A plain `X.Y.Z` tag is published as a full/latest release.
+- A tag with a semver pre-release suffix, e.g. `X.Y.Z-beta.1`, is published as a GitHub
+  pre-release. Obsidian's updater only ever looks at the "latest" (non-prerelease) release,
+  so this is invisible to regular Community Store users; BRAT is what beta testers use to
+  pick it up.
+
+To cut a stable release:
+
+```
+npm version <major|minor|patch>
+git push --follow-tags
+```
+
+To cut a beta release:
+
+```
+npm version prerelease --preid=beta
+git push --follow-tags
+```
+
+Running `npm version prerelease --preid=beta` again bumps `3.0.2-beta.0` to
+`3.0.2-beta.1`, etc. To promote a beta that's already been tested to a full release, drop
+the suffix with `npm version patch` (or `npm version <exact version>` to match the beta
+exactly) and tag/push as usual — the same tag can't be reused for two different releases,
+so promoting a beta means cutting a new stable tag on top of it rather than editing the old
+pre-release in place.
