@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
+import { App, Modal, TFile, TAbstractFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon, Platform, Notice, getFrontMatterInfo, parseYaml, stringifyYaml } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -9,6 +9,7 @@ import { ErrorModal } from './ErrorModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
+import { computeDigest, decideAction, isPathInScope, AutoExportFrontmatter, FM_SOURCE_PATH, FM_SOURCE_DIGEST, FM_SOURCE_IMAGES, FM_OVERWRITE } from './autoExport';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -186,8 +187,6 @@ class VaultWriter {
 	}
 
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null) {
-		let content = '';
-
 		// Generate a non-conflicting filename - it has a bit of a race but that is OK
 		let filename = `${file.parent?.path}/${file.basename}.md`;
 		let i = 0;
@@ -195,7 +194,15 @@ class VaultWriter {
 			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
 		}
 
-		content = this.app.fileManager.generateMarkdownLink(file, filename);
+		const content = this.buildMarkdownBody(file, sn, imgs, filename);
+		await this.app.vault.create(filename, content);
+	}
+
+	// Shared by writeMarkdownFile() (manual export, picks a non-conflicting
+	// filename) and autoExportNote() (writes to a deterministic path so it can
+	// find/update the same file again next time).
+	private buildMarkdownBody(file: TFile, sn: SupernoteX, imgs: TFile[] | null, targetPath: string): string {
+		let content = this.app.fileManager.generateMarkdownLink(file, targetPath);
 		content += '\n';
 
 		for (let i = 0; i < sn.pages.length; i++) {
@@ -209,24 +216,15 @@ class VaultWriter {
 					alt = 'supernote-invert-dark';
 				}
 
-				const link = generateMarkdownImageEmbed(this.app, imgs[i], filename, alt);
+				const link = generateMarkdownImageEmbed(this.app, imgs[i], targetPath, alt);
 				content += `${link}\n`;
 			}
 		}
-
-		await this.app.vault.create(filename, content);
+		return content;
 	}
 
 	async writeImageFiles(basename: string, sn: SupernoteX): Promise<TFile[]> {
-		let images: string[] = [];
-
-		const converter = new ImageConverter();
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			// Clean up the worker when done
-			converter.terminate();
-		}
+		const images = await this.renderPageImages(sn);
 
 		const imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
@@ -235,6 +233,164 @@ class VaultWriter {
 			imgs.push(await this.app.vault.createBinary(filename, buffer));
 		}
 		return imgs;
+	}
+
+	// Like writeImageFiles(), but writes to deterministic filenames (so a
+	// later regenerate overwrites the same attachments in place instead of
+	// piling up "-1 2.png"-style numbered duplicates every time a .note file
+	// changes) rather than probing for a non-conflicting name.
+	private async writeImageFilesAt(basename: string, folder: string, sn: SupernoteX): Promise<TFile[]> {
+		const images = await this.renderPageImages(sn);
+
+		const imgs: TFile[] = [];
+		for (let i = 0; i < images.length; i++) {
+			const path = this.joinVaultPath(folder, `${basename}-${i + 1}.png`);
+			const buffer = dataUrlToBuffer(images[i]);
+			imgs.push(await this.writeOrOverwriteBinary(path, buffer));
+		}
+		return imgs;
+	}
+
+	private async renderPageImages(sn: SupernoteX): Promise<string[]> {
+		const converter = new ImageConverter();
+		try {
+			return await converter.convertToImages(sn);
+		} finally {
+			// Clean up the worker when done
+			converter.terminate();
+		}
+	}
+
+	private async writeOrOverwriteBinary(path: string, buffer: ArrayBuffer): Promise<TFile> {
+		const existing = this.app.vault.getFileByPath(path);
+		if (existing) {
+			await this.app.vault.modifyBinary(existing, buffer);
+			return existing;
+		}
+		return await this.app.vault.createBinary(path, buffer);
+	}
+
+	private async ensureFolderExists(path: string): Promise<void> {
+		if (path.length === 0) return;
+		if (this.app.vault.getAbstractFileByPath(path)) return;
+		// Race-tolerant: another auto-export for the same folder may have
+		// created it between the check above and this call.
+		await this.app.vault.createFolder(path).catch(() => { /* already exists */ });
+	}
+
+	// Reads whatever markdown file currently sits at `targetPath` (if any)
+	// and reports both its parsed supernote frontmatter and whether it looks
+	// like one this plugin generated at all - a file with the same basename
+	// as a .note file, but no supernote frontmatter, is left alone rather
+	// than clobbered.
+	private async readAutoExportFrontmatter(targetPath: string): Promise<{ file: TFile | null; frontmatter: AutoExportFrontmatter | null; isOurs: boolean }> {
+		const file = this.app.vault.getFileByPath(targetPath);
+		if (!file) {
+			return { file: null, frontmatter: null, isOurs: false };
+		}
+
+		const existingContent = await this.app.vault.read(file);
+		const fmInfo = getFrontMatterInfo(existingContent);
+		if (!fmInfo.exists) {
+			return { file, frontmatter: {}, isOurs: false };
+		}
+
+		const parsed = (parseYaml(fmInfo.frontmatter) ?? {}) as AutoExportFrontmatter;
+		return { file, frontmatter: parsed, isOurs: typeof parsed[FM_SOURCE_PATH] === 'string' };
+	}
+
+	private autoExportTargetFolder(notePath: string): string {
+		if (this.settings.autoExportOutputFolder.length > 0) {
+			return this.settings.autoExportOutputFolder;
+		}
+		const lastSlash = notePath.lastIndexOf('/');
+		return lastSlash === -1 ? '' : notePath.slice(0, lastSlash);
+	}
+
+	// Joins a folder (possibly '' for the vault root) with a filename without
+	// producing a leading "/" for root-level files.
+	private joinVaultPath(folder: string, name: string): string {
+		return folder.length > 0 ? `${folder}/${name}` : name;
+	}
+
+	private autoExportTargetPath(notePath: string): string {
+		const lastSlash = notePath.lastIndexOf('/');
+		const withoutNoteExt = (lastSlash === -1 ? notePath : notePath.slice(lastSlash + 1)).replace(/\.note$/i, '');
+		return this.joinVaultPath(this.autoExportTargetFolder(notePath), `${withoutNoteExt}.md`);
+	}
+
+	// Creates or updates the deterministic markdown companion (and, depending
+	// on settings.autoExportMode, image attachments) for a .note file living
+	// in a watched auto-export folder. Idempotent: a repeat call with an
+	// unchanged .note file is a no-op (see decideAction()), and a changed one
+	// is regenerated in place rather than creating a numbered duplicate.
+	async autoExportNote(file: TFile): Promise<void> {
+		const noteBuffer = await this.app.vault.readBinary(file);
+		const digest = await computeDigest(noteBuffer);
+
+		const targetPath = this.autoExportTargetPath(file.path);
+		const { file: existingFile, frontmatter: existingFrontmatter, isOurs } = await this.readAutoExportFrontmatter(targetPath);
+
+		const action = decideAction(existingFrontmatter, isOurs, digest);
+		if (action.type !== 'create' && action.type !== 'regenerate') {
+			// noop / skip-user-edited / skip-foreign-file: nothing to write.
+			return;
+		}
+
+		const folder = this.autoExportTargetFolder(file.path);
+
+		if (action.type === 'regenerate') {
+			for (const imageName of action.staleImages) {
+				const staleFile = this.app.vault.getFileByPath(this.joinVaultPath(folder, imageName));
+				if (staleFile) await this.app.fileManager.trashFile(staleFile);
+			}
+		}
+
+		await this.ensureFolderExists(folder);
+
+		const sn = new SupernoteX(new Uint8Array(noteBuffer));
+
+		let imgs: TFile[] | null = null;
+		if (this.settings.autoExportMode === 'markdown-and-images') {
+			imgs = await this.writeImageFilesAt(file.basename, folder, sn);
+		}
+
+		const body = this.buildMarkdownBody(file, sn, imgs, targetPath);
+		const frontmatterObj: AutoExportFrontmatter = {
+			[FM_SOURCE_PATH]: file.path,
+			[FM_SOURCE_DIGEST]: digest,
+			[FM_SOURCE_IMAGES]: imgs?.map(f => f.name) ?? [],
+			[FM_OVERWRITE]: existingFrontmatter?.[FM_OVERWRITE] ?? true,
+		};
+		const content = `---\n${stringifyYaml(frontmatterObj)}---\n${body}`;
+
+		if (existingFile) {
+			await this.app.vault.modify(existingFile, content);
+		} else {
+			await this.app.vault.create(targetPath, content);
+		}
+	}
+
+	// Keeps an already-auto-exported companion file findable after its source
+	// .note file is renamed/moved: relocates the .md to the new deterministic
+	// path (if the rename changes it) and updates its supernote-source-path
+	// frontmatter to match. Image attachments are left where they are - the
+	// markdown links to them were generated as vault-relative paths, not tied
+	// to the source .note's location, so they keep resolving.
+	async patchRenamedNoteSource(oldNotePath: string, newFile: TFile): Promise<void> {
+		const oldTargetPath = this.autoExportTargetPath(oldNotePath);
+		const { file: mdFile, frontmatter, isOurs } = await this.readAutoExportFrontmatter(oldTargetPath);
+		if (!mdFile || !isOurs || frontmatter?.[FM_SOURCE_PATH] !== oldNotePath) return;
+
+		const newTargetPath = this.autoExportTargetPath(newFile.path);
+		if (newTargetPath !== mdFile.path) {
+			await this.ensureFolderExists(this.autoExportTargetFolder(newFile.path));
+			await this.app.vault.rename(mdFile, newTargetPath);
+		}
+
+		await this.app.fileManager.processFrontMatter(mdFile, (fm: AutoExportFrontmatter) => {
+			fm[FM_SOURCE_PATH] = newFile.path;
+		});
 	}
 
 	async attachMarkdownFile(file: TFile) {
@@ -1181,6 +1337,17 @@ export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
 
+	// FIFO queue for auto-export: 'create'/'modify' handlers just push a
+	// reference and return, so a burst of events (e.g. Obsidian's startup
+	// replay of every already-indexed .note file, or a sync tool dropping
+	// many files at once) never blocks on rasterizing/writing synchronously.
+	// Processed one file at a time - each conversion already spins up its own
+	// WorkerPool, so running several concurrently would multiply that cost
+	// for no benefit.
+	private autoExportQueue: TFile[] = [];
+	private autoExportDraining = false;
+	private autoExportFailures: string[] = [];
+
 	async onload() {
         // Install polyfills before any other code runs
         installAtPolyfill();
@@ -1190,6 +1357,24 @@ export default class SupernotePlugin extends Plugin {
 		this.vaultWriter = vw;
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
+
+		// Registered unconditionally (not inside workspace.onLayoutReady) so
+		// that Obsidian's startup replay of 'create' for every already-
+		// indexed file - which is how a .note file that appeared while
+		// Obsidian was closed (e.g. synced in via OneDrive/Dropbox) gets
+		// caught - reaches this handler. The handler itself only enqueues; see
+		// enqueueAutoExport()/drainAutoExportQueue() for why that's safe to do
+		// this early.
+		this.registerEvent(this.app.vault.on('create', (file) => this.enqueueAutoExport(file)));
+		this.registerEvent(this.app.vault.on('modify', (file) => this.enqueueAutoExport(file)));
+		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+			if (!this.settings.autoExportEnabled) return;
+			if (!(file instanceof TFile) || file.extension !== 'note') return;
+			this.vaultWriter.patchRenamedNoteSource(oldPath, file).catch((err: unknown) => {
+				console.error(`Supernote auto-export: failed to update renamed note reference (${oldPath} -> ${file.path}):`, err);
+			});
+		}));
+		this.app.workspace.onLayoutReady(() => void this.drainAutoExportQueue());
 
 		this.addCommand({
 			id: 'attach-supernote-file-from-device',
@@ -1395,6 +1580,53 @@ export default class SupernotePlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	// Filters and enqueues a possible auto-export candidate. Deliberately does
+	// no I/O itself - called directly from vault 'create'/'modify' listeners,
+	// which may fire in a burst (startup replay, a sync tool dropping many
+	// files at once), so it just records which files need attention and
+	// returns.
+	private enqueueAutoExport(file: TAbstractFile) {
+		if (!this.settings.autoExportEnabled) return;
+		if (!(file instanceof TFile) || file.extension !== 'note') return;
+		if (!isPathInScope(file.path, this.settings.autoExportWatchFolders)) return;
+		if (this.autoExportQueue.includes(file)) return;
+
+		this.autoExportQueue.push(file);
+		void this.drainAutoExportQueue();
+	}
+
+	// Processes the queue sequentially. A no-op until the workspace layout is
+	// ready (see onload()'s call into this from workspace.onLayoutReady()) so
+	// nothing here competes with Obsidian's own startup work; enqueueAutoExport()
+	// calling this speculatively before layout-ready is harmless; it just
+	// returns immediately and the onLayoutReady callback picks the backlog up
+	// once things settle.
+	private async drainAutoExportQueue(): Promise<void> {
+		if (this.autoExportDraining) return;
+		if (!this.app.workspace.layoutReady) return;
+
+		this.autoExportDraining = true;
+		try {
+			while (this.autoExportQueue.length > 0) {
+				const file = this.autoExportQueue.shift();
+				if (!file) continue;
+				try {
+					await this.vaultWriter.autoExportNote(file);
+				} catch (err) {
+					console.error(`Supernote auto-export failed for ${file.path}:`, err);
+					this.autoExportFailures.push(file.path);
+				}
+			}
+		} finally {
+			this.autoExportDraining = false;
+		}
+
+		if (this.autoExportFailures.length > 0) {
+			new Notice(`Supernote auto-export: ${this.autoExportFailures.length} file(s) failed - see console for details.`);
+			this.autoExportFailures = [];
+		}
 	}
 }
 

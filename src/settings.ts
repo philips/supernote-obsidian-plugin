@@ -13,12 +13,29 @@ export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
     'date-asc': 'Date (oldest first)',
 };
 
+export type AutoExportMode = 'markdown' | 'markdown-and-images';
+
+export const AUTO_EXPORT_MODE_LABELS: Record<AutoExportMode, string> = {
+    'markdown': 'Markdown only',
+    'markdown-and-images': 'Markdown and images',
+};
+
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
     noteImageMaxDim: number;
     fileBrowserSortOrder: FileBrowserSortOrder;
+    autoExportEnabled: boolean;
+    autoExportMode: AutoExportMode;
+    // Vault-relative folder paths (one per line in the settings UI) that are
+    // watched for .note files to auto-export. Empty by default: auto-export
+    // is opt-in per folder, not vault-wide, so enabling the feature doesn't
+    // immediately churn through every .note file already in the vault.
+    autoExportWatchFolders: string[];
+    // Where generated .md/.png files land. Empty means "alongside the source
+    // .note file", matching the manual export commands' behavior.
+    autoExportOutputFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -27,6 +44,10 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     showExportButtons: true,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
+    autoExportEnabled: false,
+    autoExportMode: 'markdown-and-images',
+    autoExportWatchFolders: [],
+    autoExportOutputFolder: '',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -118,6 +139,69 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+
+        new Setting(containerEl)
+            .setName('Auto-export')
+            .setHeading()
+            .setDesc(
+                'Automatically create/update markdown (and optionally images) in the vault whenever a .note file '
+                + 'appears or changes in one of the watched folders below - e.g. a folder synced from your Supernote via '
+                + 'OneDrive/Dropbox/a symlink. Leave the watch folder list empty to keep this off.',
+            );
+
+        new Setting(containerEl)
+            .setName('Enable auto-export')
+            .setDesc('Watch the folders below for new or changed .note files and export them automatically.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.autoExportEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.autoExportEnabled = value;
+                    await this.plugin.saveSettings();
+                    this.display();
+                })
+            );
+
+        if (this.plugin.settings.autoExportEnabled) {
+            new Setting(containerEl)
+                .setName('Watched folders')
+                .setDesc('One vault-relative folder path per line. .note files inside these folders (including subfolders) are auto-exported.')
+                .addTextArea(text => {
+                    text.setPlaceholder('Supernote sync')
+                        .setValue(this.plugin.settings.autoExportWatchFolders.join('\n'))
+                        .onChange(async (value) => {
+                            this.plugin.settings.autoExportWatchFolders = value
+                                .split('\n')
+                                .map(line => line.trim())
+                                .filter(line => line.length > 0);
+                            await this.plugin.saveSettings();
+                        });
+                    text.inputEl.rows = 3;
+                });
+
+            new Setting(containerEl)
+                .setName('Auto-export output')
+                .setDesc('What to generate for each .note file.')
+                .addDropdown(dropdown => dropdown
+                    .addOptions(AUTO_EXPORT_MODE_LABELS)
+                    .setValue(this.plugin.settings.autoExportMode)
+                    .onChange(async (value) => {
+                        this.plugin.settings.autoExportMode = value as AutoExportMode;
+                        await this.plugin.saveSettings();
+                    })
+                );
+
+            new Setting(containerEl)
+                .setName('Auto-export output folder')
+                .setDesc('Vault-relative folder to write generated files to. Leave blank to write alongside each source .note file.')
+                .addText(text => text
+                    .setPlaceholder('(same folder as the .note file)')
+                    .setValue(this.plugin.settings.autoExportOutputFolder)
+                    .onChange(async (value) => {
+                        this.plugin.settings.autoExportOutputFolder = value.trim();
+                        await this.plugin.saveSettings();
+                    })
+                );
+        }
 
 		// Add custom dictionary settings to the settings tab
 		createCustomDictionarySettingsUI(containerEl, this.plugin);
