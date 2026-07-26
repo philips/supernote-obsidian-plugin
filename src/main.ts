@@ -230,7 +230,7 @@ class VaultWriter {
 
 		const imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
-			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i}.png`);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i + 1}.png`);
 			const buffer = dataUrlToBuffer(images[i]);
 			imgs.push(await this.app.vault.createBinary(filename, buffer));
 		}
@@ -691,7 +691,7 @@ export class SupernoteView extends FileView {
 				});
 
 				saveButton.addEventListener("click", () => void (async () => {
-					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i}.png`);
+					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i + 1}.png`);
 					const buffer = dataUrlToBuffer(imageDataUrl);
 					await this.app.vault.createBinary(filename, buffer);
 				})());
