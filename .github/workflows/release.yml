@@ -30,40 +30,40 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           manifest_version=$(node -p "require('./manifest.json').version")
-          beta_version=$(node -p "require('./manifest-beta.json').version")
 
-          if [ "$tag" = "$manifest_version" ]; then
-            echo "Tag $tag matches manifest.json ($manifest_version) -> stable release"
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
-          elif [ "$tag" = "$beta_version" ]; then
-            echo "Tag $tag matches manifest-beta.json ($beta_version) -> beta (pre-)release"
-            echo "channel=beta" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Tag $tag matches neither manifest.json ($manifest_version) nor manifest-beta.json ($beta_version). Bump the version in whichever manifest this release belongs to before tagging."
+          # BRAT and Obsidian's updater both fetch manifest.json from the
+          # release assets themselves, so it must match the tag exactly
+          # regardless of channel.
+          if [ "$tag" != "$manifest_version" ]; then
+            echo "::error::Tag $tag does not match manifest.json's version ($manifest_version). Bump manifest.json to $tag before tagging."
             exit 1
           fi
 
-      - name: Create stable release
-        if: steps.channel.outputs.channel == 'stable'
+          # Plain "X.Y.Z" tags are stable/latest releases. Anything with a
+          # semver pre-release suffix (e.g. "3.0.2-beta.1") is published as
+          # a GitHub pre-release, which is how BRAT (and Obsidian's own
+          # updater, which only ever looks at the "latest" release) tell
+          # beta builds apart from stable ones.
+          if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag $tag is a plain version -> stable release"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag $tag has a pre-release suffix -> beta (pre-)release"
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
+          prerelease_flag=""
+          if [ "${{ steps.channel.outputs.channel }}" = "beta" ]; then
+            prerelease_flag="--prerelease"
+          fi
 
           gh release create "$tag" \
             --title="$tag" \
             --generate-notes \
+            $prerelease_flag \
             main.js manifest.json styles.css
-
-      - name: Create beta (pre-)release
-        if: steps.channel.outputs.channel == 'beta'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-
-          gh release create "$tag" \
-            --title="$tag" \
-            --prerelease \
-            --generate-notes \
-            main.js manifest.json manifest-beta.json styles.css

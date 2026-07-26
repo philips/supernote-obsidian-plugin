@@ -102,16 +102,19 @@ npm install
 **Releasing**
 
 Pushing a tag is the only manual step; [`.github/workflows/release.yml`](.github/workflows/release.yml)
-builds the plugin and publishes the GitHub release. The tag's value must exactly match
-the version in either `manifest.json` or `manifest-beta.json` — whichever one it matches
-decides the release channel:
+builds the plugin and publishes the GitHub release with `main.js`, `manifest.json` and
+`styles.css` attached. [BRAT](https://tfthacker.com/BRAT) and Obsidian's own updater both
+fetch `manifest.json` straight from the release assets (not from the repo), so the tag must
+exactly match the version in `manifest.json` at that commit — the workflow fails instead of
+publishing if it doesn't.
 
-- Matches `manifest.json` → published as a full/latest release (`main.js`, `manifest.json`,
-  `styles.css`).
-- Matches `manifest-beta.json` → published as a pre-release, with `manifest-beta.json` also
-  attached so [BRAT](https://tfthacker.com/BRAT) picks it up.
-- Matches neither → the workflow fails with an error instead of publishing something
-  inconsistent.
+The tag's format decides the release channel:
+
+- A plain `X.Y.Z` tag is published as a full/latest release.
+- A tag with a semver pre-release suffix, e.g. `X.Y.Z-beta.1`, is published as a GitHub
+  pre-release. Obsidian's updater only ever looks at the "latest" (non-prerelease) release,
+  so this is invisible to regular Community Store users; BRAT is what beta testers use to
+  pick it up.
 
 To cut a stable release:
 
@@ -120,16 +123,16 @@ npm version <major|minor|patch>
 git push --follow-tags
 ```
 
-To cut a beta release (does not touch `package.json` or `manifest.json`):
+To cut a beta release:
 
 ```
-npm run version:beta -- <version>
-git commit -m "manifest-beta: bump to <version>"
-git tag <version>
-git push && git push --tags
+npm version prerelease --preid=beta
+git push --follow-tags
 ```
 
-To promote a beta that's already been tested to a full release, bump `manifest.json` to
-that (or a newer) version with `npm version` as above and tag/push as usual — the same tag
-can't be reused for two different releases, so promoting a beta means cutting a new stable
-tag on top of it rather than editing the old pre-release in place. 
+Running `npm version prerelease --preid=beta` again bumps `3.0.2-beta.0` to
+`3.0.2-beta.1`, etc. To promote a beta that's already been tested to a full release, drop
+the suffix with `npm version patch` (or `npm version <exact version>` to match the beta
+exactly) and tag/push as usual — the same tag can't be reused for two different releases,
+so promoting a beta means cutting a new stable tag on top of it rather than editing the old
+pre-release in place.

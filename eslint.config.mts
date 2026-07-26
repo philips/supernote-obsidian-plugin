@@ -11,7 +11,6 @@ export default defineConfig(
 		'version-bump.mjs',
 		'versions.json',
 		'manifest.json',
-		'manifest-beta.json',
 		'main.js',
 		'package.json',
 		'package-lock.json',
