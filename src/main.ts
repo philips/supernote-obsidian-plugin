@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -1177,6 +1177,209 @@ export class SupernoteView extends FileView {
 	}
 }
 
+// Obsidian's PDF embed accepts `![[file.pdf#page=3]]` to jump straight to one
+// page; mirror that syntax for `.note` files rather than inventing a new one.
+function parsePageAnchor(subpath?: string): number | null {
+	const match = subpath?.match(/^#page=(\d+)$/);
+	return match ? parseInt(match[1], 10) : null;
+}
+
+// Renders a `.note` file into an `![[example.note]]` embed via Obsidian's
+// undocumented app.embedRegistry API (see registration in SupernotePlugin.onload
+// — there's no public API for embedding a custom, non-markdown file type; core's
+// own image/PDF/canvas embeds are wired up through this same internal registry).
+// Deliberately much simpler than SupernoteView: a scrollable, read-only page
+// list with a minimal PDF-embed-style page-nav toolbar, not SupernoteView's
+// full zoom/find/thumbnail toolbar — so this doesn't share code with it beyond
+// ImageConverter/SupernoteX.
+export class SupernoteEmbed extends Component {
+	private destroyed = false;
+	private pageEls: HTMLElement[] = [];
+	private pageIndicatorEl: HTMLElement | null = null;
+	private pageObserver: IntersectionObserver | null = null;
+	private currentPage = 0;
+
+	private pagesEl: HTMLElement | null = null;
+	private toolbarEl: HTMLElement | null = null;
+	// note page height / width — used to keep min-height (see setupMinHeightTracking)
+	// matched to one full page's rendered height at whatever width the embed
+	// currently has, the same "always show at least one whole page" behavior
+	// Obsidian's own PDF embed has.
+	private pageAspectRatio: number | null = null;
+	private minHeightObserver: ResizeObserver | null = null;
+	private lastMinHeightWidth = -1;
+
+	constructor(
+		private app: App,
+		private settings: SupernotePluginSettings,
+		private containerEl: HTMLElement,
+		private file: TFile,
+		// Set when the embed link has a `#page=N` anchor — renders just that
+		// one page instead of the whole (scrollable, toolbar'd) note.
+		private pageAnchor: number | null,
+	) {
+		super();
+	}
+
+	// Called by Obsidian's embed system once this component has been mounted
+	// into context.containerEl (separate from Component's own load(), since the
+	// same embed component can be asked to loadFile() again if the underlying
+	// link changes without being recreated).
+	loadFile(): void {
+		void this.render();
+	}
+
+	onunload(): void {
+		this.destroyed = true;
+		this.pageObserver?.disconnect();
+		this.minHeightObserver?.disconnect();
+	}
+
+	private async render(): Promise<void> {
+		this.containerEl.empty();
+		this.containerEl.addClass('supernote-embed');
+		this.containerEl.setCssStyles({ minHeight: '' });
+		this.pageObserver?.disconnect();
+		this.pageObserver = null;
+		this.minHeightObserver?.disconnect();
+		this.minHeightObserver = null;
+		this.pageEls = [];
+		this.currentPage = 0;
+		this.toolbarEl = null;
+		this.pageAspectRatio = null;
+		this.lastMinHeightWidth = -1;
+
+		let sn: SupernoteX;
+		try {
+			const note = await this.app.vault.readBinary(this.file);
+			if (this.destroyed) return;
+			sn = new SupernoteX(new Uint8Array(note));
+		} catch (err) {
+			this.renderError(err);
+			return;
+		}
+
+		// Clamped rather than rejected: a stale anchor (note re-paginated
+		// since the link was written) should still show *a* page, not error.
+		const singlePage = this.pageAnchor !== null
+			? Math.min(Math.max(this.pageAnchor, 1), sn.pages.length)
+			: null;
+		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
+
+		const converter = new ImageConverter();
+		let images: string[];
+		try {
+			images = await converter.convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
+		} catch (err) {
+			if (!this.destroyed) this.renderError(err);
+			return;
+		} finally {
+			converter.terminate();
+		}
+		if (this.destroyed) return;
+
+		// A single requested page, or a single-page note, needs no page-nav
+		// toolbar — there's nowhere for it to navigate to.
+		const showToolbar = singlePage === null && sn.pages.length > 1;
+		if (showToolbar) {
+			this.buildToolbar(sn.pages.length);
+		}
+
+		const pagesEl = this.containerEl.createDiv({ cls: 'supernote-embed-pages' });
+		this.pagesEl = pagesEl;
+		const startPageNumber = singlePage ?? 1;
+		images.forEach((imageDataUrl, i) => {
+			const pageContainer = pagesEl.createDiv({ cls: 'page-container' });
+			pageContainer.dataset.pageNumber = String(startPageNumber + i);
+			const img = pageContainer.createEl('img', { attr: { src: imageDataUrl } });
+			if (this.settings.invertColorsWhenDark) {
+				img.addClass('supernote-invert-dark');
+			}
+			this.pageEls.push(pageContainer);
+		});
+
+		if (showToolbar) {
+			this.observePages();
+		}
+
+		this.setupMinHeightTracking();
+	}
+
+	// Obsidian's PDF embed never lets the embed shrink below one full page —
+	// there's always at least one whole page visible, however tall that page
+	// happens to be, with any extra pages scrolled below it. Pixel height
+	// depends on width (pages scale to fill it) and on this particular note's
+	// own page aspect ratio, so it's recomputed whenever the embed is resized
+	// (window resize, pane split/unsplit, sidebar toggle), not just once.
+	private setupMinHeightTracking(): void {
+		if (!this.pagesEl) return;
+		this.minHeightObserver = new ResizeObserver((entries) => {
+			const width = entries[0]?.contentRect.width;
+			if (width) this.applyMinHeight(width);
+		});
+		this.minHeightObserver.observe(this.pagesEl);
+	}
+
+	// `width` is pagesEl's content-box width (ResizeObserver's contentRect
+	// already excludes its own padding), i.e. exactly the width a page image
+	// renders at inside it — no separate padding math needed for that part.
+	private applyMinHeight(width: number): void {
+		if (this.pageAspectRatio === null || !this.pagesEl) return;
+		if (Math.abs(width - this.lastMinHeightWidth) < 1) return;
+		this.lastMinHeightWidth = width;
+
+		const toolbarHeight = this.toolbarEl?.offsetHeight ?? 0;
+		const pagesStyle = getComputedStyle(this.pagesEl);
+		const pagesPaddingY = parseFloat(pagesStyle.paddingTop) + parseFloat(pagesStyle.paddingBottom);
+		const pageHeight = width * this.pageAspectRatio;
+		this.containerEl.setCssStyles({ minHeight: `${Math.ceil(toolbarHeight + pagesPaddingY + pageHeight)}px` });
+	}
+
+	private buildToolbar(pageCount: number): void {
+		const toolbar = this.containerEl.createDiv({ cls: 'supernote-embed-toolbar' });
+		this.toolbarEl = toolbar;
+
+		const prevBtn = toolbar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Previous page' } });
+		setIcon(prevBtn, 'chevron-up');
+		prevBtn.addEventListener('click', () => this.scrollToPage(this.currentPage - 1));
+
+		this.pageIndicatorEl = toolbar.createSpan({ cls: 'supernote-embed-page-indicator', text: `1 / ${pageCount}` });
+
+		const nextBtn = toolbar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Next page' } });
+		setIcon(nextBtn, 'chevron-down');
+		nextBtn.addEventListener('click', () => this.scrollToPage(this.currentPage + 1));
+	}
+
+	private scrollToPage(index: number): void {
+		const clamped = Math.min(Math.max(index, 0), this.pageEls.length - 1);
+		this.pageEls[clamped]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+	}
+
+	// Keeps the toolbar's page indicator in sync with whatever page is
+	// actually scrolled into view, the same pattern SupernoteView itself uses
+	// for its own (much larger) page-jump indicator.
+	private observePages(): void {
+		this.pageObserver = new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				if (!entry.isIntersecting) continue;
+				const idx = this.pageEls.indexOf(entry.target as HTMLElement);
+				if (idx === -1) continue;
+				this.currentPage = idx;
+				this.pageIndicatorEl?.setText(`${idx + 1} / ${this.pageEls.length}`);
+			}
+		}, { root: this.containerEl, threshold: 0.5 });
+		this.pageEls.forEach((el) => this.pageObserver?.observe(el));
+	}
+
+	private renderError(err: unknown): void {
+		this.containerEl.empty();
+		this.containerEl.createDiv({
+			cls: 'supernote-embed-error',
+			text: `Failed to render Supernote file: ${err instanceof Error ? err.message : String(err)}`,
+		});
+	}
+}
+
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
@@ -1223,6 +1426,20 @@ export default class SupernotePlugin extends Plugin {
 			(leaf) => new SupernoteView(leaf, this.settings)
 		);
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
+
+		// Wires up `![[example.note]]` embeds via Obsidian's internal
+		// app.embedRegistry (undocumented — not in obsidian.d.ts, see
+		// src/obsidian-embed.d.ts — but the same mechanism core uses for
+		// image/PDF/canvas embeds). Feature-detected since an internal API can
+		// be changed or removed by Obsidian without notice; falling back to no
+		// embed support (rather than throwing) keeps the rest of the plugin
+		// working either way.
+		if (this.app.embedRegistry?.registerExtension) {
+			this.app.embedRegistry.registerExtension('note', (context, file, subpath) =>
+				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
+			);
+			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+		}
 
 		this.addCommand({
 			id: 'insert-screen-mirror-image',
