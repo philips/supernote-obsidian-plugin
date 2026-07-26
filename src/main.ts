@@ -1192,7 +1192,7 @@ export default class SupernotePlugin extends Plugin {
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 
 		this.addCommand({
-			id: 'attach-supernote-file-from-device',
+			id: 'attach-file-from-device',
 			name: 'Attach supernote file from device',
 			callback: () => {
 				if (this.settings.directConnectIP.length === 0) {
@@ -1204,7 +1204,7 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'upload-file-to-supernote',
+			id: 'upload-file-to-device',
 			name: 'Upload the current file to a supernote device',
 			callback: () => {
 				if (this.settings.directConnectIP.length === 0) {
@@ -1225,7 +1225,7 @@ export default class SupernotePlugin extends Plugin {
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
 
 		this.addCommand({
-			id: 'insert-supernote-screen-mirror-image',
+			id: 'insert-screen-mirror-image',
 			name: 'Insert a supernote screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				// Screen mirroring is an indefinitely-open multipart MJPEG stream read
@@ -1270,7 +1270,7 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'export-supernote-note-as-files',
+			id: 'export-note-as-files',
 			name: 'Export this supernote note as a Markdown and PNG files as attachments',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
@@ -1295,7 +1295,7 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'export-supernote-note-as-pdf',
+			id: 'export-note-as-pdf',
 			name: 'Export this supernote note as PDF',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
@@ -1320,7 +1320,7 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'export-supernote-note-as-markdown',
+			id: 'export-note-as-markdown',
 			name: 'Export this supernote note as a Markdown file attachment',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
@@ -1345,7 +1345,7 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'import-todays-supernote-pages',
+			id: 'import-todays-pages',
 			name: "Import new or edited supernote pages by date as images",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {

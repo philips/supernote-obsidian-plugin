@@ -33,4 +33,14 @@ export default defineConfig(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		// obsidianmd/no-global-this exists for popout-window compatibility in
+		// plugin runtime code; it doesn't apply to test setup, where `globalThis`
+		// is the only thing available to stand in for the `window` Vitest's node
+		// environment doesn't provide.
+		files: ['**/*.test.ts'],
+		rules: {
+			'obsidianmd/no-global-this': 'off',
+		},
+	},
 );

@@ -13,6 +13,43 @@ export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
     'date-asc': 'Date (oldest first)',
 };
 
+// Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
+// Not present in the `obsidian` devDependency's types (pinned pre-1.13, see CLAUDE.md on
+// why this repo can't casually bump it), so the shapes below are hand-typed to match the
+// real runtime API rather than pulled in from the package.
+interface SettingControlBase<V> {
+    key: string;
+    validate?: (value: V) => string | void;
+}
+interface SettingTextControl extends SettingControlBase<string> {
+    type: 'text';
+    placeholder?: string;
+}
+interface SettingToggleControl extends SettingControlBase<boolean> {
+    type: 'toggle';
+}
+interface SettingSliderControl extends SettingControlBase<number> {
+    type: 'slider';
+    min: number;
+    max: number;
+    step: number;
+}
+interface SettingDropdownControl extends SettingControlBase<string> {
+    type: 'dropdown';
+    options: Record<string, string>;
+}
+type SettingControl = SettingTextControl | SettingToggleControl | SettingSliderControl | SettingDropdownControl;
+interface SettingDefinitionControl {
+    name: string;
+    desc?: string;
+    control: SettingControl;
+}
+interface SettingDefinitionRender {
+    name: string;
+    render: (setting: Setting) => void;
+}
+type SettingDefinitionItem = SettingDefinitionControl | SettingDefinitionRender;
+
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
@@ -36,6 +73,70 @@ export class SupernoteSettingTab extends PluginSettingTab {
     constructor(app: App, plugin: SupernotePlugin) {
         super(app, plugin);
         this.plugin = plugin;
+    }
+
+    // Declarative settings, so entries appear in Obsidian's settings search on 1.13.0+.
+    // `display()` below stays as the fallback for this plugin's minAppVersion (< 1.13.0),
+    // which is still called on those older versions.
+    getSettingDefinitions(): SettingDefinitionItem[] {
+        return [
+            {
+                name: 'Supernote IP address',
+                desc: '(Optional) when using the supernote "browse and access" for document upload/download or "screen mirroring" screenshot attachment this is the IP of the supernote device',
+                control: {
+                    type: 'text',
+                    key: 'directConnectIP',
+                    placeholder: 'IP only e.g. 192.168.1.2',
+                    validate: (value) => {
+                        if (value !== '' && !IP_VALIDATION_PATTERN.test(value)) {
+                            return 'Invalid IP format: must be xxx.xxx.xxx.xxx';
+                        }
+                    },
+                },
+            },
+            {
+                name: 'Invert colors in "dark mode"',
+                desc: 'When Obsidian is in "dark mode" increase image visibility by inverting colors of images',
+                control: {
+                    type: 'toggle',
+                    key: 'invertColorsWhenDark',
+                },
+            },
+            {
+                name: 'Show export buttons',
+                desc: 'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
+                control: {
+                    type: 'toggle',
+                    key: 'showExportButtons',
+                },
+            },
+            {
+                name: 'Max image side length in .note files',
+                desc: 'Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.',
+                control: {
+                    type: 'slider',
+                    key: 'noteImageMaxDim',
+                    min: 200,
+                    max: 1900,
+                    step: 100, // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
+                },
+            },
+            {
+                name: 'Device file browser sort order',
+                desc: 'Default order to list files and folders in when browsing the supernote device (e.g. "attach supernote file from device"). Can also be changed from the browser itself.',
+                control: {
+                    type: 'dropdown',
+                    key: 'fileBrowserSortOrder',
+                    options: FILE_BROWSER_SORT_LABELS,
+                },
+            },
+            {
+                name: 'Custom dictionary',
+                render: (setting) => {
+                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                },
+            },
+        ];
     }
 
     display(): void {
