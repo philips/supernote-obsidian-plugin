@@ -1,7 +1,7 @@
 import { App, Modal, Notice, Editor } from 'obsidian';
 import SupernotePlugin from './main';
 import { SupernoteFile, fetchSupernoteDirectory } from './FileListModal';
-import { fetchFromDevice } from './deviceFetch';
+import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
 
 interface ScannedNote {
@@ -150,9 +150,11 @@ export class ImportTodayModal extends Modal {
         let combined = '';
         try {
             for (const file of chosen) {
-                const response = await fetchFromDevice(ip, file.uri, `Failed to download ${file.name}`);
+                const response = await fetchFromDevice(ip, file.uri, `Failed to download ${file.name}`, {
+                    timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                });
                 if (!response.ok) {
-                    throw new Error(`Failed to download ${file.name}: Supernote responded with an error (${response.statusText}).`);
+                    throw new Error(`Failed to download ${file.name}: Supernote responded with an error (status ${response.status}).`);
                 }
                 const buffer = await response.arrayBuffer();
                 combined += await this.plugin.vaultWriter.buildInsertableMarkdown(file.name, buffer, this.targetPath);
