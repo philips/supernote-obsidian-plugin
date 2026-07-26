@@ -5,25 +5,46 @@ on:
     tags:
       - "*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: "21.x"
+          submodules: recursive
 
-      - name: Use Node.js
-        uses: actions/setup-node@v3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "21.x"
+          node-version: 20
 
       - name: Build plugin
         run: |
           ./scripts/build
 
-      - name: Create release
+      - name: Determine release channel
+        id: channel
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          manifest_version=$(node -p "require('./manifest.json').version")
+          beta_version=$(node -p "require('./manifest-beta.json').version")
+
+          if [ "$tag" = "$manifest_version" ]; then
+            echo "Tag $tag matches manifest.json ($manifest_version) -> stable release"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          elif [ "$tag" = "$beta_version" ]; then
+            echo "Tag $tag matches manifest-beta.json ($beta_version) -> beta (pre-)release"
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Tag $tag matches neither manifest.json ($manifest_version) nor manifest-beta.json ($beta_version). Bump the version in whichever manifest this release belongs to before tagging."
+            exit 1
+          fi
+
+      - name: Create stable release
+        if: steps.channel.outputs.channel == 'stable'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -31,5 +52,18 @@ jobs:
 
           gh release create "$tag" \
             --title="$tag" \
-            --draft \
+            --generate-notes \
             main.js manifest.json styles.css
+
+      - name: Create beta (pre-)release
+        if: steps.channel.outputs.channel == 'beta'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+
+          gh release create "$tag" \
+            --title="$tag" \
+            --prerelease \
+            --generate-notes \
+            main.js manifest.json manifest-beta.json styles.css

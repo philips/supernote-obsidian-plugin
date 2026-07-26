@@ -97,4 +97,39 @@ npm install
 - Create a vault called "SupernoteTest"
 - Install the supernote plugin from the community store
 - Run `npm run push-android` to push main.js to the device
-- Run "Reload App without Saving" on Obsidian command palette 
+- Run "Reload App without Saving" on Obsidian command palette
+
+**Releasing**
+
+Pushing a tag is the only manual step; [`.github/workflows/release.yml`](.github/workflows/release.yml)
+builds the plugin and publishes the GitHub release. The tag's value must exactly match
+the version in either `manifest.json` or `manifest-beta.json` — whichever one it matches
+decides the release channel:
+
+- Matches `manifest.json` → published as a full/latest release (`main.js`, `manifest.json`,
+  `styles.css`).
+- Matches `manifest-beta.json` → published as a pre-release, with `manifest-beta.json` also
+  attached so [BRAT](https://tfthacker.com/BRAT) picks it up.
+- Matches neither → the workflow fails with an error instead of publishing something
+  inconsistent.
+
+To cut a stable release:
+
+```
+npm version <major|minor|patch>
+git push --follow-tags
+```
+
+To cut a beta release (does not touch `package.json` or `manifest.json`):
+
+```
+npm run version:beta -- <version>
+git commit -m "manifest-beta: bump to <version>"
+git tag <version>
+git push && git push --tags
+```
+
+To promote a beta that's already been tested to a full release, bump `manifest.json` to
+that (or a newer) version with `npm version` as above and tag/push as usual — the same tag
+can't be reused for two different releases, so promoting a beta means cutting a new stable
+tag on top of it rather than editing the old pre-release in place. 
