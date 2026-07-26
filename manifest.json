@@ -1,6 +1,6 @@
 {
 	"id": "supernote",
-	"name": "Unofficial Supernote by Ratta Integration",
+	"name": "Supernote (Unofficial)",
 	"version": "2.9.1",
 	"minAppVersion": "1.7.2",
 	"description": "View Supernote notes, generate markdown from note and capture screen mirror.",

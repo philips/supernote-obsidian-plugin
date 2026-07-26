@@ -26,7 +26,7 @@ This plugin has five main features:
 
 ## Install via Community Plugin Store
 
-This plugin is available via the [Obsidian Community Plugin Store](https://obsidian.md/plugins?id=supernote). Click the previous link or search for "Unofficial Supernote by Ratta Integration". 
+This plugin is available via the [Obsidian Community Plugin Store](https://obsidian.md/plugins?id=supernote). Click the previous link or search for "Supernote (Unofficial)". 
 
 ## Install via BRAT
 
