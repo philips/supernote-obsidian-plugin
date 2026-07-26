@@ -1410,7 +1410,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'attach-file-from-device',
-			name: 'Attach supernote file from device',
+			name: 'Attach file from device',
 			callback: () => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
@@ -1422,7 +1422,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'upload-file-to-device',
-			name: 'Upload the current file to a supernote device',
+			name: 'Upload the current file to a device',
 			callback: () => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
@@ -1457,7 +1457,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'insert-screen-mirror-image',
-			name: 'Insert a supernote screen mirroring image as attachment',
+			name: 'Insert a screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				// Screen mirroring is an indefinitely-open multipart MJPEG stream read
 				// with a raw `fetch()` + ReadableStream reader (see fetchMirrorFrame in
@@ -1502,7 +1502,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'export-note-as-files',
-			name: 'Export this supernote note as a Markdown and PNG files as attachments',
+			name: 'Export this note as a Markdown and PNG files as attachments',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -1527,7 +1527,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'export-note-as-pdf',
-			name: 'Export this supernote note as PDF',
+			name: 'Export this note as PDF',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -1552,7 +1552,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'export-note-as-markdown',
-			name: 'Export this supernote note as a Markdown file attachment',
+			name: 'Export this note as a Markdown file attachment',
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
 				const ext = file?.extension;
@@ -1577,7 +1577,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-todays-pages',
-			name: "Import new or edited supernote pages by date as images",
+			name: "Import new or edited pages by date as images",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
