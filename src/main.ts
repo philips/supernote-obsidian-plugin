@@ -405,6 +405,11 @@ export class SupernoteView extends FileView {
 	private renderedZoomScale = 1;
 	private zoomDebounceTimer: number | undefined;
 	private zoomLabelEl: HTMLElement | null = null;
+	// True from the moment setZoom() schedules a debounced commitZoom() until
+	// that commit actually redraws pages at their final size. goToPage() waits
+	// this out — see waitForZoomToSettle() for why.
+	private zoomCommitPending = false;
+	private zoomSettleResolvers: Array<() => void> = [];
 
 	private fitWidthEnabled = true;
 	private fitWidthBtn: HTMLElement | null = null;
@@ -458,6 +463,17 @@ export class SupernoteView extends FileView {
 			return "Supernote view"
 		}
 		return this.file.basename;
+	}
+
+	// Obsidian delivers a link's `#page=N` subpath here — for both
+	// `[[file.note#page=8]]` and `[text](file.note#page=8)` — once setState()
+	// (which awaits onLoadFile(), so pageStates is already populated) has
+	// resolved. Mirrors the anchor SupernoteEmbed accepts for embeds; see
+	// parsePageAnchor().
+	setEphemeralState(state: unknown): void {
+		const subpath = (state as { subpath?: string } | undefined)?.subpath;
+		const page = parsePageAnchor(subpath);
+		if (page !== null) void this.goToPage(page);
 	}
 
 	async onOpen(): Promise<void> {
@@ -836,13 +852,7 @@ export class SupernoteView extends FileView {
 			const jumpToPage = () => {
 				const requested = Number(pageInput.value);
 				if (!Number.isFinite(requested)) return;
-				const target = Math.min(pageCount, Math.max(1, Math.round(requested)));
-				pageInput.value = String(target);
-				const state = this.pageStates[target - 1];
-				state?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
-				// Don't wait on scroll+observer timing for a page the user
-				// explicitly asked to jump to.
-				if (state) void this.ensureTextLayer(state);
+				void this.goToPage(Math.round(requested));
 			};
 
 			pageInput.addEventListener('keydown', (evt: KeyboardEvent) => {
@@ -882,9 +892,7 @@ export class SupernoteView extends FileView {
 			item.createSpan({ cls: 'supernote-thumb-label', text: String(i + 1) });
 
 			item.addEventListener('click', () => {
-				const state = this.pageStates[i];
-				state?.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
-				if (state) void this.ensureTextLayer(state);
+				void this.goToPage(i + 1);
 			});
 
 			this.thumbItems.push(item);
@@ -928,6 +936,26 @@ export class SupernoteView extends FileView {
 
 	private highlightThumbnail(index: number) {
 		this.thumbItems.forEach((item, i) => item.toggleClass('is-active', i === index));
+	}
+
+	// Shared by the toolbar's page-jump input, the thumbnail sidebar, and
+	// setEphemeralState() (a `#page=N` link anchor) — all three just need to
+	// scroll a given 1-indexed page into view and prime its text layer.
+	private async goToPage(pageNumber: number): Promise<void> {
+		if (this.pageStates.length === 0) return;
+		// Wait out any in-flight fit-width/zoom re-render first — see
+		// waitForZoomToSettle() for why scrolling before it settles can land on
+		// the wrong page.
+		await this.waitForZoomToSettle();
+		if (this.pageStates.length === 0) return;
+		const clamped = Math.min(this.pageStates.length, Math.max(1, pageNumber));
+		const state = this.pageStates[clamped - 1];
+		if (!state) return;
+		state.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+		// Don't wait on scroll+observer timing for a page the user (or link)
+		// explicitly asked to jump to.
+		void this.ensureTextLayer(state);
+		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
 	}
 
 	// Scrollspy: find the last page whose top has scrolled up past the sticky
@@ -994,7 +1022,8 @@ export class SupernoteView extends FileView {
 		}
 
 		window.clearTimeout(this.zoomDebounceTimer);
-		this.zoomDebounceTimer = window.setTimeout(() => this.commitZoom(), 200);
+		this.zoomCommitPending = true;
+		this.zoomDebounceTimer = window.setTimeout(() => void this.commitZoom(), 200);
 	}
 
 	private async commitZoom(): Promise<void> {
@@ -1014,6 +1043,26 @@ export class SupernoteView extends FileView {
 		}
 		this.renderedZoomScale = targetZoom;
 		this.updateCurrentPageIndicator();
+
+		this.zoomCommitPending = false;
+		const resolvers = this.zoomSettleResolvers;
+		this.zoomSettleResolvers = [];
+		resolvers.forEach((resolve) => resolve());
+	}
+
+	// Until commitZoom() runs, page containers are still sized at whatever
+	// zoom was rendered *before* the pending setZoom() call (the interim CSS
+	// transform scale it applies for instant visual feedback doesn't change
+	// their layout box). onLoadFile() calls applyFitWidth() as soon as pages
+	// are built, so a page-anchor link (setEphemeralState() -> goToPage(),
+	// firing right as that file finishes loading) can easily land its
+	// scrollIntoView() before fit-width's real re-render — using page heights
+	// that are about to change once commitZoom() actually fires, and landing
+	// on the wrong page once they do. Waiting this out first keeps
+	// scrollIntoView() targeting final, stable page positions.
+	private async waitForZoomToSettle(): Promise<void> {
+		if (!this.zoomCommitPending) return;
+		await new Promise<void>((resolve) => this.zoomSettleResolvers.push(resolve));
 	}
 
 	// Scales the page so its rendered width matches however much horizontal
@@ -1191,8 +1240,12 @@ export class SupernoteView extends FileView {
 	}
 }
 
-// Obsidian's PDF embed accepts `![[file.pdf#page=3]]` to jump straight to one
-// page; mirror that syntax for `.note` files rather than inventing a new one.
+// Obsidian's PDF support accepts a `#page=3` anchor — as an embed
+// (`![[file.pdf#page=3]]`) or a regular link (`[[file.pdf#page=3]]` /
+// `[text](file.pdf#page=3)`) — to jump straight to one page; mirror that
+// syntax for `.note` files rather than inventing a new one. Used by both
+// SupernoteView.setEphemeralState() (regular links) and SupernoteEmbed
+// (embeds).
 function parsePageAnchor(subpath?: string): number | null {
 	const match = subpath?.match(/^#page=(\d+)$/);
 	return match ? parseInt(match[1], 10) : null;
