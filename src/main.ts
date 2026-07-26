@@ -954,7 +954,8 @@ export class SupernoteView extends FileView {
 	}
 
 	private setZoom(newScale: number, opts: { manual?: boolean } = {}) {
-		if (opts.manual !== false) {
+		const isManual = opts.manual !== false;
+		if (isManual) {
 			// Any direct zoom action (buttons, wheel, reset) is the user taking
 			// manual control — stop auto-adjusting on resize until they ask for
 			// fit-width again. applyFitWidth() itself calls in with manual:false
@@ -968,7 +969,20 @@ export class SupernoteView extends FileView {
 		// a narrow mobile screen — especially with the thumbnail sidebar open,
 		// or a wide/landscape note — that can legitimately need to go below
 		// 25%. Clamping it there just forced horizontal scrolling instead.
-		this.zoomScale = Math.min(5, Math.max(0.05, newScale));
+		//
+		// The 500% ceiling only makes sense for *manual* zoom (a sanity cap on
+		// how far a user should zoom in by hand). "100%" here is only ever
+		// relative to noteImageMaxDim — an arbitrary default render size, not
+		// the note's true resolution or the available viewport — so a large or
+		// high-resolution display can legitimately need well over 5x to
+		// actually fill it with "Fit width". Applying the same 500% ceiling
+		// there just left the page stuck at a fixed pixel width regardless of
+		// how much wider the pane actually was, while showing a confusing
+		// pinned "500%" (see issue #108). Fit width instead gets a much higher
+		// ceiling, purely as a guard against a pathological render (e.g. a
+		// zero-width native page) rather than a real intended limit.
+		const ceiling = isManual ? 5 : 20;
+		this.zoomScale = Math.min(ceiling, Math.max(0.05, newScale));
 		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
 
 		// Instant CSS-scale feedback while the user is still zooming; the real
