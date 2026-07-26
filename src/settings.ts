@@ -4,12 +4,21 @@ import { App, ExtraButtonComponent, PluginSettingTab, Setting } from 'obsidian';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
+export type FileBrowserSortOrder = 'name-asc' | 'name-desc' | 'date-desc' | 'date-asc';
+
+export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
+    'name-asc': 'Name (A to Z)',
+    'name-desc': 'Name (Z to A)',
+    'date-desc': 'Date (newest first)',
+    'date-asc': 'Date (oldest first)',
+};
 
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
     noteImageMaxDim: number;
+    fileBrowserSortOrder: FileBrowserSortOrder;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -17,6 +26,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     invertColorsWhenDark: true,
     showExportButtons: true,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
+    fileBrowserSortOrder: 'name-asc',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -93,6 +103,18 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.noteImageMaxDim)
                 .onChange(async (value) => {
                     this.plugin.settings.noteImageMaxDim = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Device file browser sort order')
+            .setDesc('Default order to list files and folders in when browsing the supernote device (e.g. "attach supernote file from device"). Can also be changed from the browser itself.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(FILE_BROWSER_SORT_LABELS)
+                .setValue(this.plugin.settings.fileBrowserSortOrder)
+                .onChange(async (value) => {
+                    this.plugin.settings.fileBrowserSortOrder = value as FileBrowserSortOrder;
                     await this.plugin.saveSettings();
                 })
             );

@@ -1,6 +1,6 @@
 import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
-import { SupernotePluginSettings, IP_VALIDATION_PATTERN } from 'settings';
+import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from 'settings';
 import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { ErrorModal } from './ErrorModal';
@@ -58,16 +58,84 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     settings: SupernotePluginSettings;
     files: SupernoteFile[] = [];
     currentPath = '/';
+    sortOrder: FileBrowserSortOrder;
+    private nameSortButton!: HTMLButtonElement;
+    private dateSortButton!: HTMLButtonElement;
 
     constructor(app: App, plugin: SupernotePlugin) {
         super(app);
         this.settings = plugin.settings;
+        this.sortOrder = this.settings.fileBrowserSortOrder;
         this.setPlaceholder("Select a file to download or directory to open");
+        this.buildSortToolbar();
+    }
+
+    private buildSortToolbar() {
+        const toolbarEl = createDiv({ cls: 'supernote-toolbar supernote-file-list-toolbar' });
+        this.modalEl.prepend(toolbarEl);
+
+        const groupEl = toolbarEl.createDiv({ cls: 'supernote-toolbar-group' });
+        groupEl.createSpan({ text: 'Sort by:' });
+        this.nameSortButton = groupEl.createEl('button', { type: 'button' });
+        this.nameSortButton.addEventListener('click', () => this.toggleSort('name'));
+        this.dateSortButton = groupEl.createEl('button', { type: 'button' });
+        this.dateSortButton.addEventListener('click', () => this.toggleSort('date'));
+
+        this.updateSortButtons();
+    }
+
+    private toggleSort(field: 'name' | 'date') {
+        const currentField = this.sortOrder.startsWith('name') ? 'name' : 'date';
+        const currentlyAscending = !this.sortOrder.endsWith('desc');
+        if (currentField === field) {
+            this.sortOrder = `${field}-${currentlyAscending ? 'desc' : 'asc'}` as FileBrowserSortOrder;
+        } else {
+            // Switching fields: default to the most useful direction for that field.
+            this.sortOrder = field === 'name' ? 'name-asc' : 'date-desc';
+        }
+        this.updateSortButtons();
+        this.sortFiles();
+        // SuggestModal has no public API to refresh its results; re-dispatching the
+        // input event is the standard way plugins trigger it to re-run getSuggestions.
+        this.inputEl.dispatchEvent(new Event('input'));
+    }
+
+    private updateSortButtons() {
+        const field = this.sortOrder.startsWith('name') ? 'name' : 'date';
+        const ascending = !this.sortOrder.endsWith('desc');
+        const arrow = ascending ? '↑' : '↓';
+        this.nameSortButton.textContent = field === 'name' ? `Name ${arrow}` : 'Name';
+        this.nameSortButton.toggleClass('is-active', field === 'name');
+        this.dateSortButton.textContent = field === 'date' ? `Date ${arrow}` : 'Date';
+        this.dateSortButton.toggleClass('is-active', field === 'date');
+    }
+
+    private sortFiles() {
+        this.files = [...this.files].sort((a, b) => this.compareFiles(a, b));
+    }
+
+    private compareFiles(a: SupernoteFile, b: SupernoteFile): number {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+
+        switch (this.sortOrder) {
+            case 'name-desc':
+                return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
+            case 'date-asc':
+            case 'date-desc': {
+                const aDate = parseDeviceDate(a.date)?.getTime() ?? 0;
+                const bDate = parseDeviceDate(b.date)?.getTime() ?? 0;
+                return this.sortOrder === 'date-asc' ? aDate - bDate : bDate - aDate;
+            }
+            case 'name-asc':
+            default:
+                return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        }
     }
 
     async loadFiles() {
         try {
             this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath);
+            this.sortFiles();
         } catch (err) {
             this.close();
             new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();

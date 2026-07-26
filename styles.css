@@ -113,6 +113,11 @@ div.supernote-canvas-wrap canvas {
     background-color: var(--interactive-accent);
 }
 
+.supernote-file-list-toolbar {
+    padding: 0.5em 0.75em 0;
+    margin: 0;
+}
+
 .supernote-page-jump-input {
     width: 4em;
     text-align: center;
