@@ -26,7 +26,8 @@
     filter: invert(1);
 }
 
-button.mod-cta {
+.supernote-view-content button.mod-cta,
+.supernote-import-modal button.mod-cta {
     display: block;
 }
 
