@@ -1,6 +1,6 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
-import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
+import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
 import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
@@ -254,18 +254,45 @@ class VaultWriter {
 
 	/**
 	 * Converts a Supernote .note file (fetched from a device, not yet in the
-	 * vault) into images and returns markdown for inserting its pages inline
-	 * into another note, rather than creating a new .md file for it.
+	 * vault) into the requested format and returns markdown for inserting it
+	 * inline into another note, rather than creating a new .md file for it.
 	 */
-	async buildInsertableMarkdown(deviceFileName: string, noteBuffer: ArrayBuffer, targetPath: string): Promise<string> {
-		const sn = new SupernoteX(new Uint8Array(noteBuffer));
+	async buildInsertableContent(deviceFileName: string, noteBuffer: ArrayBuffer, targetPath: string, format: ImportFormat): Promise<string> {
 		const basename = deviceFileName.replace(/\.note$/i, '');
+
+		// These two formats save the raw .note file itself into the vault and
+		// point at it, rather than rasterizing pages, so they don't need to
+		// touch SupernoteX/ImageConverter at all.
+		if (format === 'note-link' || format === 'embed') {
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(deviceFileName);
+			const tfile = await this.app.vault.createBinary(filename, noteBuffer);
+			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
+			return `${format === 'embed' ? '!' : ''}${link}\n`;
+		}
+
+		const sn = new SupernoteX(new Uint8Array(noteBuffer));
+
+		if (format === 'pdf') {
+			const converter = new ImageConverter();
+			let images: string[] = [];
+			try {
+				images = await converter.convertToImages(sn);
+			} finally {
+				converter.terminate();
+			}
+			const pdfBytes = await assemblePdfFromImages(sn, images);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
+			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
+			return `${link}\n`;
+		}
+
 		const imgs = await this.writeImageFiles(basename, sn);
 
 		let content = `## ${basename}\n\n`;
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `### Page ${i + 1}\n\n`;
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
+			if (format === 'images-text' && sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
 				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
 			}
 
@@ -1630,7 +1657,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-todays-pages',
-			name: "Import new or edited pages by date as images",
+			name: "Import new or edited pages by date",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();

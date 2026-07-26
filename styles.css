@@ -323,6 +323,13 @@ div.supernote-canvas-wrap canvas {
     margin-bottom: var(--size-4-3);
 }
 
+.supernote-import-format-row {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-1);
+    margin-bottom: var(--size-4-3);
+}
+
 .supernote-import-controls {
     display: flex;
     gap: var(--size-4-2);

@@ -3,6 +3,7 @@ import SupernotePlugin from './main';
 import { SupernoteFile, fetchSupernoteDirectory } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
+import { ImportFormat, IMPORT_FORMAT_LABELS } from './settings';
 
 interface ScannedNote {
     file: SupernoteFile;
@@ -17,6 +18,7 @@ export class ImportTodayModal extends Modal {
     files: SupernoteFile[] = [];
     selected: Set<string> = new Set();
     selectedDate: Date = todayLocalMidnight();
+    importFormat: ImportFormat;
     listEl!: HTMLElement;
     resultsEl!: HTMLElement;
     importBtn!: HTMLButtonElement;
@@ -26,6 +28,7 @@ export class ImportTodayModal extends Modal {
         this.plugin = plugin;
         this.editor = editor;
         this.targetPath = targetPath;
+        this.importFormat = plugin.settings.importFormat;
     }
 
     async onOpen() {
@@ -61,6 +64,23 @@ export class ImportTodayModal extends Modal {
                 this.selectedDate = parsed;
                 this.renderForSelectedDate();
             }
+        });
+
+        const formatRow = contentEl.createDiv({ cls: 'supernote-import-format-row' });
+        formatRow.createEl('label', { text: 'Import as: ', attr: { for: 'supernote-import-format' } });
+        const formatSelect = formatRow.createEl('select', { attr: { id: 'supernote-import-format' } });
+        for (const [value, label] of Object.entries(IMPORT_FORMAT_LABELS)) {
+            const option = formatSelect.createEl('option', { text: label, value });
+            if (value === this.importFormat) {
+                option.selected = true;
+            }
+        }
+        formatSelect.addEventListener('change', () => {
+            this.importFormat = formatSelect.value as ImportFormat;
+            // Remember the choice as the new default for next time, same as
+            // the settings tab's dropdown would (see issue #104).
+            this.plugin.settings.importFormat = this.importFormat;
+            void this.plugin.saveSettings();
         });
 
         this.resultsEl = contentEl.createDiv();
@@ -161,7 +181,7 @@ export class ImportTodayModal extends Modal {
                     throw new Error(`Failed to download ${file.name}: Supernote responded with an error (status ${response.status}).`);
                 }
                 const buffer = await response.arrayBuffer();
-                combined += await this.plugin.vaultWriter.buildInsertableMarkdown(file.name, buffer, this.targetPath);
+                combined += await this.plugin.vaultWriter.buildInsertableContent(file.name, buffer, this.targetPath, this.importFormat);
                 combined += '\n';
             }
 
