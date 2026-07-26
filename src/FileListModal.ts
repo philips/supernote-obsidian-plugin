@@ -2,7 +2,7 @@ import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
 import { SupernotePluginSettings, IP_VALIDATION_PATTERN } from 'settings';
 import { parseDeviceDate } from './deviceDate';
-import { fetchFromDevice, buildMultipartBody } from './deviceFetch';
+import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { ErrorModal } from './ErrorModal';
 
 export interface SupernoteFile {
@@ -142,7 +142,9 @@ export class DownloadListModal extends FileListModal {
                 this.open();
             } else {
                 try {
-                    const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file');
+                    const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file', {
+                        timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                    });
                     if (!fileResponse.ok) {
                         throw new Error(`Failed to download file: Supernote responded with an error (status ${fileResponse.status}).`);
                     }
@@ -241,7 +243,8 @@ export class UploadListModal extends FileListModal {
                     const response = await fetchFromDevice(this.settings.directConnectIP, this.currentPath, 'Upload failed', {
                         method: "POST",
                         contentType,
-                        body
+                        body,
+                        timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
                     });
 
                     if (!response.ok) {

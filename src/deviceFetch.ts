@@ -13,7 +13,13 @@ import { requestUrl, RequestUrlParam } from 'obsidian';
 // restrictions). `requestUrl` goes through Obsidian's native networking
 // layer instead of the WebView's, so it isn't subject to those restrictions
 // on either desktop or mobile.
+//
+// This short timeout is for metadata calls (directory listing) where a
+// non-responding device should fail fast. File transfers (download/upload)
+// pass a much longer `timeoutMs` below since moving the actual file bytes
+// over a slow LAN/Tailscale link can legitimately take longer.
 export const DEVICE_REQUEST_TIMEOUT_MS = 3000;
+export const DEVICE_TRANSFER_TIMEOUT_MS = 120_000;
 
 export interface DeviceResponse {
     ok: boolean;
@@ -22,7 +28,9 @@ export interface DeviceResponse {
     arrayBuffer(): Promise<ArrayBuffer>;
 }
 
-export type DeviceRequestInit = Pick<RequestUrlParam, 'method' | 'body' | 'contentType' | 'headers'>;
+export type DeviceRequestInit = Pick<RequestUrlParam, 'method' | 'body' | 'contentType' | 'headers'> & {
+    timeoutMs?: number;
+};
 
 // `requestUrl`'s body can only be a string or ArrayBuffer (no FormData/Blob
 // support like `fetch`), so a file upload has to be multipart/form-data-
@@ -56,11 +64,13 @@ export async function fetchFromDevice(
     context: string,
     init: DeviceRequestInit = {},
 ): Promise<DeviceResponse> {
+    const { timeoutMs = DEVICE_REQUEST_TIMEOUT_MS, ...requestInit } = init;
+
     let timeoutHandle: ReturnType<typeof window.setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
         timeoutHandle = window.setTimeout(
             () => reject(new DOMException('The operation timed out.', 'TimeoutError')),
-            DEVICE_REQUEST_TIMEOUT_MS,
+            timeoutMs,
         );
     });
 
@@ -69,7 +79,7 @@ export async function fetchFromDevice(
             requestUrl({
                 url: `http://${ip}:8089${path}`,
                 throw: false,
-                ...init,
+                ...requestInit,
             }),
             timeout,
         ]);
@@ -85,7 +95,7 @@ export async function fetchFromDevice(
         const name = (err as { name?: string } | null)?.name;
         if (name === 'TimeoutError' || name === 'AbortError') {
             throw new Error(
-                `${context}: Supernote at ${ip} did not respond within ${DEVICE_REQUEST_TIMEOUT_MS / 1000}s. `
+                `${context}: Supernote at ${ip} did not respond within ${timeoutMs / 1000}s. `
                 + `Check that it's on the same network and "Browse and Access" is turned on.`
             );
         }

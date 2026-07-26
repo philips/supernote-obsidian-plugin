@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { requestUrl } from 'obsidian';
-import { fetchFromDevice, buildMultipartBody, DEVICE_REQUEST_TIMEOUT_MS } from './deviceFetch';
+import { fetchFromDevice, buildMultipartBody, DEVICE_REQUEST_TIMEOUT_MS, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 
 vi.mock('obsidian', () => ({
     requestUrl: vi.fn(),
@@ -64,24 +64,52 @@ describe('fetchFromDevice', () => {
         );
     });
 
+    it('does not forward timeoutMs to requestUrl, which has no such option', async () => {
+        vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+        await fetchFromDevice('192.168.1.50', '/path', 'Upload failed', { timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS });
+
+        const [[calledWith]] = vi.mocked(requestUrl).mock.calls;
+        expect(calledWith).not.toHaveProperty('timeoutMs');
+    });
+
     describe('with fake timers', () => {
         beforeEach(() => {
             vi.useFakeTimers();
         });
 
-        it('reports the device as unresponsive when the request times out', async () => {
+        function mockNeverResolving() {
             const pending = new Promise(() => { /* never resolves */ });
             vi.mocked(requestUrl).mockReturnValue(Object.assign(pending, {
                 arrayBuffer: pending.then(() => new ArrayBuffer(0)),
                 json: pending.then(() => undefined),
                 text: pending.then(() => ''),
             }) as ReturnType<typeof requestUrl>);
+        }
+
+        it('reports the device as unresponsive when the request times out', async () => {
+            mockNeverResolving();
 
             const assertion = expect(fetchFromDevice('192.168.1.50', '/path', 'Failed to load file list')).rejects.toThrow(
                 `Failed to load file list: Supernote at 192.168.1.50 did not respond within ${DEVICE_REQUEST_TIMEOUT_MS / 1000}s. `
                 + `Check that it's on the same network and "Browse and Access" is turned on.`
             );
             await vi.advanceTimersByTimeAsync(DEVICE_REQUEST_TIMEOUT_MS);
+            await assertion;
+        });
+
+        it('honors a longer timeoutMs override for file transfers', async () => {
+            mockNeverResolving();
+
+            const assertion = expect(
+                fetchFromDevice('192.168.1.50', '/path', 'Failed to download file', { timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS })
+            ).rejects.toThrow(
+                `Failed to download file: Supernote at 192.168.1.50 did not respond within ${DEVICE_TRANSFER_TIMEOUT_MS / 1000}s. `
+                + `Check that it's on the same network and "Browse and Access" is turned on.`
+            );
+            // Confirm it hasn't already rejected at the short default timeout.
+            await vi.advanceTimersByTimeAsync(DEVICE_REQUEST_TIMEOUT_MS);
+            await vi.advanceTimersByTimeAsync(DEVICE_TRANSFER_TIMEOUT_MS - DEVICE_REQUEST_TIMEOUT_MS);
             await assertion;
         });
     });
