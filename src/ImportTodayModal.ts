@@ -152,7 +152,7 @@ export class ImportTodayModal extends Modal {
             for (const file of chosen) {
                 const response = await fetchFromDevice(ip, file.uri, `Failed to download ${file.name}`);
                 if (!response.ok) {
-                    throw new Error(`Failed to download ${file.name}: Supernote responded with an error (${response.statusText}).`);
+                    throw new Error(`Failed to download ${file.name}: Supernote responded with an error (status ${response.status}).`);
                 }
                 const buffer = await response.arrayBuffer();
                 combined += await this.plugin.vaultWriter.buildInsertableMarkdown(file.name, buffer, this.targetPath);

@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon } from 'obsidian';
+import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS } from './settings';
 import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -1223,6 +1223,23 @@ export default class SupernotePlugin extends Plugin {
 			id: 'insert-supernote-screen-mirror-image',
 			name: 'Insert a supernote screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
+				// Screen mirroring is an indefinitely-open multipart MJPEG stream read
+				// with a raw `fetch()` + ReadableStream reader (see fetchMirrorFrame in
+				// supernote-typescript). Mobile Obsidian runs in a WKWebView, which
+				// blocks cross-origin fetch() to a plain-HTTP LAN device, and
+				// Obsidian's mobile-safe `requestUrl` alternative can't substitute here
+				// because it only resolves once the whole response body finishes -
+				// which for this stream never happens. Fail fast with an actionable
+				// message instead of attempting (and mysteriously failing) the request.
+				if (Platform.isMobile) {
+					new ErrorModal(this.app, new Error(
+						"Screen mirroring insert isn't supported on Obsidian mobile: it needs a continuous network "
+						+ "stream that mobile's WebView can't read. Use \"Browse and Access\" to insert a file "
+						+ "instead, or run this command on desktop."
+					)).open();
+					return;
+				}
+
 				// generate a unique filename for the mirror based on the current note path
 				const ts = generateTimestamp();
 				const f = this.app.workspace.activeEditor?.file?.basename || '';
