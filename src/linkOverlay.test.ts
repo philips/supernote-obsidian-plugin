@@ -44,11 +44,10 @@ describe('parseLinkRect', () => {
 });
 
 describe('bucketLinksByPage', () => {
-    it('buckets by the page index encoded in the first 4 characters of the key', () => {
-        // Page 1 (0-indexed page 0) and page 3 (0-indexed page 2).
+    it('buckets by the 1-indexed page number in the key\'s first 4 characters', () => {
         const links: Record<string, ILink[]> = {
-            '0001_0100': [fakeLink({ text: 'a' })],
-            '0003_0050': [fakeLink({ text: 'b' })],
+            '0001125301180132': [fakeLink({ text: 'a' })], // page 1 -> index 0
+            '0003165101560070': [fakeLink({ text: 'b' })], // page 3 -> index 2
         };
         const byPage = bucketLinksByPage(links);
         expect(byPage.get(0)?.map((l) => l.text)).toEqual(['a']);
@@ -58,21 +57,25 @@ describe('bucketLinksByPage', () => {
 
     it('merges multiple keys that resolve to the same page', () => {
         const links: Record<string, ILink[]> = {
-            '0001_0100': [fakeLink({ text: 'a' })],
-            '0001_0200': [fakeLink({ text: 'b' })],
+            '0001125301180132': [fakeLink({ text: 'a' })],
+            '0001099901180132': [fakeLink({ text: 'b' })],
         };
         const byPage = bucketLinksByPage(links);
         expect(byPage.get(0)?.map((l) => l.text)).toEqual(['a', 'b']);
     });
 
-    it('filters out non-internal-note-link types', () => {
+    it('does not filter by LINKTYPE', () => {
+        // Two real notes checked both have genuine internal links with
+        // LINKTYPE '0' as well as '1' — its doc comment ("1 = internal note
+        // link") doesn't hold up in practice, so everything sn.links hands
+        // back is treated as a real, clickable link.
         const links: Record<string, ILink[]> = {
-            '0001_0100': [fakeLink({ LINKTYPE: '2', text: 'ignored' })],
+            '0001125301180132': [fakeLink({ LINKTYPE: '0', text: 'kept' })],
         };
-        expect(bucketLinksByPage(links).has(0)).toBe(false);
+        expect(bucketLinksByPage(links).get(0)?.map((l) => l.text)).toEqual(['kept']);
     });
 
-    it('ignores keys that do not decode to a valid page index', () => {
+    it('ignores keys that do not decode to a valid page number', () => {
         const links: Record<string, ILink[]> = {
             'not-a-page-key': [fakeLink()],
         };
@@ -113,5 +116,19 @@ describe('LINKRECT against a real .note fixture', () => {
             expect(pageIndex).toBeGreaterThanOrEqual(0);
             expect(pageIndex).toBeLessThan(sn.pages.length);
         }
+    });
+
+    it('bucketLinksByPage matches this fixture\'s known per-page link layout', () => {
+        // All 3 of this fixture's links share the same sn.links Record key
+        // prefix ("0002") — i.e. this fixture happens to place all of them on
+        // page index 1. Asserting that exactly, rather than "some valid
+        // page", is what would have caught shipping OBJPAGE-based bucketing
+        // (which scattered these across pages 0/1/2 instead) as a regression.
+        const buffer = fs.readFileSync(fixturePath);
+        const sn = new SupernoteX(new Uint8Array(buffer));
+        const byPage = bucketLinksByPage(sn.links);
+        expect(byPage.get(1)?.length).toBe(3);
+        expect(byPage.has(0)).toBe(false);
+        expect(byPage.has(2)).toBe(false);
     });
 });

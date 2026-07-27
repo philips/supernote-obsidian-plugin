@@ -16,21 +16,36 @@ export function parseLinkRect(rect: string): [number, number, number, number] | 
 	return parts as [number, number, number, number];
 }
 
-// Buckets a note's links by 0-indexed source page. sn.links' Record key
-// isn't a plain page number — its first 4 characters, parsed as an int minus
-// one, give the page index (more reliable than ILink.OBJPAGE); see PR #122's
-// linksByPage (the markdown-export equivalent of this) for the same
-// convention. Only LINKTYPE '1' ("internal note link") entries are surfaced
-// as clickable regions.
+// Buckets a note's links by 0-indexed source page: sn.links' Record key's
+// first 4 characters, parsed as a 1-indexed page number, minus one. NOT
+// ILink.OBJPAGE, despite its doc comment ("0-indexed page number this link
+// appears on") sounding like the obvious field to use — pixel-checked
+// against a real note with two internal links: OBJPAGE was 4 and 1 for
+// links whose LINKRECT ink actually falls on array pages 0 and 3
+// respectively (a 4-page note), which isn't consistent with OBJPAGE under
+// *any* indexing convention. It turned out to track the page's own
+// user-visible template label instead, which had drifted from its current
+// array position (most likely from page reordering) — not usable for
+// layout. The key-prefix convention checks out: 1 -> index 0, 4 -> index 3,
+// confirmed by drawing each LINKRECT on every rendered page and measuring
+// ink coverage under it. (An earlier version of this function used OBJPAGE
+// directly, having wrongly concluded the key-prefix approach was broken from
+// a single fixture where three links coincidentally shared one page and one
+// prefix — always verify against more than one real note before trusting a
+// hypothesis like this.)
+//
+// Also doesn't filter by LINKTYPE ("1 = internal note link" per its doc
+// comment) — in both real notes checked, genuine internal links have
+// LINKTYPE '0' as often as '1', so that comment doesn't hold up either;
+// everything present in sn.links was already resolved as a real link by the
+// parser, so nothing more to gate on.
 export function bucketLinksByPage(links: Record<string, ILink[]>): Map<number, ILink[]> {
 	const byPage = new Map<number, ILink[]>();
 	for (const key of Object.keys(links)) {
-		const pageIndex = parseInt(key.slice(0, 4)) - 1;
+		const pageIndex = parseInt(key.slice(0, 4), 10) - 1;
 		if (!Number.isFinite(pageIndex) || pageIndex < 0) continue;
-		const internal = links[key].filter((l) => l.LINKTYPE === '1');
-		if (internal.length === 0) continue;
 		const bucket = byPage.get(pageIndex) ?? [];
-		bucket.push(...internal);
+		bucket.push(...links[key]);
 		byPage.set(pageIndex, bucket);
 	}
 	return byPage;
