@@ -67,6 +67,9 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     noteImageMaxDim: number;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
+    isAutoSyncMarkdownEnabled: boolean;
+    noteWatchFolder: string;
+    markdownMirrorFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -76,6 +79,9 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
+    isAutoSyncMarkdownEnabled: false,
+    noteWatchFolder: '',
+    markdownMirrorFolder: '',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -149,6 +155,32 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     type: 'dropdown',
                     key: 'importFormat',
                     options: IMPORT_FORMAT_LABELS,
+                },
+            },
+            {
+                name: 'Auto-sync .note files to markdown',
+                desc: 'Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.',
+                control: {
+                    type: 'toggle',
+                    key: 'isAutoSyncMarkdownEnabled',
+                },
+            },
+            {
+                name: 'Auto-sync watched folder',
+                desc: 'Only auto-sync .note files inside this vault folder. Leave empty to watch the whole vault. Example: Supernote',
+                control: {
+                    type: 'text',
+                    key: 'noteWatchFolder',
+                    placeholder: 'Supernote',
+                },
+            },
+            {
+                name: 'Markdown mirror folder',
+                desc: 'Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: SupernoteMarkdowns',
+                control: {
+                    type: 'text',
+                    key: 'markdownMirrorFolder',
+                    placeholder: 'SupernoteMarkdowns',
                 },
             },
             {
@@ -249,6 +281,41 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.importFormat)
                 .onChange(async (value) => {
                     this.plugin.settings.importFormat = value as ImportFormat;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Auto-sync .note files to markdown')
+            .setDesc('Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.isAutoSyncMarkdownEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.isAutoSyncMarkdownEnabled = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Auto-sync watched folder')
+            .setDesc('Only auto-sync .note files inside this vault folder. Leave empty to watch the whole vault. Example: Supernote')
+            .addText(text => text
+                .setPlaceholder('Supernote')
+                .setValue(this.plugin.settings.noteWatchFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.noteWatchFolder = value.trim().replace(/\/$/, '');
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Markdown mirror folder')
+            .setDesc('Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: SupernoteMarkdowns')
+            .addText(text => text
+                .setPlaceholder('SupernoteMarkdowns')
+                .setValue(this.plugin.settings.markdownMirrorFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.markdownMirrorFolder = value.trim().replace(/\/$/, '');
                     await this.plugin.saveSettings();
                 })
             );
