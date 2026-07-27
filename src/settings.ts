@@ -68,6 +68,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
     isKeywordsAndLinksEnabled: boolean;
+    isHashtagsMentionsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -78,6 +79,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
     isKeywordsAndLinksEnabled: true,
+    isHashtagsMentionsEnabled: true,
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -159,6 +161,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 control: {
                     type: 'toggle',
                     key: 'isKeywordsAndLinksEnabled',
+                },
+            },
+            {
+                name: 'Convert # and @ in recognized text to tags and wikilinks',
+                desc: 'In exported markdown, convert #Word into an Obsidian tag or heading, and @Word(s) into a wikilink [[Word(s)]].',
+                control: {
+                    type: 'toggle',
+                    key: 'isHashtagsMentionsEnabled',
                 },
             },
             {
@@ -270,6 +280,17 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.isKeywordsAndLinksEnabled)
                 .onChange(async (value) => {
                     this.plugin.settings.isKeywordsAndLinksEnabled = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Convert # and @ in recognized text to tags and wikilinks')
+            .setDesc('In exported markdown, convert #Word into an Obsidian tag or heading, and @Word(s) into a wikilink [[Word(s)]].')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.isHashtagsMentionsEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.isHashtagsMentionsEnabled = value;
                     await this.plugin.saveSettings();
                 })
             );

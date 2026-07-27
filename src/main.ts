@@ -71,17 +71,72 @@ async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<
     return ctx.pdfDoc.save();
 }
 
+// Supernote's handwriting recognition renders starred keywords in OCR text as
+// "#Word" (or a heading-looking "# Word") and its own internal-link mentions
+// as "@Word(s)". This turns those into Obsidian-native markup:
+//   - "#Word": an inline tag (#Word) if Word is a known tag (either already
+//     in the vault's tag index, or one of this note's own keyword stars -
+//     see noteKeywordTags, which lets brand-new tags be recognised before
+//     they're indexed); otherwise a Markdown heading ("# Word").
+//   - "@Word(s)": a Wikilink ([[Word(s)]]), taking the rest of the line so
+//     multi-word note names work.
+function processHashtagsAndMentions(
+	text: string,
+	app: App,
+	noteKeywordTags: Map<string, string> = new Map(),
+): string {
+	const tagSet = new Set<string>();
+	try {
+		// getTags() is an undocumented MetadataCache method returning all vault
+		// tags as Record<string, number> - much cheaper than iterating every file.
+		const allTags: Record<string, number> = (app.metadataCache as unknown as { getTags(): Record<string, number> }).getTags();
+		for (const tag of Object.keys(allTags)) {
+			tagSet.add(tag.toLowerCase());
+		}
+	} catch {
+		// Vault tag lookup is best-effort; fall back to treating all #words as headings.
+	}
+
+	return text
+		.replace(/#\s*(\w[\w-]*)(\s+\w[\w-]*)?/g, (_match, word: string, next?: string) => {
+			if (next) {
+				const nextWord = next.trim();
+				const twoWordKey = `${word.toLowerCase()}_${nextWord.toLowerCase()}`;
+				// This note's own keyword tags take priority (canonical capitalisation).
+				if (noteKeywordTags.has(twoWordKey)) return noteKeywordTags.get(twoWordKey)!;
+				if (tagSet.has(`#${twoWordKey}`)) return `#${word}_${nextWord}`;
+			}
+			const singleKey = word.toLowerCase();
+			if (noteKeywordTags.has(singleKey)) return noteKeywordTags.get(singleKey)!;
+			if (tagSet.has(`#${singleKey}`)) return `#${word}${next ?? ''}`;
+			// Not a known tag -> Markdown heading.
+			return `# ${word}${next ?? ''}`;
+		})
+		.replace(/@\s*(.+)/g, (_match, mention: string) => `[[${mention.trim()}]]`);
+}
+
 /**
  * Processes the Supernote text based on the provided settings.
- * 
+ *
  * @param text - The input text to be processed.
  * @param settings - The settings for the Supernote plugin.
+ * @param app - The Obsidian app instance, used for vault tag lookup.
+ * @param noteKeywordTags - This note's own keyword-star tags (see writeMarkdownFile),
+ *   so brand-new tags are recognised before they're indexed in the vault.
  * @returns The processed text.
  */
-function processSupernoteText(text: string, settings: SupernotePluginSettings): string {
+function processSupernoteText(
+	text: string,
+	settings: SupernotePluginSettings,
+	app: App,
+	noteKeywordTags: Map<string, string> = new Map(),
+): string {
 	let processedText = text;
 	if (settings.isCustomDictionaryEnabled) {
 		processedText = replaceTextWithCustomDictionary(processedText, settings.customDictionary);
+	}
+	if (settings.isHashtagsMentionsEnabled) {
+		processedText = processHashtagsAndMentions(processedText, app, noteKeywordTags);
 	}
 	return processedText;
 }
@@ -203,7 +258,12 @@ class VaultWriter {
 		// matching the LINKO key format - more reliable than KEYWORDPAGE, which
 		// can be '0' (invalid). Keyword text is sanitized into a tag by turning
 		// non-alphanumeric characters into '_'.
+		// noteKeywordTags maps a lowercase-normalized key (e.g. "new_tag") to the
+		// canonical "#Tag" string, so processHashtagsAndMentions can recognise
+		// this note's own keyword stars as tags in the OCR text even before
+		// they're indexed as vault tags.
 		const keywordsByPage = new Map<number, string[]>();
+		const noteKeywordTags = new Map<string, string>();
 		if (this.settings.isKeywordsAndLinksEnabled) {
 			for (const key of Object.keys(sn.keywords)) {
 				const pageIdx = parseInt(key.slice(0, 4)) - 1;
@@ -213,6 +273,9 @@ class VaultWriter {
 					const tag = `#${text.replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
 					if (!keywordsByPage.has(pageIdx)) keywordsByPage.set(pageIdx, []);
 					if (!keywordsByPage.get(pageIdx)!.includes(tag)) keywordsByPage.get(pageIdx)!.push(tag);
+					const parts = tag.slice(1).split('_');
+					if (parts.length === 1) noteKeywordTags.set(parts[0].toLowerCase(), tag);
+					if (parts.length === 2) noteKeywordTags.set(`${parts[0].toLowerCase()}_${parts[1].toLowerCase()}`, tag);
 				}
 			}
 		}
@@ -239,7 +302,11 @@ class VaultWriter {
 			content += `## Page ${i + 1}\n\n`
 			let pageOcrText = '';
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				pageOcrText = processSupernoteText(sn.pages[i].text, this.settings);
+				try {
+					pageOcrText = processSupernoteText(sn.pages[i].text, this.settings, this.app, noteKeywordTags);
+				} catch {
+					pageOcrText = sn.pages[i].text;
+				}
 			}
 			// Only emit keyword tags not already present in the OCR text.
 			const pageTags = keywordsByPage.get(i);
@@ -374,7 +441,7 @@ class VaultWriter {
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `### Page ${i + 1}\n\n`;
 			if (format === 'images-text' && sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+				content += `${processSupernoteText(sn.pages[i].text, this.settings, this.app)}\n`;
 			}
 
 			let alt = '';
