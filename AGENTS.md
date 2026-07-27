@@ -82,10 +82,14 @@ npm test          # vitest run
   calls — `eslint-plugin-obsidianmd`'s `no-unsupported-api` rule checks this
   against `@since` tags in Obsidian's own type declarations and will error on
   a mismatch.
-- There's no separate beta manifest. BRAT and Obsidian's updater both fetch
-  `manifest.json` from the release assets, not the repo, so beta releases
-  just tag a `manifest.json` version with a semver pre-release suffix (e.g.
-  `3.0.2-beta.1`) — see the "Releasing" section in `README.md`.
+- There's no separate beta manifest file. `manifest.json` as committed must
+  only ever hold the last *stable* version — Obsidian's update-checker reads
+  it straight from the repo (not from GitHub's "latest release"), so a beta
+  version committed here would get offered to every installed user. Beta
+  releases are just a git tag with a semver pre-release suffix (e.g.
+  `3.0.2-beta.1`, no commit needed); the release workflow stamps that
+  version into `manifest.json` only inside its own build, for the release
+  asset — see the "Releasing" section in `README.md`.
 - `npm run version` bumps `manifest.json` and appends to `versions.json`
   (`version-bump.mjs`), skipping the write if that version is already
   present — don't hand-edit `versions.json` (a hand-edit is exactly what
