@@ -14,7 +14,7 @@ This plugin has five main features:
 
 - ➡️  Export Supernote `*.note` files as PNGs and/or markdown files and attach them to your Vault.
 
-- 🧠 Attach all of today's modified Supernote notes and text to the current Obsidian note (great when paired with [daily notes](https://obsidian.md/help/plugins/daily-notes))
+- 🧠 Attach all of today's modified Supernote notes and text to the current Obsidian note with the "Import notes edited today" command (great when paired with [daily notes](https://obsidian.md/help/plugins/daily-notes))
 
 - 📺 Copy an image from a Supernote via [screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring) into your current note with the "Insert Supernote mirror image" command ([demo video](https://youtu.be/Ih_NW-z_aLw))
 
