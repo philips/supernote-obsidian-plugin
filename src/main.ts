@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
+import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
 import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -9,6 +9,8 @@ import { ErrorModal } from './ErrorModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
+import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
+import { formatSyncFailureLogEntry } from './deviceSync';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -288,7 +290,12 @@ class VaultWriter {
 		}
 
 		const imgs = await this.writeImageFiles(basename, sn);
+		return this.renderPagesMarkdown(basename, sn, imgs, targetPath, format);
+	}
 
+	// Shared page-by-page markdown body (heading + optional recognized text +
+	// image embed) used by buildInsertableContent's images/images-text formats.
+	private renderPagesMarkdown(basename: string, sn: SupernoteX, imgs: TFile[], targetPath: string, format: ImportFormat): string {
 		let content = `## ${basename}\n\n`;
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `### Page ${i + 1}\n\n`;
@@ -1477,6 +1484,7 @@ export class SupernoteEmbed extends Component {
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
+	private syncInFlight = false;
 
 	async onload() {
         // Install polyfills before any other code runs
@@ -1671,6 +1679,56 @@ export default class SupernotePlugin extends Plugin {
 				new ImportTodayModal(this.app, this, editor, targetPath).open();
 			},
 		});
+
+		this.addCommand({
+			id: 'sync-notes-from-device',
+			name: 'Sync supernote notes now',
+			callback: () => { void this.runSync(); },
+		});
+	}
+
+	async runSync(): Promise<void> {
+		if (this.settings.directConnectIP.length === 0) {
+			new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
+			return;
+		}
+		// A slow sync (large device, slow LAN) could still be running when the
+		// command is invoked again — e.g. the user re-runs it by hand right
+		// after triggering it. Two runs racing on the same manifest could each
+		// read a stale copy and clobber the other's updates when they save.
+		if (this.syncInFlight) {
+			new Notice('Supernote sync is already running');
+			return;
+		}
+
+		this.syncInFlight = true;
+		try {
+			const result = await runDeviceSync(this.app, this.settings, () => this.saveSettings());
+
+			const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
+			if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
+			if (result.skippedConflicts.length > 0) parts.push(`${result.skippedConflicts.length} skipped (locally edited)`);
+			if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
+			new Notice(`Supernote sync: ${parts.join(', ')}`);
+
+			if (result.skippedConflicts.length > 0) {
+				console.warn('Supernote sync skipped these files because they were edited locally since the last sync:', result.skippedConflicts);
+			}
+			if (result.failed.length > 0) {
+				console.error('Supernote sync failed for these files:', result.failed);
+			}
+		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
+			// Best-effort: a run that fails before producing a per-file result at
+			// all (e.g. the device was unreachable) is exactly the kind of thing
+			// worth a Sync Log entry, but a logging failure on top of that
+			// shouldn't hide the real error from the modal below.
+			await appendSyncLogEntry(this.app, this.settings.syncFolder, formatSyncFailureLogEntry(error.message))
+				.catch((logErr) => console.error('Failed to write to Supernote sync log:', logErr));
+			new DirectConnectErrorModal(this.app, this.settings, error).open();
+		} finally {
+			this.syncInFlight = false;
+		}
 	}
 
 	onunload() {

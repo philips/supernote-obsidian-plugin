@@ -1,6 +1,7 @@
 import { createCustomDictionarySettingsUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, CustomDictionarySettings } from "./customDictionary";
 import SupernotePlugin from "./main";
-import { App, ExtraButtonComponent, PluginSettingTab, Setting } from 'obsidian';
+import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { SyncManifest } from './deviceSync';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
@@ -16,7 +17,7 @@ export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
 export type ImportFormat = 'note-link' | 'embed' | 'images' | 'pdf' | 'images-text';
 
 export const IMPORT_FORMAT_LABELS: Record<ImportFormat, string> = {
-    'note-link': 'Note link (save .note file, link to it)',
+    'note-link': 'Notes (save .note)',
     'embed': 'Embedded note (save .note file, embed it)',
     'images': 'Images only',
     'pdf': 'PDF',
@@ -67,6 +68,21 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     noteImageMaxDim: number;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
+    /** Vault folder that device sync writes into; never touches anything outside it. */
+    syncFolder: string;
+    /**
+     * Device path glob patterns (comma/newline separated) scoping which
+     * notes sync considers. Empty = sync everything. A single text field
+     * rather than string[] because the declarative settings API's text
+     * control only speaks in single strings — see parsePathFilters().
+     */
+    syncPathFiltersRaw: string;
+    /**
+     * Persisted record of what sync last wrote for each device note — see
+     * deviceSync.ts. Drives both change detection (skip unchanged files) and
+     * the overwrite-safety guard (never clobber a local edit).
+     */
+    noteSyncState: SyncManifest;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -76,6 +92,9 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
+    syncFolder: 'Supernote sync',
+    syncPathFiltersRaw: '',
+    noteSyncState: {},
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -149,6 +168,44 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     type: 'dropdown',
                     key: 'importFormat',
                     options: IMPORT_FORMAT_LABELS,
+                },
+            },
+            {
+                name: 'Sync',
+                render: (setting) => {
+                    setting.setHeading();
+                },
+            },
+            {
+                name: 'Sync folder',
+                desc: 'Vault folder that "sync supernote notes now" writes into, mirroring the device\'s own folder structure underneath it (including a "Sync Log.md" recording any conflicts or errors). The sync command never writes anywhere outside this folder.',
+                control: {
+                    type: 'text',
+                    key: 'syncFolder',
+                    placeholder: 'Supernote sync',
+                },
+            },
+            {
+                name: 'Sync device paths',
+                desc: 'Limit sync to these device paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every note on the device.',
+                control: {
+                    type: 'text',
+                    key: 'syncPathFiltersRaw',
+                    placeholder: '/diary/**',
+                },
+            },
+            {
+                name: 'Sync history',
+                render: (setting) => {
+                    setting
+                        .setDesc('Forgets which device notes have already been synced. The next sync re-checks every matching note from scratch — already-synced files are still protected by the same edit-conflict check, so this is safe to use, just slower for one run.')
+                        .addButton((btn) => {
+                            btn.setButtonText('Forget sync history').onClick(async () => {
+                                this.plugin.settings.noteSyncState = {};
+                                await this.plugin.saveSettings();
+                                new Notice('Supernote sync history cleared');
+                            });
+                        });
                 },
             },
             {
@@ -250,6 +307,46 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.importFormat = value as ImportFormat;
                     await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Sync')
+            .setHeading();
+
+        new Setting(containerEl)
+            .setName('Sync folder')
+            .setDesc('Vault folder that "sync supernote notes now" writes into, mirroring the device\'s own folder structure underneath it (including a "Sync Log.md" recording any conflicts or errors). The sync command never writes anywhere outside this folder.')
+            .addText(text => text
+                .setPlaceholder('Supernote sync')
+                .setValue(this.plugin.settings.syncFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.syncFolder = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Sync device paths')
+            .setDesc('Limit sync to these device paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every note on the device.')
+            .addText(text => text
+                .setPlaceholder('/diary/**')
+                .setValue(this.plugin.settings.syncPathFiltersRaw)
+                .onChange(async (value) => {
+                    this.plugin.settings.syncPathFiltersRaw = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Sync history')
+            .setDesc('Forgets which device notes have already been synced. The next sync re-checks every matching note from scratch — already-synced files are still protected by the same edit-conflict check, so this is safe to use, just slower for one run.')
+            .addButton(btn => btn
+                .setButtonText('Forget sync history')
+                .onClick(async () => {
+                    this.plugin.settings.noteSyncState = {};
+                    await this.plugin.saveSettings();
+                    new Notice('Supernote sync history cleared');
                 })
             );
 
