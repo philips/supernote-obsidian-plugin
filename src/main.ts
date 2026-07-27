@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
+import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage, ILink } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -198,10 +198,60 @@ class VaultWriter {
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
 
+		// Build a per-page keyword-tag map from the note's starred keywords. The
+		// KEYWORD footer key's first 4 digits (1-indexed) give the source page,
+		// matching the LINKO key format - more reliable than KEYWORDPAGE, which
+		// can be '0' (invalid). Keyword text is sanitized into a tag by turning
+		// non-alphanumeric characters into '_'.
+		const keywordsByPage = new Map<number, string[]>();
+		if (this.settings.isKeywordsAndLinksEnabled) {
+			for (const key of Object.keys(sn.keywords)) {
+				const pageIdx = parseInt(key.slice(0, 4)) - 1;
+				for (const kw of sn.keywords[key]) {
+					const text = kw.KEYWORD.trim();
+					if (!text) continue;
+					const tag = `#${text.replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
+					if (!keywordsByPage.has(pageIdx)) keywordsByPage.set(pageIdx, []);
+					if (!keywordsByPage.get(pageIdx)!.includes(tag)) keywordsByPage.get(pageIdx)!.push(tag);
+				}
+			}
+		}
+
+		// Build a per-page link map. The LINKO key's first 4 digits (1-indexed)
+		// give the source page, more reliable than OBJPAGE. Sorting keys gives
+		// top-to-bottom link order within each page (the key also encodes the Y
+		// coordinate after the page prefix).
+		const linksByPage = new Map<number, string[]>();
+		if (this.settings.isKeywordsAndLinksEnabled) {
+			const noteCache = new Map<string, SupernoteX>();
+			for (const key of Object.keys(sn.links).sort()) {
+				for (const link of sn.links[key]) {
+					if (!link.text) continue;
+					const text = await this.resolvePageAnchor(link, noteCache);
+					const pageIdx = parseInt(key.slice(0, 4)) - 1;
+					if (!linksByPage.has(pageIdx)) linksByPage.set(pageIdx, []);
+					linksByPage.get(pageIdx)!.push(`[[${text}]]`);
+				}
+			}
+		}
+
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
+			let pageOcrText = '';
 			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+				pageOcrText = processSupernoteText(sn.pages[i].text, this.settings);
+			}
+			// Only emit keyword tags not already present in the OCR text.
+			const pageTags = keywordsByPage.get(i);
+			if (pageTags) {
+				const missing = pageTags.filter(tag => !pageOcrText.includes(tag));
+				if (missing.length > 0) content += missing.join(' ') + '\n\n';
+			}
+			if (pageOcrText) content += `${pageOcrText}\n`;
+			// Append Supernote internal links that appear on this page.
+			const pageLinks = linksByPage.get(i);
+			if (pageLinks) {
+				content += pageLinks.join('\n') + '\n';
 			}
 			if (imgs) {
 				let alt = '';
@@ -215,6 +265,37 @@ class VaultWriter {
 		}
 
 		await this.app.vault.create(filename, content);
+	}
+
+	// The library already resolves same-document page anchors (ILink.text
+	// contains "#Page N" when PAGEID matches a page in this document). This
+	// only has cross-file anchors left to resolve: load the target .note file
+	// from the vault by its (already-decoded) basename and look up PAGEID
+	// among its pages. A per-call cache avoids re-parsing the same file
+	// multiple times when a note links to it more than once.
+	private async resolvePageAnchor(link: ILink, cache: Map<string, SupernoteX>): Promise<string> {
+		if (link.text.includes('#')) return link.text;
+		const pageid = link.PAGEID;
+		if (!pageid || pageid === '0' || pageid === 'none') return link.text;
+
+		const targetBasename = link.text;
+		let targetNote = cache.get(targetBasename);
+		if (!targetNote) {
+			const noteFile = this.app.vault.getFiles().find(
+				f => f.extension === 'note' && f.basename === targetBasename
+			);
+			if (!noteFile) return link.text;
+			try {
+				const buffer = await this.app.vault.readBinary(noteFile);
+				targetNote = new SupernoteX(new Uint8Array(buffer));
+				cache.set(targetBasename, targetNote);
+			} catch {
+				return link.text;
+			}
+		}
+
+		const pageIndex = targetNote.pages.findIndex(p => p.PAGEID === pageid);
+		return pageIndex >= 0 ? `${link.text}#Page ${pageIndex + 1}` : link.text;
 	}
 
 	async writeImageFiles(basename: string, sn: SupernoteX): Promise<TFile[]> {

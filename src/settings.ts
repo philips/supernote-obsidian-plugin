@@ -67,6 +67,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     noteImageMaxDim: number;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
+    isKeywordsAndLinksEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -76,6 +77,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
+    isKeywordsAndLinksEnabled: true,
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -149,6 +151,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     type: 'dropdown',
                     key: 'importFormat',
                     options: IMPORT_FORMAT_LABELS,
+                },
+            },
+            {
+                name: 'Convert supernote keywords to tags and links to wikilinks',
+                desc: 'In exported markdown, turn starred keywords into Obsidian tags (e.g. #my_tag) and supernote internal links into wikilinks (e.g. [[note#page 1]]).',
+                control: {
+                    type: 'toggle',
+                    key: 'isKeywordsAndLinksEnabled',
                 },
             },
             {
@@ -249,6 +259,17 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.importFormat)
                 .onChange(async (value) => {
                     this.plugin.settings.importFormat = value as ImportFormat;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Convert supernote keywords to tags and links to wikilinks')
+            .setDesc('In exported markdown, turn starred keywords into Obsidian tags (e.g. #my_tag) and supernote internal links into wikilinks (e.g. [[note#page 1]]).')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.isKeywordsAndLinksEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.isKeywordsAndLinksEnabled = value;
                     await this.plugin.saveSettings();
                 })
             );
