@@ -1,0 +1,10 @@
+{
+	"id": "supernote-llm-page-ocr-example",
+	"name": "Supernote LLM Page OCR (example)",
+	"version": "0.2.0",
+	"minAppVersion": "1.7.2",
+	"description": "Example companion plugin: transcribes Supernote page images via any local OpenAI-compatible server (Jan.ai, LM Studio, Ollama, llama.cpp server, etc.), using the Supernote plugin's registerPageTextProcessor hook.",
+	"author": "Brandon Philips",
+	"authorUrl": "https://ifup.org",
+	"isDesktopOnly": true
+}

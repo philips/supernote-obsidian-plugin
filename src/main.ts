@@ -40,6 +40,11 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
     return bytes.buffer;
 }
 
+// "data:image/png;base64,..." -> "image/png"
+function dataUrlMimeType(dataUrl: string): string {
+    return dataUrl.slice('data:'.length, dataUrl.indexOf(';'));
+}
+
 // app.fileManager.generateMarkdownLink() follows the vault's "Use Wikilinks"
 // setting, producing `![[...]]` for users who have that on. The images here
 // are ones we just created as attachments, so embed them with explicit
@@ -179,16 +184,100 @@ export class ImageConverter {
     }
 }
 
+// In-process extension point for other Obsidian plugins that want to enrich
+// a page's text before it lands in the generated markdown — e.g. an OCR/LLM
+// companion plugin transcribing handwriting the device's own recognition
+// missed (see examples/llm-page-ocr for a reference implementation
+// against a local OpenAI-compatible server). Undocumented by design: the
+// same "reach into another plugin's loaded instance" pattern Templater/
+// Dataview expose their own APIs through, since Obsidian has no formal
+// inter-plugin dependency mechanism. Callers must feature-detect
+// (`app.plugins.plugins['supernote']?.registerPageTextProcessor`) and accept
+// that this can change across versions.
+export interface PageTextProcessorContext {
+	/** 1-indexed, matching the "## Page N" headings in the generated markdown. */
+	pageNumber: number;
+	totalPages: number;
+	/** Filename of the source .note file (e.g. "2026-01-15.note"). Not
+	 *  necessarily saved into the vault — some import paths rasterize pages
+	 *  without ever writing the raw .note itself. */
+	sourceName: string;
+	/** This page's text so far: the device's own recognized text (if any),
+	 *  already run through any earlier-registered processors. Empty string
+	 *  if none. */
+	text: string;
+	/** MIME type of the bytes `readImage()` resolves to. Currently always
+	 *  "image/png" — the rasterization pipeline's one fixed output format —
+	 *  but read this rather than assuming it, in case that ever changes. */
+	imageMimeType: string;
+	/** Reads this page's rasterized image bytes. Raw bytes rather than a
+	 *  vault TFile: this runs whether or not the current export/import
+	 *  actually wants image files saved into the vault, so there may be no
+	 *  TFile backing it at all. */
+	readImage(): Promise<ArrayBuffer>;
+}
+
+// Return the page's new text (replacing `ctx.text` entirely — a processor
+// that wants to keep the existing text should fold it in itself), or
+// null/undefined to leave it unchanged. Processors run in registration
+// order, each seeing the previous one's output as `ctx.text`.
+export type PageTextProcessor = (ctx: PageTextProcessorContext) => Promise<string | null | undefined>;
+
 class VaultWriter {
 	app: App;
 	settings: SupernotePluginSettings;
+	processors: Set<PageTextProcessor>;
 
-	constructor(app: App, settings: SupernotePluginSettings) {
+	constructor(app: App, settings: SupernotePluginSettings, processors: Set<PageTextProcessor>) {
 		this.app = app;
 		this.settings = settings;
+		this.processors = processors;
 	}
 
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null) {
+	// `imageDataUrl` comes from the in-memory rasterization pass
+	// (ImageConverter), independent of whether this export/import is also
+	// writing that image out as a vault attachment — callers rasterize on
+	// demand (see rasterizePages()) whenever processors are registered, even
+	// for a markdown-only export that wouldn't otherwise touch images at all.
+	private async applyPageTextProcessors(sourceName: string, pageIndex: number, totalPages: number, text: string, imageDataUrl: string | undefined): Promise<string> {
+		if (!imageDataUrl || this.processors.size === 0) return text;
+
+		let result = text;
+		for (const processor of this.processors) {
+			try {
+				const out = await processor({
+					pageNumber: pageIndex + 1,
+					totalPages,
+					sourceName,
+					text: result,
+					imageMimeType: dataUrlMimeType(imageDataUrl),
+					readImage: async () => dataUrlToBuffer(imageDataUrl),
+				});
+				if (out !== null && out !== undefined) result = out;
+			} catch (err) {
+				console.error('Supernote page text processor failed:', err);
+			}
+		}
+		return result;
+	}
+
+	// Rasterizes every page once via the worker pool. Callers that also need
+	// the images written to the vault pass the result to writeImageFiles()
+	// rather than rasterizing a second time.
+	private async rasterizePages(sn: SupernoteX): Promise<string[]> {
+		const converter = new ImageConverter();
+		try {
+			return await converter.convertToImages(sn);
+		} finally {
+			converter.terminate();
+		}
+	}
+
+	// `images` (raw rasterized page data URLs, for processors) is independent
+	// of `imgs` (vault TFiles, for the embedded image links) — a markdown-only
+	// export passes `imgs: null` but can still pass `images` so registered
+	// processors run, even though no image attachment gets saved.
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null) {
 		let content = '';
 
 		// Generate a non-conflicting filename - it has a bit of a race but that is OK
@@ -203,8 +292,12 @@ class VaultWriter {
 
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+			let pageText = sn.pages[i].text !== undefined && sn.pages[i].text.length > 0
+				? processSupernoteText(sn.pages[i].text, this.settings)
+				: '';
+			pageText = await this.applyPageTextProcessors(file.name, i, sn.pages.length, pageText, images?.[i]);
+			if (pageText.length > 0) {
+				content += `${pageText}\n`;
 			}
 			if (imgs) {
 				let alt = '';
@@ -220,17 +313,10 @@ class VaultWriter {
 		await this.app.vault.create(filename, content);
 	}
 
-	async writeImageFiles(basename: string, sn: SupernoteX): Promise<TFile[]> {
-		let images: string[] = [];
-
-		const converter = new ImageConverter();
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			// Clean up the worker when done
-			converter.terminate();
-		}
-
+	// `images` is already-rasterized page data URLs (see rasterizePages()) —
+	// this just persists them, so callers that also need them for text
+	// processors rasterize once and pass the same array to both.
+	async writeImageFiles(basename: string, images: string[]): Promise<TFile[]> {
 		const imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i + 1}.png`);
@@ -244,15 +330,20 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		await this.writeMarkdownFile(file, sn, null);
+		// This export doesn't otherwise touch images at all, but a registered
+		// processor still needs one to work with — rasterize only when
+		// there's actually a processor to hand it to.
+		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
+		await this.writeMarkdownFile(file, sn, null, images);
 	}
 
 	async attachNoteFiles(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		const imgs = await this.writeImageFiles(file.basename, sn);
-		await this.writeMarkdownFile(file, sn, imgs);
+		const images = await this.rasterizePages(sn);
+		const imgs = await this.writeImageFiles(file.basename, images);
+		await this.writeMarkdownFile(file, sn, imgs, images);
 	}
 
 	/**
@@ -276,13 +367,7 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(noteBuffer));
 
 		if (format === 'pdf') {
-			const converter = new ImageConverter();
-			let images: string[] = [];
-			try {
-				images = await converter.convertToImages(sn);
-			} finally {
-				converter.terminate();
-			}
+			const images = await this.rasterizePages(sn);
 			const pdfBytes = await assemblePdfFromImages(sn, images);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
@@ -290,18 +375,25 @@ class VaultWriter {
 			return `${link}\n`;
 		}
 
-		const imgs = await this.writeImageFiles(basename, sn);
-		return this.renderPagesMarkdown(basename, sn, imgs, targetPath, format);
+		const rasterized = await this.rasterizePages(sn);
+		const imgs = await this.writeImageFiles(basename, rasterized);
+		return this.renderPagesMarkdown(basename, sn, imgs, targetPath, format, deviceFileName, rasterized);
 	}
 
 	// Shared page-by-page markdown body (heading + optional recognized text +
 	// image embed) used by buildInsertableContent's images/images-text formats.
-	private renderPagesMarkdown(basename: string, sn: SupernoteX, imgs: TFile[], targetPath: string, format: ImportFormat): string {
+	private async renderPagesMarkdown(basename: string, sn: SupernoteX, imgs: TFile[], targetPath: string, format: ImportFormat, sourceName: string, rasterized: string[]): Promise<string> {
 		let content = `## ${basename}\n\n`;
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `### Page ${i + 1}\n\n`;
-			if (format === 'images-text' && sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+			if (format === 'images-text') {
+				let pageText = sn.pages[i].text !== undefined && sn.pages[i].text.length > 0
+					? processSupernoteText(sn.pages[i].text, this.settings)
+					: '';
+				pageText = await this.applyPageTextProcessors(sourceName, i, sn.pages.length, pageText, rasterized[i]);
+				if (pageText.length > 0) {
+					content += `${pageText}\n`;
+				}
 			}
 
 			let alt = '';
@@ -1578,13 +1670,33 @@ export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
 	private syncInFlight = false;
+	// Live reference handed to VaultWriter — registering/unregistering here
+	// after construction still takes effect, since both hold the same Set.
+	pageTextProcessors: Set<PageTextProcessor> = new Set();
+
+	/**
+	 * Registers a processor that can enrich or replace a page's text before
+	 * it's written into the generated markdown — e.g. an OCR/LLM companion
+	 * plugin transcribing handwriting the device's own recognition missed.
+	 * See PageTextProcessor's doc comment (above VaultWriter) for the
+	 * contract, and examples/llm-page-ocr for a reference implementation.
+	 *
+	 * Undocumented/unstable: the same "reach into another plugin's loaded
+	 * instance" pattern Templater/Dataview use for their own APIs, not a
+	 * formal Obsidian extension point. Returns an unregister function — call
+	 * it from your plugin's onunload().
+	 */
+	registerPageTextProcessor(processor: PageTextProcessor): () => void {
+		this.pageTextProcessors.add(processor);
+		return () => this.pageTextProcessors.delete(processor);
+	}
 
 	async onload() {
         // Install polyfills before any other code runs
         installAtPolyfill();
 
 		await this.loadSettings();
-		vw = new VaultWriter(this.app, this.settings);
+		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
