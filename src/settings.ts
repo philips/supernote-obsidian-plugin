@@ -13,6 +13,16 @@ export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
     'date-asc': 'Date (oldest first)',
 };
 
+export type ImportFormat = 'note-link' | 'embed' | 'images' | 'pdf' | 'images-text';
+
+export const IMPORT_FORMAT_LABELS: Record<ImportFormat, string> = {
+    'note-link': 'Note link (save .note file, link to it)',
+    'embed': 'Embedded note (save .note file, embed it)',
+    'images': 'Images only',
+    'pdf': 'PDF',
+    'images-text': 'Images and text',
+};
+
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
 // Not present in the `obsidian` devDependency's types (pinned pre-1.13, see CLAUDE.md on
 // why this repo can't casually bump it), so the shapes below are hand-typed to match the
@@ -56,6 +66,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     showExportButtons: boolean;
     noteImageMaxDim: number;
     fileBrowserSortOrder: FileBrowserSortOrder;
+    importFormat: ImportFormat;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -64,6 +75,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     showExportButtons: true,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
+    importFormat: 'images-text',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -128,6 +140,15 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     type: 'dropdown',
                     key: 'fileBrowserSortOrder',
                     options: FILE_BROWSER_SORT_LABELS,
+                },
+            },
+            {
+                name: 'Default import format',
+                desc: 'Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.',
+                control: {
+                    type: 'dropdown',
+                    key: 'importFormat',
+                    options: IMPORT_FORMAT_LABELS,
                 },
             },
             {
@@ -216,6 +237,18 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.fileBrowserSortOrder)
                 .onChange(async (value) => {
                     this.plugin.settings.fileBrowserSortOrder = value as FileBrowserSortOrder;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Default import format')
+            .setDesc('Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(IMPORT_FORMAT_LABELS)
+                .setValue(this.plugin.settings.importFormat)
+                .onChange(async (value) => {
+                    this.plugin.settings.importFormat = value as ImportFormat;
                     await this.plugin.saveSettings();
                 })
             );
