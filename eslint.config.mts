@@ -7,6 +7,10 @@ export default defineConfig(
 		'node_modules',
 		'supernote-typescript',
 		'scripts',
+		// Hand-written, no-build-step example plugins (see examples/*/RELEASING.md)
+		// — not part of this project's tsconfig, so typescript-eslint's
+		// project-service parsing has nothing to attach them to.
+		'examples',
 		'esbuild.config.mjs',
 		'version-bump.mjs',
 		'versions.json',
