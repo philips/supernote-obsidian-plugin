@@ -72,7 +72,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
-    showExportButtons: true,
+    showExportButtons: false,
     noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
