@@ -81,6 +81,29 @@ div.supernote-canvas-wrap canvas {
     background: rgba(255, 145, 0, 0.7);
 }
 
+/* Clickable overlay for Supernote internal links (see
+   SupernoteView.positionLinkOverlay() in main.ts). Sits above the text
+   layer; positioned/sized per-link via inline styles since geometry is
+   data-driven, same pattern as canvas/textLayer sizing. */
+.supernote-links-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.supernote-link-rect {
+    position: absolute;
+    display: block;
+    border-radius: 2px;
+    cursor: pointer;
+    background: transparent;
+    transition: background-color 0.1s ease;
+}
+
+.supernote-link-rect:hover {
+    background: var(--background-modifier-hover);
+}
+
 .supernote-header {
     position: sticky;
     top: 0;
