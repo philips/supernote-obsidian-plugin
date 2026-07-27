@@ -28,35 +28,56 @@ jobs:
       - name: Determine release channel
         id: channel
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag="${{ github.ref_name }}"
+
+          # Plain "X.Y.Z" tags are stable/latest releases. Anything with a
+          # semver pre-release suffix (e.g. "3.0.2-beta.1") is a beta build,
+          # published as a GitHub pre-release.
+          if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify manifest.json matches a stable tag
+        if: steps.channel.outputs.channel == 'stable'
+        run: |
+          tag="${{ github.ref_name }}"
           manifest_version=$(node -p "require('./manifest.json').version")
 
-          # BRAT and Obsidian's updater both fetch manifest.json from the
-          # release assets themselves, so it must match the tag exactly
-          # regardless of channel.
+          # Obsidian's own update-checker (for regular Community Store
+          # users, not BRAT) reads manifest.json straight from this repo's
+          # default branch to decide "is there a newer version" - it does
+          # NOT go through GitHub's /releases/latest. So manifest.json on
+          # main must only ever hold a stable version, and must match
+          # exactly what's being tagged here.
           if [ "$tag" != "$manifest_version" ]; then
-            echo "::error::Tag $tag does not match manifest.json's version ($manifest_version). Bump manifest.json to $tag before tagging."
+            echo "::error::Tag $tag does not match manifest.json's version ($manifest_version). Bump manifest.json (npm version) to $tag before tagging a stable release."
             exit 1
           fi
 
-          # Plain "X.Y.Z" tags are stable/latest releases. Anything with a
-          # semver pre-release suffix (e.g. "3.0.2-beta.1") is published as
-          # a GitHub pre-release, which is how BRAT (and Obsidian's own
-          # updater, which only ever looks at the "latest" release) tell
-          # beta builds apart from stable ones.
-          if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag $tag is a plain version -> stable release"
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
-          else
-            echo "Tag $tag has a pre-release suffix -> beta (pre-)release"
-            echo "channel=beta" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Stamp beta version into the packaged manifest.json
+        if: steps.channel.outputs.channel == 'beta'
+        run: |
+          # Deliberately does NOT touch the manifest.json committed to
+          # main/any branch - only this CI workspace's copy, which is what
+          # gets uploaded as the release asset. Betas are never merged into
+          # manifest.json on main, precisely so Obsidian's update-checker
+          # (see the stable-channel check above) never sees a beta version.
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            m.version = process.env.TAG;
+            fs.writeFileSync('manifest.json', JSON.stringify(m, null, '\t'));
+          "
+        env:
+          TAG: ${{ github.ref_name }}
 
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag="${{ github.ref_name }}"
           prerelease_flag=""
           if [ "${{ steps.channel.outputs.channel }}" = "beta" ]; then
             prerelease_flag="--prerelease"

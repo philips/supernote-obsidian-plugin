@@ -103,18 +103,24 @@ npm install
 
 Pushing a tag is the only manual step; [`.github/workflows/release.yml`](.github/workflows/release.yml)
 builds the plugin and publishes the GitHub release with `main.js`, `manifest.json` and
-`styles.css` attached. [BRAT](https://tfthacker.com/BRAT) and Obsidian's own updater both
-fetch `manifest.json` straight from the release assets (not from the repo), so the tag must
-exactly match the version in `manifest.json` at that commit — the workflow fails instead of
-publishing if it doesn't.
+`styles.css` attached. The tag's format decides the release channel:
 
-The tag's format decides the release channel:
+- A plain `X.Y.Z` tag is a **stable** release. The tag must exactly match the version
+  already committed in `manifest.json` — the workflow fails instead of publishing if it
+  doesn't.
+- A tag with a semver pre-release suffix, e.g. `X.Y.Z-beta.1`, is a **beta** release,
+  published as a GitHub pre-release.
 
-- A plain `X.Y.Z` tag is published as a full/latest release.
-- A tag with a semver pre-release suffix, e.g. `X.Y.Z-beta.1`, is published as a GitHub
-  pre-release. Obsidian's updater only ever looks at the "latest" (non-prerelease) release,
-  so this is invisible to regular Community Store users; BRAT is what beta testers use to
-  pick it up.
+`manifest.json` committed to the repo must only ever hold the last **stable** version.
+Obsidian's own update-checker (for regular Community Store users, not BRAT) reads
+`manifest.json` straight from this repo to decide whether a newer version exists — it does
+not go through GitHub's "latest release" API, so if a beta version ever landed in the
+committed `manifest.json`, every installed user's client would offer it as an update. To
+keep betas invisible to them, a beta tag is never preceded by a commit that bumps
+`manifest.json`: the release workflow stamps the tag's version into `manifest.json` only
+inside its own build, purely for the release asset, and that change is never merged back
+into the repo. [BRAT](https://tfthacker.com/BRAT) fetches `manifest.json` from that release
+asset (not from the repo), so it still sees the right beta version.
 
 To cut a stable release:
 
@@ -123,16 +129,16 @@ npm version <major|minor|patch>
 git push --follow-tags
 ```
 
-To cut a beta release:
+To cut a beta release, no commit is needed — just tag and push:
 
 ```
-npm version prerelease --preid=beta
-git push --follow-tags
+git tag <version>-beta.<n>
+git push origin <version>-beta.<n>
 ```
 
-Running `npm version prerelease --preid=beta` again bumps `3.0.2-beta.0` to
-`3.0.2-beta.1`, etc. To promote a beta that's already been tested to a full release, drop
-the suffix with `npm version patch` (or `npm version <exact version>` to match the beta
-exactly) and tag/push as usual — the same tag can't be reused for two different releases,
-so promoting a beta means cutting a new stable tag on top of it rather than editing the old
-pre-release in place.
+(`git tag -l '*-beta*' --sort=-v:refname` shows the last beta tag, to pick the next `<n>`.)
+
+To promote a beta that's already been tested to a full release, bump `manifest.json` to
+that (or a newer) version with `npm version` as above and tag/push as usual — the same tag
+can't be reused for two different releases, so promoting a beta means cutting a new stable
+tag on top of it rather than editing the old pre-release in place.
