@@ -8,10 +8,11 @@ recognition missed or left empty. Background/design discussion:
 [issue #124](https://github.com/philips/supernote-obsidian-plugin/issues/124).
 
 A complete, working reference implementation lives at
-[`examples/llm-page-ocr/`](examples/llm-page-ocr/) — a plugin that sends
-each page to a local OpenAI-compatible server (Jan.ai, LM Studio, Ollama,
-llama.cpp server, etc.). Read this doc for the contract, then copy patterns
-from that example rather than starting from nothing.
+[supernote-obsidian-ocr-llm](https://github.com/philips/supernote-obsidian-ocr-llm)
+— a companion plugin that sends each page to a local OpenAI-compatible
+server (Jan.ai, LM Studio, Ollama, llama.cpp server, etc.). Read this doc
+for the contract, then copy patterns from that plugin rather than starting
+from nothing.
 
 ## Is this stable?
 

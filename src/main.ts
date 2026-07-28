@@ -187,8 +187,9 @@ export class ImageConverter {
 // In-process extension point for other Obsidian plugins that want to enrich
 // a page's text before it lands in the generated markdown — e.g. an OCR/LLM
 // companion plugin transcribing handwriting the device's own recognition
-// missed (see examples/llm-page-ocr for a reference implementation
-// against a local OpenAI-compatible server). Undocumented by design: the
+// missed (see https://github.com/philips/supernote-obsidian-ocr-llm for a
+// reference implementation against a local OpenAI-compatible server).
+// Undocumented by design: the
 // same "reach into another plugin's loaded instance" pattern Templater/
 // Dataview expose their own APIs through, since Obsidian has no formal
 // inter-plugin dependency mechanism. Callers must feature-detect
@@ -1679,7 +1680,8 @@ export default class SupernotePlugin extends Plugin {
 	 * it's written into the generated markdown — e.g. an OCR/LLM companion
 	 * plugin transcribing handwriting the device's own recognition missed.
 	 * See PageTextProcessor's doc comment (above VaultWriter) for the
-	 * contract, and examples/llm-page-ocr for a reference implementation.
+	 * contract, and https://github.com/philips/supernote-obsidian-ocr-llm
+	 * for a reference implementation.
 	 *
 	 * Undocumented/unstable: the same "reach into another plugin's loaded
 	 * instance" pattern Templater/Dataview use for their own APIs, not a

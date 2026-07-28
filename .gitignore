@@ -10,11 +10,6 @@
 # They should be uploaded to GitHub releases instead.
 main.js
 
-# ...but examples/ plugins are hand-written source (no build step), not a
-# build artifact — the "main.js" ignore rule above is unanchored and would
-# otherwise silently swallow them too.
-!examples/**/main.js
-
 # Exclude sourcemaps
 *.map
 
