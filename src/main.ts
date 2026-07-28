@@ -12,6 +12,7 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
+import { SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER } from './atelierView';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -1749,6 +1750,13 @@ export default class SupernotePlugin extends Plugin {
 			(leaf) => new SupernoteView(leaf, this.settings)
 		);
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
+
+		// Prototype: `.spd` files (Supernote Atelier app) — see atelierView.ts.
+		this.registerView(
+			VIEW_TYPE_SUPERNOTE_ATELIER,
+			(leaf) => new SupernoteAtelierView(leaf)
+		);
+		this.registerExtensions(['spd'], VIEW_TYPE_SUPERNOTE_ATELIER);
 
 		// Wires up `![[example.note]]` embeds via Obsidian's internal
 		// app.embedRegistry (undocumented — not in obsidian.d.ts, see

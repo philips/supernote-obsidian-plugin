@@ -34,6 +34,7 @@
 	"dependencies": {
 		"esbuild-plugin-inline-worker": "^0.1.1",
 		"fast-png": "^7.0.1",
-		"image-js": "^1.7.0"
+		"image-js": "^1.7.0",
+		"sql.js": "^1.14.1"
 	}
 }

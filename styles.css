@@ -295,6 +295,22 @@ div.supernote-canvas-wrap canvas {
     padding: 0.5em;
 }
 
+/* Prototype .spd (Supernote Atelier) viewer, see src/atelierView.ts */
+.supernote-atelier-view-content {
+    padding: 1em;
+    overflow: auto;
+}
+
+.supernote-atelier-image {
+    display: block;
+    max-width: 100%;
+}
+
+.supernote-atelier-empty {
+    color: var(--text-muted);
+    padding: 1em;
+}
+
 /* Custom dictionary settings styles */
 .supernote-settings-custom-dictionary-subtitle {
 	padding: 0 0 0.75em;
