@@ -20,6 +20,11 @@ data.json
 # as a test vault's plugin folder.
 rasterCache/
 
+# Personal .note test files dropped at repo root for manual testing — not
+# fixtures (those live under supernote-typescript/tests/input/), and too
+# large/private to belong in git history.
+/*.note
+
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
 
