@@ -511,7 +511,6 @@ type PageRenderState = {
 	pageNumber: number;
 	// Fetched lazily — see SupernoteView.ensureTextLayer(). null until then.
 	pdfPage: PdfJsPage | null;
-	baseScale: number;
 	nativeWidth: number;
 	nativeHeight: number;
 	pageContainer: HTMLElement;
@@ -781,11 +780,6 @@ export class SupernoteView extends FileView {
 		this.pagesEl = body.createDiv({ cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
 
-		// Same for every page in a note (sn.pageWidth/pageHeight are note-level,
-		// not per-page) — computed once from data already in memory, no pdf.js
-		// or rasterization needed just to know how big to lay pages out.
-		const baseScale = this.settings.noteImageMaxDim / Math.max(sn.pageWidth, sn.pageHeight);
-
 		// Decoded up front, all at once via Promise.all, rather than one at a
 		// time inside the loop below — createImageBitmap() previously being
 		// awaited per-page meant a note's pages were decoded strictly one
@@ -829,7 +823,6 @@ export class SupernoteView extends FileView {
 			const state: PageRenderState = {
 				pageNumber: i + 1,
 				pdfPage: null,
-				baseScale,
 				nativeWidth: sn.pageWidth,
 				nativeHeight: sn.pageHeight,
 				pageContainer,
@@ -862,7 +855,7 @@ export class SupernoteView extends FileView {
 			// Already decoded above (in parallel, before this loop). Cached on
 			// the state and reused for every zoom redraw (drawPageImage()).
 			state.imageBitmap = bitmaps[i];
-			this.drawPageImage(state, baseScale * this.zoomScale);
+			this.drawPageImage(state, this.zoomScale);
 
 			this.pageObserver?.observe(pageContainer);
 
@@ -991,7 +984,7 @@ export class SupernoteView extends FileView {
 			}
 			const pdfPage = state.pdfPage;
 
-			const viewport = pdfPage.getViewport({ scale: state.baseScale * this.zoomScale });
+			const viewport = pdfPage.getViewport({ scale: this.zoomScale });
 			await this.buildTextLayerForState(pdfPage, state, viewport);
 		} catch (error) {
 			console.error(`Failed to build text layer for page ${state.pageNumber}:`, error);
@@ -1243,16 +1236,16 @@ export class SupernoteView extends FileView {
 		// 25%. Clamping it there just forced horizontal scrolling instead.
 		//
 		// The 500% ceiling only makes sense for *manual* zoom (a sanity cap on
-		// how far a user should zoom in by hand). "100%" here is only ever
-		// relative to noteImageMaxDim — an arbitrary default render size, not
-		// the note's true resolution or the available viewport — so a large or
-		// high-resolution display can legitimately need well over 5x to
-		// actually fill it with "Fit width". Applying the same 500% ceiling
-		// there just left the page stuck at a fixed pixel width regardless of
-		// how much wider the pane actually was, while showing a confusing
-		// pinned "500%" (see issue #108). Fit width instead gets a much higher
-		// ceiling, purely as a guard against a pathological render (e.g. a
-		// zero-width native page) rather than a real intended limit.
+		// how far a user should zoom in by hand). "100%" here is one canvas
+		// pixel per native rasterized page pixel (see nativeWidth/nativeHeight),
+		// not anything tied to the available viewport — so a page with a small
+		// native resolution on a large or high-DPI display can legitimately
+		// need well over 5x to fill it with "Fit width". Applying the same
+		// 500% ceiling there just left the page stuck at a fixed pixel width
+		// regardless of how much wider the pane actually was, while showing a
+		// confusing pinned "500%" (see issue #108). Fit width instead gets a
+		// much higher ceiling, purely as a guard against a pathological render
+		// (e.g. a zero-width native page) rather than a real intended limit.
 		const ceiling = isManual ? 5 : 20;
 		this.zoomScale = Math.min(ceiling, Math.max(0.05, newScale));
 		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
@@ -1273,7 +1266,7 @@ export class SupernoteView extends FileView {
 	private async commitZoom(): Promise<void> {
 		const targetZoom = this.zoomScale;
 		for (const state of this.pageStates) {
-			this.drawPageImage(state, state.baseScale * targetZoom);
+			this.drawPageImage(state, targetZoom);
 			state.canvasWrap.setCssStyles({ transform: '', transformOrigin: '' });
 
 			// Only rebuild the text layer for pages that already had one —
@@ -1281,7 +1274,7 @@ export class SupernoteView extends FileView {
 			// theirs at whatever zoom is current when they eventually do.
 			if (state.textLayerLoaded && state.pdfPage) {
 				const pdfPage = state.pdfPage;
-				const viewport = pdfPage.getViewport({ scale: state.baseScale * targetZoom });
+				const viewport = pdfPage.getViewport({ scale: targetZoom });
 				await this.buildTextLayerForState(pdfPage, state, viewport);
 			}
 		}
@@ -1312,7 +1305,7 @@ export class SupernoteView extends FileView {
 	// Scales the page so its rendered width matches however much horizontal
 	// space is actually available (pagesEl's content box, which already
 	// accounts for the thumbnail sidebar if it's open) minus the page
-	// container's own margin, rather than the fixed noteImageMaxDim cap.
+	// container's own margin.
 	private applyFitWidth() {
 		const state = this.pageStates[0];
 		if (!state || !this.pagesEl || state.nativeWidth <= 0) return;
@@ -1324,7 +1317,7 @@ export class SupernoteView extends FileView {
 		const horizontalMargin = parseFloat(containerStyle.marginLeft || '0') + parseFloat(containerStyle.marginRight || '0');
 		const targetWidth = Math.max(availableWidth - horizontalMargin, 1);
 
-		this.setZoom(targetWidth / (state.nativeWidth * state.baseScale), { manual: false });
+		this.setZoom(targetWidth / state.nativeWidth, { manual: false });
 	}
 
 	private updateFitWidthButton() {
