@@ -185,6 +185,7 @@ export class ImageConverter {
             return this.workerPool.processPages(note, pages);
         }
 
+        const start = performance.now();
         const noteHash = hashBytes(rawBytes);
         const results = new Array<string>(pages.length);
         const missingPages: number[] = [];
@@ -208,6 +209,7 @@ export class ImageConverter {
             }));
         }
 
+        console.debug(`Supernote: rasterization cache — ${pages.length - missingPages.length}/${pages.length} page(s) from cache, ${missingPages.length} rendered fresh, ${(performance.now() - start).toFixed(1)}ms total`);
         return results;
     }
 
@@ -1754,9 +1756,12 @@ export default class SupernotePlugin extends Plugin {
 			try {
 				rasterCache = await RasterCache.open(this.app.vault.adapter, `${this.manifest.dir}/rasterCache`, DEFAULT_MAX_CACHE_BYTES);
 				this.rasterCache = rasterCache;
+				console.debug(`Supernote: rasterization cache ready (${rasterCache.entryCount} entries, ${rasterCache.totalCachedBytes} bytes)`);
 			} catch (err) {
 				console.error('Supernote: failed to initialize rasterization cache, continuing without it', err);
 			}
+		} else {
+			console.warn('Supernote: manifest.dir is unset, rasterization cache disabled');
 		}
 
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors, rasterCache);
