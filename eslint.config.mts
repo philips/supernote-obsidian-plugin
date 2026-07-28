@@ -36,10 +36,14 @@ export default defineConfig(
 		// obsidianmd/no-global-this exists for popout-window compatibility in
 		// plugin runtime code; it doesn't apply to test setup, where `globalThis`
 		// is the only thing available to stand in for the `window` Vitest's node
-		// environment doesn't provide.
+		// environment doesn't provide. Likewise obsidianmd/no-nodejs-modules
+		// (mobile has no Node APIs) doesn't apply here either — test files run
+		// under Vitest's real Node process and are never bundled into the
+		// plugin (see linkOverlay.test.ts's fs-based fixture read).
 		files: ['**/*.test.ts'],
 		rules: {
 			'obsidianmd/no-global-this': 'off',
+			'obsidianmd/no-nodejs-modules': 'off',
 		},
 	},
 );
