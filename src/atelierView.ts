@@ -13,9 +13,10 @@ export const VIEW_TYPE_SUPERNOTE_ATELIER = "supernote-atelier-view";
 // Opens a `.spd` file (Supernote Atelier app) and flattens every layer into
 // one composite image via SupernoteAtelier.toCompositeImage()
 // (supernote-typescript#33), pre-encoded as a data URL for an <img> src.
-// Shared by SupernoteAtelierView and SupernoteAtelierEmbed. Returns null if
-// the file has no drawn content anywhere (an empty canvas).
-async function renderAtelierCompositeDataUrl(app: App, file: TFile): Promise<string | null> {
+// Shared by SupernoteAtelierView, SupernoteAtelierEmbed, and VaultWriter's
+// .spd export commands (see main.ts). Returns null if the file has no drawn
+// content anywhere (an empty canvas).
+export async function renderAtelierCompositeDataUrl(app: App, file: TFile): Promise<string | null> {
 	const buffer = await app.vault.readBinary(file);
 	// Uint8Array.buffer is typed ArrayBufferLike (could be a SharedArrayBuffer
 	// view) but sql.js's wasmBinary wants a plain ArrayBuffer; slice() always
