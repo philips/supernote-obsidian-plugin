@@ -166,21 +166,29 @@ export class WorkerPool {
     }
 }
 
-export class ImageConverter {
-    private workerPool: WorkerPool;
-
-    constructor(maxWorkers = navigator.hardwareConcurrency) {  // Default to 4 workers
-        this.workerPool = new WorkerPool(maxWorkers);
+// Shared for the plugin's lifetime instead of every ImageConverter owning
+// (and tearing down) its own WorkerPool. Spinning up hardwareConcurrency new
+// Web Workers is real, fixed-cost work — previously paid on *every single*
+// rasterization call regardless of outcome, so opening a note repeatedly
+// paid full multi-worker startup/teardown cost every time. Created lazily
+// (on first actual use) so plugin activation itself doesn't spin up workers
+// before any note is opened; torn down once in SupernotePlugin.onunload().
+let sharedWorkerPool: WorkerPool | undefined;
+function getSharedWorkerPool(): WorkerPool {
+    if (!sharedWorkerPool) {
+        sharedWorkerPool = new WorkerPool();
     }
+    return sharedWorkerPool;
+}
+function terminateSharedWorkerPool(): void {
+    sharedWorkerPool?.terminate();
+    sharedWorkerPool = undefined;
+}
 
+export class ImageConverter {
     async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        const results = await this.workerPool.processPages(note, pages);
-        return results;
-    }
-
-    terminate() {
-        this.workerPool.terminate();
+        return getSharedWorkerPool().processPages(note, pages);
     }
 }
 
@@ -266,12 +274,7 @@ class VaultWriter {
 	// the images written to the vault pass the result to writeImageFiles()
 	// rather than rasterizing a second time.
 	private async rasterizePages(sn: SupernoteX): Promise<string[]> {
-		const converter = new ImageConverter();
-		try {
-			return await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
+		return new ImageConverter().convertToImages(sn);
 	}
 
 	// `images` (raw rasterized page data URLs, for processors) is independent
@@ -414,13 +417,7 @@ class VaultWriter {
 		// Rasterizes across the Worker pool in parallel (same pass the other
 		// export paths use), then assembles the PDF from those images rather
 		// than rendering a second time.
-		const converter = new ImageConverter();
-		let images: string[] = [];
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
+		const images = await this.rasterizePages(sn);
 
 		const pdfBytes = await assemblePdfFromImages(sn, images);
 
@@ -722,15 +719,7 @@ export class SupernoteView extends FileView {
 		const sn = new SupernoteX(new Uint8Array(note));
 		this.pageIds = sn.pages.map((p) => p.PAGEID ?? '');
 		const linksByPage = bucketLinksByPage(sn.links);
-		let images: string[] = [];
-
-		const converter = new ImageConverter();
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			// Clean up the worker when done
-			converter.terminate();
-		}
+		const images = await new ImageConverter().convertToImages(sn);
 
 		// Kicked off now but not awaited: pages are visible immediately from
 		// their own rasterized image (drawPageImage(), no pdf.js involved at
@@ -1553,15 +1542,12 @@ export class SupernoteEmbed extends Component {
 			: null;
 		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
 
-		const converter = new ImageConverter();
 		let images: string[];
 		try {
-			images = await converter.convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
+			images = await new ImageConverter().convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
 		} catch (err) {
 			if (!this.destroyed) this.renderError(err);
 			return;
-		} finally {
-			converter.terminate();
 		}
 		if (this.destroyed) return;
 
@@ -1939,7 +1925,7 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	onunload() {
-
+		terminateSharedWorkerPool();
 	}
 
 	async activateView() {
