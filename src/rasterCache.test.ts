@@ -60,7 +60,7 @@ describe('RasterCache', () => {
         expect(cache.totalCachedBytes).toBe(8);
     });
 
-    it('evicts the oldest-inserted entry once over budget', async () => {
+    it('evicts the least-recently-used entry once over budget (no reads yet == oldest-inserted)', async () => {
         const cache = await RasterCache.open(makeStorage(), 'cache', 10);
         await cache.put('hash', 1, dataUrlOf([0, 0, 0, 0])); // 4 bytes, total 4
         await cache.put('hash', 2, dataUrlOf([0, 0, 0, 0])); // total 8
@@ -72,16 +72,16 @@ describe('RasterCache', () => {
         expect(cache.totalCachedBytes).toBeLessThanOrEqual(10);
     });
 
-    it('re-fetching a page via get() does not protect it from FIFO eviction', async () => {
+    it('re-fetching a page via get() protects it from eviction (LRU, not FIFO)', async () => {
         const cache = await RasterCache.open(makeStorage(), 'cache', 10);
         await cache.put('hash', 1, dataUrlOf([0, 0, 0, 0]));
         await cache.put('hash', 2, dataUrlOf([0, 0, 0, 0]));
-        // Re-access page 1 — a true LRU would now evict page 2 instead.
-        await cache.get('hash', 1);
-        await cache.put('hash', 3, dataUrlOf([0, 0, 0, 0])); // total 12 > 10
+        // Re-access page 1 — this should now make page 2 the least-recently-used.
+        expect(await cache.get('hash', 1)).not.toBeNull();
+        await cache.put('hash', 3, dataUrlOf([0, 0, 0, 0])); // total 12 > 10 -> evict page 2
 
-        expect(await cache.get('hash', 1)).toBeNull();
-        expect(await cache.get('hash', 2)).not.toBeNull();
+        expect(await cache.get('hash', 2)).toBeNull();
+        expect(cache.entryCount).toBe(2);
     });
 
     it('persists the index across separate RasterCache.open() calls on the same storage', async () => {
@@ -114,6 +114,7 @@ describe('RasterCache', () => {
 
         expect(await cache.get('hash', 1)).toBeNull();
         expect(cache.entryCount).toBe(0);
+        expect(cache.totalCachedBytes).toBe(0);
     });
 
     it('starts empty if the persisted index is corrupted', async () => {

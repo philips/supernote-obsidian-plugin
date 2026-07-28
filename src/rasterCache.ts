@@ -52,12 +52,19 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 // A size-bounded, disk-backed cache of rasterized page PNGs.
 //
-// Eviction is plain FIFO by insertion order (the oldest-added entry goes
-// first when the budget is exceeded), not LRU — re-fetching a cached page
-// via get() does not move it to the back of the queue. This matches the
-// simplest reading of "eject the oldest notes from the cache" and avoids
-// having to persist last-access times (which the storage layer, an Obsidian
-// vault adapter, doesn't reliably track across desktop/mobile anyway).
+// Eviction is LRU: `entries` is a Map, whose iteration order is insertion
+// order, and every cache hit in get() deletes + re-inserts its key to move it
+// to the most-recently-used end. Eviction then just removes from the front —
+// the actual least-recently-used entry, whether that's "oldest inserted" (an
+// entry never re-read) or "longest since last read" (one that has been).
+//
+// That reordering is kept in memory only — get() does not persist the index
+// on a hit, only put()/clear() do. A cache *read* triggering a disk write
+// would undercut the point of caching; the cost is that recency ordering
+// accumulated since the last write is lost if the plugin reloads or Obsidian
+// restarts before another put()/clear() happens to flush it, so eviction
+// order right after a reload reflects whatever was last persisted rather
+// than genuinely-most-recent reads.
 //
 // Every storage operation is fail-open: a read/write/parse error is logged
 // and treated as a cache miss (get) or a no-op (put/evict), never thrown, so
@@ -94,14 +101,20 @@ export class RasterCache {
 
     async get(noteHash: string, pageNumber: number): Promise<string | null> {
         const key = this.key(noteHash, pageNumber);
-        if (!this.entries.has(key)) return null;
+        const size = this.entries.get(key);
+        if (size === undefined) return null;
         try {
             const buf = await this.storage.readBinary(this.pagePath(key));
+            // Move to the most-recently-used end (see class comment) — only
+            // in memory, not persisted until the next put()/clear().
+            this.entries.delete(key);
+            this.entries.set(key, size);
             return bytesToDataUrl(new Uint8Array(buf));
         } catch {
             // Indexed but unreadable (deleted out-of-band, corrupted, etc.) —
             // drop the stale entry and report a miss rather than throwing.
             this.entries.delete(key);
+            this.totalBytes -= size;
             return null;
         }
     }
@@ -166,10 +179,10 @@ export class RasterCache {
         }
     }
 
-    // Evicts oldest-inserted entries (Map iteration order == insertion order)
-    // until back under budget. A single entry larger than the whole budget is
-    // left in place once everything else has been evicted — this is a
-    // best-effort cap, not a hard invariant.
+    // Evicts least-recently-used entries (Map iteration order == recency
+    // order, see class comment) until back under budget. A single entry
+    // larger than the whole budget is left in place once everything else has
+    // been evicted — this is a best-effort cap, not a hard invariant.
     private async evictIfNeeded(): Promise<void> {
         const toRemove: string[] = [];
         for (const [key, size] of this.entries) {
