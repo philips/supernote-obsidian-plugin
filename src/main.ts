@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
+import { SupernoteX, ILink, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -75,6 +75,24 @@ async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<
     for (let i = 0; i < sn.pages.length; i++) {
         const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
         await addPdfPage(ctx, sn.pages[i], pngBytes);
+    }
+    return ctx.pdfDoc.save();
+}
+
+// Builds a PDF with only the invisible recognized-text layer, no page images
+// at all — for SupernoteView's internal pdfDocPromise, which exists purely
+// so pdf.js's getTextContent()/getViewport() can build a search/select text
+// layer over pages that are actually displayed via direct canvas rendering
+// (drawPageImage()); pdf.js's own render() is never called against it. A
+// real page image there would be pure dead weight: embedding one only for
+// pdf-lib to decode, recompress, and serialize turned out to be genuinely
+// expensive (multiple seconds for a many-page or high-resolution note) for
+// bytes nothing ever looks at. Don't use this for anything the user actually
+// opens/exports as a PDF — see assemblePdfFromImages() for that.
+async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
+    const ctx = await createPdfContext();
+    for (let i = 0; i < sn.pages.length; i++) {
+        await addTextOnlyPdfPage(ctx, sn.pages[i], sn.pageWidth, sn.pageHeight);
     }
     return ctx.pdfDoc.save();
 }
@@ -721,17 +739,6 @@ export class SupernoteView extends FileView {
 		const linksByPage = bucketLinksByPage(sn.links);
 		const images = await new ImageConverter().convertToImages(sn);
 
-		// Kicked off now but not awaited: pages are visible immediately from
-		// their own rasterized image (drawPageImage(), no pdf.js involved at
-		// all), so there's no reason to block the first paint on assembling a
-		// PDF and loading it into pdf.js. Only the text layer (selection/
-		// search) needs this, lazily, per page — see ensureTextLayer().
-		this.pdfDocPromise = (async () => {
-			const pdfBytes = await assemblePdfFromImages(sn, images);
-			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
-			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
-		})();
-
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
 				text: "Attach Markdown to vault",
@@ -880,6 +887,23 @@ export class SupernoteView extends FileView {
 			this.applyFitWidth();
 		}
 		this.updateCurrentPageIndicator();
+
+		// Kicked off now — after pages are already visible from their own
+		// rasterized images (drawPageImage() above, no pdf.js involved at
+		// all) — rather than before rendering them, so this fire-and-forget
+		// pipeline (still real work on this same single JS thread) can't
+		// compete with/inflate the apparent cost of the page-render loop.
+		// Only the text layer (selection/search) needs this, lazily, per
+		// page — see ensureTextLayer() — so delaying it only delays search
+		// readiness, not anything visible. Uses assembleTextOnlyPdf() (no
+		// page images at all — see its doc comment) rather than
+		// assemblePdfFromImages(), since this PDF is only ever handed to
+		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
+		this.pdfDocPromise = (async () => {
+			const pdfBytes = await assembleTextOnlyPdf(sn);
+			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
+			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+		})();
 	}
 
 	// Draws the page's own already-decoded bitmap at the given scale — no
