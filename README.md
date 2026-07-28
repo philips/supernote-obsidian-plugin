@@ -20,6 +20,8 @@ This plugin has five main features:
 
 - ⬇️  Download & Upload files directly from your device via the Supernote [Browse & Access](https://support.supernote.com/en_US/Tools-Features/wi-fi-transfer) feature. ([demo video](https://www.youtube.com/watch?v=SEkp395hbBM)). Or sync all your Supernote files to your vault with the sync command.
 
+- 🧩 Extensible: build a companion plugin to run OCR or an LLM over pages during conversion. See [`ocr-plugins.md`](ocr-plugins.md).
+
 **Video Demo**
 
 [![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=tEoW35fYVew)
@@ -78,6 +80,8 @@ I personally don't accept funding or donations for this project. However, if you
 
 ## Developer Notes
 
+- Building a custom AI/OCR companion plugin? See [`ocr-plugins.md`](ocr-plugins.md)
+  for the `registerPageTextProcessor` hook and a working example.
 - Make sure your NodeJS is at least v16 (`node --version`).
 - Clone this repo.
 - Setup the deps

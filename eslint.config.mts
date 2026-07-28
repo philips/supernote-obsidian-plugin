@@ -7,6 +7,11 @@ export default defineConfig(
 		'node_modules',
 		'supernote-typescript',
 		'scripts',
+		// Local Claude Code state (worktrees, etc.) — already gitignored, so
+		// a fresh checkout never has it, but a local `eslint .` run in a
+		// sandbox with leftover worktrees would otherwise sweep in whatever
+		// unrelated projects happen to live under there.
+		'.claude',
 		'esbuild.config.mjs',
 		'version-bump.mjs',
 		'versions.json',
