@@ -65,7 +65,6 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
-    noteImageMaxDim: number;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
     /** Vault folder that device sync writes into; never touches anything outside it. */
@@ -89,7 +88,6 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
     showExportButtons: false,
-    noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
     syncFolder: 'Supernote sync',
@@ -139,17 +137,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 control: {
                     type: 'toggle',
                     key: 'showExportButtons',
-                },
-            },
-            {
-                name: 'Max image side length in .note files',
-                desc: 'Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.',
-                control: {
-                    type: 'slider',
-                    key: 'noteImageMaxDim',
-                    min: 200,
-                    max: 1900,
-                    step: 100, // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
                 },
             },
             {
@@ -271,19 +258,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         this.plugin.settings.showExportButtons = value;
                         await this.plugin.saveSettings();
                     }),
-            );
-
-        new Setting(containerEl)
-            .setName('Max image side length in .note files')
-            .setDesc('Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.')
-            .addSlider(text => text
-                .setLimits(200, 1900, 100) // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
-                .setDynamicTooltip()
-                .setValue(this.plugin.settings.noteImageMaxDim)
-                .onChange(async (value) => {
-                    this.plugin.settings.noteImageMaxDim = value;
-                    await this.plugin.saveSettings();
-                })
             );
 
         new Setting(containerEl)
