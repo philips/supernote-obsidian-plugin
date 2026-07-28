@@ -15,6 +15,10 @@ main.js
 
 # obsidian
 data.json
+# Runtime rasterization cache — created under manifest.dir at plugin runtime,
+# not source. Lands at the repo root when this repo is symlinked in directly
+# as a test vault's plugin folder.
+rasterCache/
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
