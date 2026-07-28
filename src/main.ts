@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
+import { SupernoteX, ILink, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -75,6 +75,24 @@ async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<
     for (let i = 0; i < sn.pages.length; i++) {
         const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
         await addPdfPage(ctx, sn.pages[i], pngBytes);
+    }
+    return ctx.pdfDoc.save();
+}
+
+// Builds a PDF with only the invisible recognized-text layer, no page images
+// at all — for SupernoteView's internal pdfDocPromise, which exists purely
+// so pdf.js's getTextContent()/getViewport() can build a search/select text
+// layer over pages that are actually displayed via direct canvas rendering
+// (drawPageImage()); pdf.js's own render() is never called against it. A
+// real page image there would be pure dead weight: embedding one only for
+// pdf-lib to decode, recompress, and serialize turned out to be genuinely
+// expensive (multiple seconds for a many-page or high-resolution note) for
+// bytes nothing ever looks at. Don't use this for anything the user actually
+// opens/exports as a PDF — see assemblePdfFromImages() for that.
+async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
+    const ctx = await createPdfContext();
+    for (let i = 0; i < sn.pages.length; i++) {
+        await addTextOnlyPdfPage(ctx, sn.pages[i], sn.pageWidth, sn.pageHeight);
     }
     return ctx.pdfDoc.save();
 }
@@ -166,21 +184,29 @@ export class WorkerPool {
     }
 }
 
-export class ImageConverter {
-    private workerPool: WorkerPool;
-
-    constructor(maxWorkers = navigator.hardwareConcurrency) {  // Default to 4 workers
-        this.workerPool = new WorkerPool(maxWorkers);
+// Shared for the plugin's lifetime instead of every ImageConverter owning
+// (and tearing down) its own WorkerPool. Spinning up hardwareConcurrency new
+// Web Workers is real, fixed-cost work — previously paid on *every single*
+// rasterization call regardless of outcome, so opening a note repeatedly
+// paid full multi-worker startup/teardown cost every time. Created lazily
+// (on first actual use) so plugin activation itself doesn't spin up workers
+// before any note is opened; torn down once in SupernotePlugin.onunload().
+let sharedWorkerPool: WorkerPool | undefined;
+function getSharedWorkerPool(): WorkerPool {
+    if (!sharedWorkerPool) {
+        sharedWorkerPool = new WorkerPool();
     }
+    return sharedWorkerPool;
+}
+function terminateSharedWorkerPool(): void {
+    sharedWorkerPool?.terminate();
+    sharedWorkerPool = undefined;
+}
 
+export class ImageConverter {
     async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        const results = await this.workerPool.processPages(note, pages);
-        return results;
-    }
-
-    terminate() {
-        this.workerPool.terminate();
+        return getSharedWorkerPool().processPages(note, pages);
     }
 }
 
@@ -266,12 +292,7 @@ class VaultWriter {
 	// the images written to the vault pass the result to writeImageFiles()
 	// rather than rasterizing a second time.
 	private async rasterizePages(sn: SupernoteX): Promise<string[]> {
-		const converter = new ImageConverter();
-		try {
-			return await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
+		return new ImageConverter().convertToImages(sn);
 	}
 
 	// `images` (raw rasterized page data URLs, for processors) is independent
@@ -414,13 +435,7 @@ class VaultWriter {
 		// Rasterizes across the Worker pool in parallel (same pass the other
 		// export paths use), then assembles the PDF from those images rather
 		// than rendering a second time.
-		const converter = new ImageConverter();
-		let images: string[] = [];
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
+		const images = await this.rasterizePages(sn);
 
 		const pdfBytes = await assemblePdfFromImages(sn, images);
 
@@ -722,26 +737,7 @@ export class SupernoteView extends FileView {
 		const sn = new SupernoteX(new Uint8Array(note));
 		this.pageIds = sn.pages.map((p) => p.PAGEID ?? '');
 		const linksByPage = bucketLinksByPage(sn.links);
-		let images: string[] = [];
-
-		const converter = new ImageConverter();
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			// Clean up the worker when done
-			converter.terminate();
-		}
-
-		// Kicked off now but not awaited: pages are visible immediately from
-		// their own rasterized image (drawPageImage(), no pdf.js involved at
-		// all), so there's no reason to block the first paint on assembling a
-		// PDF and loading it into pdf.js. Only the text layer (selection/
-		// search) needs this, lazily, per page — see ensureTextLayer().
-		this.pdfDocPromise = (async () => {
-			const pdfBytes = await assemblePdfFromImages(sn, images);
-			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
-			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
-		})();
+		const images = await new ImageConverter().convertToImages(sn);
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
@@ -789,6 +785,17 @@ export class SupernoteView extends FileView {
 		// not per-page) — computed once from data already in memory, no pdf.js
 		// or rasterization needed just to know how big to lay pages out.
 		const baseScale = this.settings.noteImageMaxDim / Math.max(sn.pageWidth, sn.pageHeight);
+
+		// Decoded up front, all at once via Promise.all, rather than one at a
+		// time inside the loop below — createImageBitmap() previously being
+		// awaited per-page meant a note's pages were decoded strictly one
+		// after another, a real, page-count-scaling cost on every open.
+		const renderStart = performance.now();
+		const bitmaps = await Promise.all(images.map(async (imageDataUrl) => {
+			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
+			return createImageBitmap(blob);
+		}));
+		const decodeEnd = performance.now();
 
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
@@ -852,11 +859,9 @@ export class SupernoteView extends FileView {
 				state.linkEls.push({ el, rect });
 			}
 
-			// Decodes the same PNG already sitting in `images[i]` — no pdf.js,
-			// no re-rasterization. Cached on the state and reused for every
-			// zoom redraw (drawPageImage()).
-			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
-			state.imageBitmap = await createImageBitmap(blob);
+			// Already decoded above (in parallel, before this loop). Cached on
+			// the state and reused for every zoom redraw (drawPageImage()).
+			state.imageBitmap = bitmaps[i];
 			this.drawPageImage(state, baseScale * this.zoomScale);
 
 			this.pageObserver?.observe(pageContainer);
@@ -876,10 +881,29 @@ export class SupernoteView extends FileView {
 			}
 		}
 
+		console.debug(`Supernote: page render — decode ${(decodeEnd - renderStart).toFixed(1)}ms, DOM build ${(performance.now() - decodeEnd).toFixed(1)}ms, total ${(performance.now() - renderStart).toFixed(1)}ms for ${images.length} page(s)`);
+
 		if (this.fitWidthEnabled) {
 			this.applyFitWidth();
 		}
 		this.updateCurrentPageIndicator();
+
+		// Kicked off now — after pages are already visible from their own
+		// rasterized images (drawPageImage() above, no pdf.js involved at
+		// all) — rather than before rendering them, so this fire-and-forget
+		// pipeline (still real work on this same single JS thread) can't
+		// compete with/inflate the apparent cost of the page-render loop.
+		// Only the text layer (selection/search) needs this, lazily, per
+		// page — see ensureTextLayer() — so delaying it only delays search
+		// readiness, not anything visible. Uses assembleTextOnlyPdf() (no
+		// page images at all — see its doc comment) rather than
+		// assemblePdfFromImages(), since this PDF is only ever handed to
+		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
+		this.pdfDocPromise = (async () => {
+			const pdfBytes = await assembleTextOnlyPdf(sn);
+			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
+			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+		})();
 	}
 
 	// Draws the page's own already-decoded bitmap at the given scale — no
@@ -1553,15 +1577,12 @@ export class SupernoteEmbed extends Component {
 			: null;
 		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
 
-		const converter = new ImageConverter();
 		let images: string[];
 		try {
-			images = await converter.convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
+			images = await new ImageConverter().convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
 		} catch (err) {
 			if (!this.destroyed) this.renderError(err);
 			return;
-		} finally {
-			converter.terminate();
 		}
 		if (this.destroyed) return;
 
@@ -1939,7 +1960,7 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	onunload() {
-
+		terminateSharedWorkerPool();
 	}
 
 	async activateView() {
