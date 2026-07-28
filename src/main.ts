@@ -12,7 +12,7 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
-import { SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER } from './atelierView';
+import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER } from './atelierView';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -1770,6 +1770,11 @@ export default class SupernotePlugin extends Plugin {
 				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
 			);
 			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+
+			this.app.embedRegistry.registerExtension('spd', (context, file) =>
+				new SupernoteAtelierEmbed(this.app, context.containerEl, file)
+			);
+			this.register(() => this.app.embedRegistry?.unregisterExtension('spd'));
 		}
 
 		this.addCommand({
