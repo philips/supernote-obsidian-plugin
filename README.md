@@ -20,7 +20,7 @@ This plugin has five main features:
 
 - ⬇️  Download & Upload files directly from your device via the Supernote [Browse & Access](https://support.supernote.com/en_US/Tools-Features/wi-fi-transfer) feature. ([demo video](https://www.youtube.com/watch?v=SEkp395hbBM)). Or sync all your Supernote files to your vault with the sync command.
 
-- 🧩 Extensible: build a companion plugin to run OCR or an LLM over pages during conversion. See [`ocr-plugins.md`](ocr-plugins.md).
+- 🧩 **BETA** Extensible: build a companion plugin to run OCR or an LLM over pages during conversion. See [`ocr-plugins.md`](ocr-plugins.md).
 
 **Video Demo**
 
