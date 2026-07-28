@@ -779,6 +779,17 @@ export class SupernoteView extends FileView {
 		// or rasterization needed just to know how big to lay pages out.
 		const baseScale = this.settings.noteImageMaxDim / Math.max(sn.pageWidth, sn.pageHeight);
 
+		// Decoded up front, all at once via Promise.all, rather than one at a
+		// time inside the loop below — createImageBitmap() previously being
+		// awaited per-page meant a note's pages were decoded strictly one
+		// after another, a real, page-count-scaling cost on every open.
+		const renderStart = performance.now();
+		const bitmaps = await Promise.all(images.map(async (imageDataUrl) => {
+			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
+			return createImageBitmap(blob);
+		}));
+		const decodeEnd = performance.now();
+
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
 
@@ -841,11 +852,9 @@ export class SupernoteView extends FileView {
 				state.linkEls.push({ el, rect });
 			}
 
-			// Decodes the same PNG already sitting in `images[i]` — no pdf.js,
-			// no re-rasterization. Cached on the state and reused for every
-			// zoom redraw (drawPageImage()).
-			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
-			state.imageBitmap = await createImageBitmap(blob);
+			// Already decoded above (in parallel, before this loop). Cached on
+			// the state and reused for every zoom redraw (drawPageImage()).
+			state.imageBitmap = bitmaps[i];
 			this.drawPageImage(state, baseScale * this.zoomScale);
 
 			this.pageObserver?.observe(pageContainer);
@@ -864,6 +873,8 @@ export class SupernoteView extends FileView {
 				})());
 			}
 		}
+
+		console.debug(`Supernote: page render — decode ${(decodeEnd - renderStart).toFixed(1)}ms, DOM build ${(performance.now() - decodeEnd).toFixed(1)}ms, total ${(performance.now() - renderStart).toFixed(1)}ms for ${images.length} page(s)`);
 
 		if (this.fitWidthEnabled) {
 			this.applyFitWidth();
