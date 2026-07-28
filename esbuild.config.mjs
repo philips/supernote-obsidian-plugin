@@ -30,6 +30,13 @@ const context = await esbuild.context({
 		'supernote-typescript': path.join(__dirname, 'supernote-typescript'),
 	},
 	bundle: true,
+	loader: {
+		// sql.js's wasm binary (used by SupernoteAtelier for .spd files) is
+		// embedded directly in the bundle rather than fetched/read at
+		// runtime, so it works the same on desktop (Node/Electron) and
+		// mobile (browser) Obsidian without a locateFile() callback.
+		'.wasm': 'binary',
+	},
 	plugins: [inlineWorkerPlugin()],
 	external: [
 		"obsidian",
