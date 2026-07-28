@@ -2,6 +2,39 @@ import { createCustomDictionarySettingsUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, C
 import SupernotePlugin from "./main";
 import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { SyncManifest } from './deviceSync';
+import { DEFAULT_MAX_CACHE_BYTES } from './rasterCache';
+
+function formatCacheBytes(bytes: number): string {
+    const mb = bytes / (1024 * 1024);
+    return mb >= 1 ? `${mb.toFixed(1)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
+}
+
+// Shared between getSettingDefinitions() and display() — both build (or are
+// handed) a Setting row named "Rasterization cache" and just need its desc
+// and clear-cache button filled in, same as the "Sync history" setting below.
+function applyRasterCacheSetting(setting: Setting, plugin: SupernotePlugin): void {
+    const cache = plugin.rasterCache;
+
+    const describe = () => {
+        setting.setDesc(
+            cache
+                ? `${cache.entryCount} cached page image(s) using ${formatCacheBytes(cache.totalCachedBytes)} of the ${formatCacheBytes(DEFAULT_MAX_CACHE_BYTES)} budget. Speeds up re-opening notes and embeds that have already been rasterized; oldest entries are evicted first once the budget is exceeded.`
+                : 'Unavailable in this vault (the plugin folder could not be determined).',
+        );
+    };
+    describe();
+
+    setting.addButton((btn) => {
+        btn.setButtonText('Clear cache')
+            .setDisabled(!cache)
+            .onClick(async () => {
+                if (!cache) return;
+                await cache.clear();
+                describe();
+                new Notice('Supernote rasterization cache cleared');
+            });
+    });
+}
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
@@ -171,6 +204,12 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
+                name: 'Rasterization cache',
+                render: (setting) => {
+                    applyRasterCacheSetting(setting, this.plugin);
+                },
+            },
+            {
                 name: 'Sync',
                 render: (setting) => {
                     setting.setHeading();
@@ -309,6 +348,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+
+        applyRasterCacheSetting(new Setting(containerEl).setName('Rasterization cache'), this.plugin);
 
         new Setting(containerEl)
             .setName('Sync')

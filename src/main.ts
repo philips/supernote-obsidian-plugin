@@ -12,6 +12,7 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
+import { RasterCache, hashBytes, DEFAULT_MAX_CACHE_BYTES } from './rasterCache';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -169,13 +170,44 @@ export class WorkerPool {
 export class ImageConverter {
     private workerPool: WorkerPool;
 
-    constructor(maxWorkers = navigator.hardwareConcurrency) {  // Default to 4 workers
+    constructor(private cache?: RasterCache, maxWorkers = navigator.hardwareConcurrency) {  // Default to 4 workers
         this.workerPool = new WorkerPool(maxWorkers);
     }
 
-    async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
+    // `rawBytes` (the .note file's own bytes, already read by every caller to
+    // construct `note` in the first place) is what gets content-hashed for
+    // the cache key — passing it is what turns caching on; omit it (or
+    // construct without a cache) to always rasterize fresh, e.g. in tests.
+    async convertToImages(note: SupernoteX, rawBytes?: Uint8Array, pageNumbers?: number[]): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        const results = await this.workerPool.processPages(note, pages);
+
+        if (!this.cache || !rawBytes) {
+            return this.workerPool.processPages(note, pages);
+        }
+
+        const noteHash = hashBytes(rawBytes);
+        const results = new Array<string>(pages.length);
+        const missingPages: number[] = [];
+        const missingIndices: number[] = [];
+
+        await Promise.all(pages.map(async (pageNumber, i) => {
+            const cached = await this.cache!.get(noteHash, pageNumber);
+            if (cached !== null) {
+                results[i] = cached;
+            } else {
+                missingIndices.push(i);
+                missingPages.push(pageNumber);
+            }
+        }));
+
+        if (missingPages.length > 0) {
+            const rendered = await this.workerPool.processPages(note, missingPages);
+            await Promise.all(rendered.map((dataUrl, j) => {
+                results[missingIndices[j]] = dataUrl;
+                return this.cache!.put(noteHash, missingPages[j], dataUrl);
+            }));
+        }
+
         return results;
     }
 
@@ -228,11 +260,13 @@ class VaultWriter {
 	app: App;
 	settings: SupernotePluginSettings;
 	processors: Set<PageTextProcessor>;
+	cache?: RasterCache;
 
-	constructor(app: App, settings: SupernotePluginSettings, processors: Set<PageTextProcessor>) {
+	constructor(app: App, settings: SupernotePluginSettings, processors: Set<PageTextProcessor>, cache?: RasterCache) {
 		this.app = app;
 		this.settings = settings;
 		this.processors = processors;
+		this.cache = cache;
 	}
 
 	// `imageDataUrl` comes from the in-memory rasterization pass
@@ -262,13 +296,15 @@ class VaultWriter {
 		return result;
 	}
 
-	// Rasterizes every page once via the worker pool. Callers that also need
-	// the images written to the vault pass the result to writeImageFiles()
-	// rather than rasterizing a second time.
-	private async rasterizePages(sn: SupernoteX): Promise<string[]> {
-		const converter = new ImageConverter();
+	// Rasterizes every page once via the worker pool (or the persistent
+	// on-disk cache, if pages for this exact .note content have already been
+	// rendered before). Callers that also need the images written to the
+	// vault pass the result to writeImageFiles() rather than rasterizing a
+	// second time.
+	private async rasterizePages(sn: SupernoteX, rawBytes: Uint8Array): Promise<string[]> {
+		const converter = new ImageConverter(this.cache);
 		try {
-			return await converter.convertToImages(sn);
+			return await converter.convertToImages(sn, rawBytes);
 		} finally {
 			converter.terminate();
 		}
@@ -329,20 +365,22 @@ class VaultWriter {
 
 	async attachMarkdownFile(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		const sn = new SupernoteX(new Uint8Array(note));
+		const rawBytes = new Uint8Array(note);
+		const sn = new SupernoteX(rawBytes);
 
 		// This export doesn't otherwise touch images at all, but a registered
 		// processor still needs one to work with — rasterize only when
 		// there's actually a processor to hand it to.
-		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
+		const images = this.processors.size > 0 ? await this.rasterizePages(sn, rawBytes) : null;
 		await this.writeMarkdownFile(file, sn, null, images);
 	}
 
 	async attachNoteFiles(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		const sn = new SupernoteX(new Uint8Array(note));
+		const rawBytes = new Uint8Array(note);
+		const sn = new SupernoteX(rawBytes);
 
-		const images = await this.rasterizePages(sn);
+		const images = await this.rasterizePages(sn, rawBytes);
 		const imgs = await this.writeImageFiles(file.basename, images);
 		await this.writeMarkdownFile(file, sn, imgs, images);
 	}
@@ -365,10 +403,11 @@ class VaultWriter {
 			return `${format === 'embed' ? '!' : ''}${link}\n`;
 		}
 
-		const sn = new SupernoteX(new Uint8Array(noteBuffer));
+		const rawBytes = new Uint8Array(noteBuffer);
+		const sn = new SupernoteX(rawBytes);
 
 		if (format === 'pdf') {
-			const images = await this.rasterizePages(sn);
+			const images = await this.rasterizePages(sn, rawBytes);
 			const pdfBytes = await assemblePdfFromImages(sn, images);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
@@ -376,7 +415,7 @@ class VaultWriter {
 			return `${link}\n`;
 		}
 
-		const rasterized = await this.rasterizePages(sn);
+		const rasterized = await this.rasterizePages(sn, rawBytes);
 		const imgs = await this.writeImageFiles(basename, rasterized);
 		return this.renderPagesMarkdown(basename, sn, imgs, targetPath, format, deviceFileName, rasterized);
 	}
@@ -409,18 +448,13 @@ class VaultWriter {
 
 	async exportToPDF(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
-		const sn = new SupernoteX(new Uint8Array(note));
+		const rawBytes = new Uint8Array(note);
+		const sn = new SupernoteX(rawBytes);
 
 		// Rasterizes across the Worker pool in parallel (same pass the other
 		// export paths use), then assembles the PDF from those images rather
 		// than rendering a second time.
-		const converter = new ImageConverter();
-		let images: string[] = [];
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
+		const images = await this.rasterizePages(sn, rawBytes);
 
 		const pdfBytes = await assemblePdfFromImages(sn, images);
 
@@ -525,6 +559,12 @@ type FindMatch = {
 };
 
 let vw: VaultWriter;
+// Shared across every SupernoteView/SupernoteEmbed instance and VaultWriter —
+// set once in SupernotePlugin.onload() (there's exactly one on-disk cache
+// directory per vault, so one RasterCache instance is what should be writing
+// to it). Undefined until onload() finishes initializing it (or if that
+// initialization fails), in which case ImageConverter just skips caching.
+let rasterCache: RasterCache | undefined;
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
 
 export class SupernoteView extends FileView {
@@ -719,14 +759,15 @@ export class SupernoteView extends FileView {
 		this.findRequestId++;
 
 		const note = await this.app.vault.readBinary(file);
-		const sn = new SupernoteX(new Uint8Array(note));
+		const rawBytes = new Uint8Array(note);
+		const sn = new SupernoteX(rawBytes);
 		this.pageIds = sn.pages.map((p) => p.PAGEID ?? '');
 		const linksByPage = bucketLinksByPage(sn.links);
 		let images: string[] = [];
 
-		const converter = new ImageConverter();
+		const converter = new ImageConverter(rasterCache);
 		try {
-			images = await converter.convertToImages(sn);
+			images = await converter.convertToImages(sn, rawBytes);
 		} finally {
 			// Clean up the worker when done
 			converter.terminate();
@@ -1537,10 +1578,12 @@ export class SupernoteEmbed extends Component {
 		this.lastMinHeightWidth = -1;
 
 		let sn: SupernoteX;
+		let rawBytes: Uint8Array;
 		try {
 			const note = await this.app.vault.readBinary(this.file);
 			if (this.destroyed) return;
-			sn = new SupernoteX(new Uint8Array(note));
+			rawBytes = new Uint8Array(note);
+			sn = new SupernoteX(rawBytes);
 		} catch (err) {
 			this.renderError(err);
 			return;
@@ -1553,10 +1596,10 @@ export class SupernoteEmbed extends Component {
 			: null;
 		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
 
-		const converter = new ImageConverter();
+		const converter = new ImageConverter(rasterCache);
 		let images: string[];
 		try {
-			images = await converter.convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
+			images = await converter.convertToImages(sn, rawBytes, singlePage !== null ? [singlePage] : undefined);
 		} catch (err) {
 			if (!this.destroyed) this.renderError(err);
 			return;
@@ -1670,6 +1713,11 @@ export class SupernoteEmbed extends Component {
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
+	// Same instance as the module-level `rasterCache` used by SupernoteView/
+	// SupernoteEmbed/VaultWriter — exposed here too so the settings tab can
+	// show cache stats and offer a "clear cache" action without reaching into
+	// this module's internals.
+	rasterCache?: RasterCache;
 	private syncInFlight = false;
 	// Live reference handed to VaultWriter — registering/unregistering here
 	// after construction still takes effect, since both hold the same Set.
@@ -1698,7 +1746,20 @@ export default class SupernotePlugin extends Plugin {
         installAtPolyfill();
 
 		await this.loadSettings();
-		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
+
+		// A missing manifest.dir would mean no stable, plugin-private vault
+		// folder to keep cache blobs in — shouldn't happen for an installed
+		// plugin, but if it does, skip caching rather than fail to load.
+		if (this.manifest.dir) {
+			try {
+				rasterCache = await RasterCache.open(this.app.vault.adapter, `${this.manifest.dir}/rasterCache`, DEFAULT_MAX_CACHE_BYTES);
+				this.rasterCache = rasterCache;
+			} catch (err) {
+				console.error('Supernote: failed to initialize rasterization cache, continuing without it', err);
+			}
+		}
+
+		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors, rasterCache);
 		this.vaultWriter = vw;
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
