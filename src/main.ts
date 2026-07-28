@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
+import { SupernoteX, ILink, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -11,6 +11,7 @@ import Worker from 'myworker.worker';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
+import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -409,6 +410,12 @@ type PageRenderState = {
 	canvasWrap: HTMLElement;
 	canvas: HTMLCanvasElement;
 	textLayerDiv: HTMLElement;
+	linksLayerDiv: HTMLElement;
+	// Rendered once at page-build time, in native (unscaled) page-pixel
+	// coordinates; repositioned to the current CSS pixel size on every
+	// drawPageImage() call (initial render + each zoom redraw) — see
+	// positionLinkOverlay().
+	linkEls: { el: HTMLElement; rect: [number, number, number, number] }[];
 	// Decoded once from the already-rasterized page image and reused for
 	// every zoom redraw (see drawPageImage()) — no pdf.js/decode work on the
 	// zoom-critical path.
@@ -434,6 +441,10 @@ export class SupernoteView extends FileView {
 	private pdfjsLib: PdfJsLib | null = null;
 	private pageStates: PageRenderState[] = [];
 	private pagesEl: HTMLElement | null = null;
+	// This file's own pages' PAGEIDs, 0-indexed to match pageStates — lets a
+	// same-file link's PAGEID resolve to a page number without retaining the
+	// whole parsed SupernoteX. See handleLinkClick().
+	private pageIds: string[] = [];
 
 	private zoomScale = 1;
 	private renderedZoomScale = 1;
@@ -616,6 +627,8 @@ export class SupernoteView extends FileView {
 
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
+		this.pageIds = sn.pages.map((p) => p.PAGEID ?? '');
+		const linksByPage = bucketLinksByPage(sn.links);
 		let images: string[] = [];
 
 		const converter = new ImageConverter();
@@ -711,6 +724,7 @@ export class SupernoteView extends FileView {
 			});
 
 			const textLayerDiv = canvasWrap.createDiv({ cls: 'textLayer' });
+			const linksLayerDiv = canvasWrap.createDiv({ cls: 'supernote-links-layer' });
 
 			const state: PageRenderState = {
 				pageNumber: i + 1,
@@ -722,12 +736,28 @@ export class SupernoteView extends FileView {
 				canvasWrap,
 				canvas,
 				textLayerDiv,
+				linksLayerDiv,
+				linkEls: [],
 				imageBitmap: null,
 				textLayerLoaded: false,
 				text: '',
 				spans: [],
 			};
 			this.pageStates.push(state);
+
+			for (const link of linksByPage.get(i) ?? []) {
+				const rect = parseLinkRect(link.LINKRECT);
+				if (!rect) continue;
+				const el = linksLayerDiv.createEl('a', {
+					cls: 'supernote-link-rect',
+					attr: { href: '#', title: link.text },
+				});
+				el.addEventListener('click', (evt) => {
+					evt.preventDefault();
+					void this.handleLinkClick(link);
+				});
+				state.linkEls.push({ el, rect });
+			}
 
 			// Decodes the same PNG already sitting in `images[i]` — no pdf.js,
 			// no re-rasterization. Cached on the state and reused for every
@@ -785,9 +815,32 @@ export class SupernoteView extends FileView {
 		state.canvas.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.canvasWrap.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.textLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
+		state.linksLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
+		this.positionLinkOverlay(state, width, height);
 
 		if (state.imageBitmap) {
 			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
+		}
+	}
+
+	// Repositions each link's clickable region to the page's current CSS
+	// pixel size — called on initial render and every zoom redraw (see
+	// drawPageImage()). LINKRECT is stored in native (unscaled) page-pixel
+	// coordinates, the same space as nativeWidth/nativeHeight, so one scale
+	// factor (derived from the page's current rendered width, same source as
+	// canvas/textLayerDiv's own sizing above) maps rect -> CSS px.
+	private positionLinkOverlay(state: PageRenderState, width: number, height: number) {
+		if (state.linkEls.length === 0) return;
+		const scaleX = width / state.nativeWidth;
+		const scaleY = height / state.nativeHeight;
+		for (const { el, rect } of state.linkEls) {
+			const [x, y, w, h] = rect;
+			el.setCssStyles({
+				left: `${x * scaleX}px`,
+				top: `${y * scaleY}px`,
+				width: `${w * scaleX}px`,
+				height: `${h * scaleY}px`,
+			});
 		}
 	}
 
@@ -990,6 +1043,46 @@ export class SupernoteView extends FileView {
 		// explicitly asked to jump to.
 		void this.ensureTextLayer(state);
 		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
+	}
+
+	// A clicked link region's target: same-file (jump in place via goToPage)
+	// when its basename matches this file, or another vault note (open via a
+	// new leaf, reusing the `#page=N` ephemeral-state anchor that regular
+	// `[[note#page=N]]` links already use — see setEphemeralState()). Basename
+	// matching against the vault mirrors VaultWriter.resolvePageAnchor()'s
+	// export-time link resolution (see PR #122), so a link resolves the same
+	// note whether you're viewing it live or exporting it; ambiguous if two
+	// vault notes share a basename in different folders, same known
+	// limitation as that export path.
+	private async handleLinkClick(link: ILink): Promise<void> {
+		const targetBasename = link.text.split('#')[0];
+		const pageid = link.PAGEID;
+
+		if (!targetBasename || targetBasename === this.file.basename) {
+			const pageIndex = this.pageIds.findIndex((id) => id === pageid);
+			if (pageIndex >= 0) void this.goToPage(pageIndex + 1);
+			return;
+		}
+
+		const targetFile = this.app.vault.getFiles().find((f) => f.extension === 'note' && f.basename === targetBasename);
+		if (!targetFile) {
+			new Notice(`Linked note "${targetBasename}.note" not found in vault.`);
+			return;
+		}
+
+		let subpath: string | undefined;
+		if (pageid && pageid !== '0' && pageid !== 'none') {
+			try {
+				const buffer = await this.app.vault.readBinary(targetFile);
+				const pageIndex = new SupernoteX(new Uint8Array(buffer)).pages.findIndex((p) => p.PAGEID === pageid);
+				if (pageIndex >= 0) subpath = `#page=${pageIndex + 1}`;
+			} catch {
+				// Malformed target file — fall through and open without a page anchor.
+			}
+		}
+
+		const leaf = this.app.workspace.getLeaf(false);
+		await leaf.openFile(targetFile, subpath ? { eState: { subpath } } : undefined);
 	}
 
 	// Scrollspy: find the last page whose top has scrolled up past the sticky
