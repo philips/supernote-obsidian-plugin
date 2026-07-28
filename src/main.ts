@@ -779,10 +779,20 @@ export class SupernoteView extends FileView {
 		// all), so there's no reason to block the first paint on assembling a
 		// PDF and loading it into pdf.js. Only the text layer (selection/
 		// search) needs this, lazily, per page — see ensureTextLayer().
+		//
+		// Not awaited, but still runs on this same main thread concurrently
+		// with the page-render loop below — timed here to check whether it's
+		// actually competing for CPU with that loop (both are single-threaded
+		// JS work) rather than being "free" background work.
+		const pdfPipelineStart = performance.now();
 		this.pdfDocPromise = (async () => {
 			const pdfBytes = await assemblePdfFromImages(sn, images);
+			const afterAssemble = performance.now();
 			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
-			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+			const afterLoadPdfJs = performance.now();
+			const doc = await this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+			console.debug(`Supernote: background PDF pipeline — assemble ${(afterAssemble - pdfPipelineStart).toFixed(1)}ms, loadPdfJs ${(afterLoadPdfJs - afterAssemble).toFixed(1)}ms, getDocument ${(performance.now() - afterLoadPdfJs).toFixed(1)}ms`);
+			return doc;
 		})();
 
 		if (this.settings.showExportButtons) {
@@ -843,6 +853,7 @@ export class SupernoteView extends FileView {
 			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
 			return createImageBitmap(blob);
 		}));
+		const decodeEnd = performance.now();
 
 		for (let i = 0; i < images.length; i++) {
 			const imageDataUrl = images[i];
@@ -928,7 +939,7 @@ export class SupernoteView extends FileView {
 			}
 		}
 
-		console.debug(`Supernote: page render (bitmap decode + DOM) — ${images.length} page(s) in ${(performance.now() - renderStart).toFixed(1)}ms`);
+		console.debug(`Supernote: page render — decode ${(decodeEnd - renderStart).toFixed(1)}ms, DOM build ${(performance.now() - decodeEnd).toFixed(1)}ms, total ${(performance.now() - renderStart).toFixed(1)}ms for ${images.length} page(s)`);
 
 		if (this.fitWidthEnabled) {
 			this.applyFitWidth();
