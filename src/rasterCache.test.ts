@@ -61,7 +61,9 @@ describe('RasterCache', () => {
     });
 
     it('evicts the least-recently-used entry once over budget (no reads yet == oldest-inserted)', async () => {
-        const cache = await RasterCache.open(makeStorage(), 'cache', 10);
+        // maxMemoryBytes: 0 disables the in-memory tier so this test exercises
+        // disk-tier eviction only — see the "memory tier" tests below for that.
+        const cache = await RasterCache.open(makeStorage(), 'cache', 10, 0);
         await cache.put('hash', 1, dataUrlOf([0, 0, 0, 0])); // 4 bytes, total 4
         await cache.put('hash', 2, dataUrlOf([0, 0, 0, 0])); // total 8
         await cache.put('hash', 3, dataUrlOf([0, 0, 0, 0])); // total 12 > 10 -> evict page 1
@@ -73,7 +75,7 @@ describe('RasterCache', () => {
     });
 
     it('re-fetching a page via get() protects it from eviction (LRU, not FIFO)', async () => {
-        const cache = await RasterCache.open(makeStorage(), 'cache', 10);
+        const cache = await RasterCache.open(makeStorage(), 'cache', 10, 0);
         await cache.put('hash', 1, dataUrlOf([0, 0, 0, 0]));
         await cache.put('hash', 2, dataUrlOf([0, 0, 0, 0]));
         // Re-access page 1 — this should now make page 2 the least-recently-used.
@@ -107,7 +109,7 @@ describe('RasterCache', () => {
 
     it('fails open (and self-heals the index) when a cached blob goes missing out-of-band', async () => {
         const storage = makeStorage();
-        const cache = await RasterCache.open(storage, 'cache');
+        const cache = await RasterCache.open(storage, 'cache', undefined, 0);
         await cache.put('hash', 1, dataUrlOf([1, 2]));
 
         await storage.remove('cache/hash-1.png');
@@ -127,7 +129,7 @@ describe('RasterCache', () => {
         expect(await cache.get('hash', 1)).toBeNull();
     });
 
-    it('clear() empties the cache and removes blobs from storage', async () => {
+    it('clear() empties the cache (both tiers) and removes blobs from storage', async () => {
         const storage = makeStorage();
         const cache = await RasterCache.open(storage, 'cache');
         await cache.put('hash', 1, dataUrlOf([1]));
@@ -137,9 +139,38 @@ describe('RasterCache', () => {
 
         expect(cache.entryCount).toBe(0);
         expect(cache.totalCachedBytes).toBe(0);
+        expect(cache.memoryEntryCount).toBe(0);
+        expect(cache.memoryCachedBytes).toBe(0);
         expect(await cache.get('hash', 1)).toBeNull();
         expect(storage.files.has('cache/hash-1.png')).toBe(false);
         expect(storage.files.has('cache/hash-2.png')).toBe(false);
+    });
+
+    it('memory tier avoids re-reading disk on repeated gets', async () => {
+        const storage = makeStorage();
+        const cache1 = await RasterCache.open(storage, 'cache');
+        await cache1.put('hash', 1, dataUrlOf([1, 2, 3]));
+
+        // Fresh instance sharing the same storage — its own memory tier
+        // starts empty even though the disk index already has the entry.
+        const cache2 = await RasterCache.open(storage, 'cache');
+        const readSpy = vi.spyOn(storage, 'readBinary');
+
+        expect(await cache2.get('hash', 1)).toBe(dataUrlOf([1, 2, 3])); // disk hit, populates memory tier
+        expect(await cache2.get('hash', 1)).toBe(dataUrlOf([1, 2, 3])); // served from memory tier
+        expect(readSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('memory tier evicts on its own, independent (smaller) budget', async () => {
+        // Disk budget generous (1000 bytes); memory budget tiny (8 bytes).
+        const cache = await RasterCache.open(makeStorage(), 'cache', 1000, 8);
+        await cache.put('hash', 1, dataUrlOf([0, 0, 0, 0])); // 4 bytes
+        await cache.put('hash', 2, dataUrlOf([0, 0, 0, 0])); // memory total 8
+        await cache.put('hash', 3, dataUrlOf([0, 0, 0, 0])); // memory total 12 > 8 -> evict page 1 from memory only
+
+        expect(cache.entryCount).toBe(3); // disk tier unaffected, well under its own budget
+        expect(cache.memoryCachedBytes).toBeLessThanOrEqual(8);
+        expect(cache.memoryEntryCount).toBeLessThanOrEqual(2);
     });
 
     it('re-exports hashBytes as a deterministic content hash', () => {

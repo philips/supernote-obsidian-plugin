@@ -18,7 +18,7 @@ function applyRasterCacheSetting(setting: Setting, plugin: SupernotePlugin): voi
     const describe = () => {
         setting.setDesc(
             cache
-                ? `${cache.entryCount} cached page image(s) using ${formatCacheBytes(cache.totalCachedBytes)} of the ${formatCacheBytes(DEFAULT_MAX_CACHE_BYTES)} budget. Speeds up re-opening notes and embeds that have already been rasterized; oldest entries are evicted first once the budget is exceeded.`
+                ? `${cache.entryCount} cached page image(s) on disk using ${formatCacheBytes(cache.totalCachedBytes)} of the ${formatCacheBytes(DEFAULT_MAX_CACHE_BYTES)} budget (plus ${cache.memoryEntryCount} in memory this session). Speeds up re-opening notes and embeds that have already been rasterized; least-recently-used entries are evicted first once a budget is exceeded.`
                 : 'Unavailable in this vault (the plugin folder could not be determined).',
         );
     };

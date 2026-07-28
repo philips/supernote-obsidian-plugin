@@ -14,6 +14,10 @@ import { hashBytes } from './deviceSync';
 export { hashBytes };
 
 export const DEFAULT_MAX_CACHE_BYTES = 100 * 1024 * 1024;
+// Separate, smaller budget for the in-memory tier (see class comment) — kept
+// modest since it's on top of whatever else Obsidian and this note's own
+// decoded ImageBitmaps are already holding in memory, especially on mobile.
+export const DEFAULT_MAX_MEMORY_CACHE_BYTES = 20 * 1024 * 1024;
 
 export interface CacheStorage {
     exists(path: string): Promise<boolean>;
@@ -50,21 +54,28 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-// A size-bounded, disk-backed cache of rasterized page PNGs.
+// A size-bounded, disk-backed cache of rasterized page PNGs, with a smaller
+// in-memory tier in front of it.
 //
-// Eviction is LRU: `entries` is a Map, whose iteration order is insertion
-// order, and every cache hit in get() deletes + re-inserts its key to move it
-// to the most-recently-used end. Eviction then just removes from the front —
-// the actual least-recently-used entry, whether that's "oldest inserted" (an
-// entry never re-read) or "longest since last read" (one that has been).
+// Eviction is LRU on both tiers: `entries` (disk) and `memoryCache` (memory)
+// are each a Map, whose iteration order is insertion order, and every cache
+// hit deletes + re-inserts its key to move it to the most-recently-used end.
+// Eviction then just removes from the front — the actual least-recently-used
+// entry, whether that's "oldest inserted" (an entry never re-read) or
+// "longest since last read" (one that has been).
 //
-// That reordering is kept in memory only — get() does not persist the index
-// on a hit, only put()/clear() do. A cache *read* triggering a disk write
-// would undercut the point of caching; the cost is that recency ordering
-// accumulated since the last write is lost if the plugin reloads or Obsidian
-// restarts before another put()/clear() happens to flush it, so eviction
-// order right after a reload reflects whatever was last persisted rather
-// than genuinely-most-recent reads.
+// The disk tier's reordering is kept in memory only — get() does not persist
+// the *disk* index on a hit, only put()/clear() do. A cache *read* triggering
+// a disk write would undercut the point of caching; the cost is that
+// recency ordering accumulated since the last write is lost if the plugin
+// reloads or Obsidian restarts before another put()/clear() happens to flush
+// it, so eviction order right after a reload reflects whatever was last
+// persisted rather than genuinely-most-recent reads.
+//
+// The memory tier exists purely to skip the disk tier's vault.adapter
+// read + base64 decode for pages already served earlier this session (e.g.
+// closing a note and reopening it) — it is never persisted at all, and is
+// empty again after every plugin reload/Obsidian restart.
 //
 // Every storage operation is fail-open: a read/write/parse error is logged
 // and treated as a cache miss (get) or a no-op (put/evict), never thrown, so
@@ -73,6 +84,8 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export class RasterCache {
     private entries = new Map<string, number>();
     private totalBytes = 0;
+    private memoryCache = new Map<string, { dataUrl: string; size: number }>();
+    private memoryBytes = 0;
     private dirEnsured = false;
     private persistQueue: Promise<void> = Promise.resolve();
     private readonly indexPath: string;
@@ -81,12 +94,18 @@ export class RasterCache {
         private readonly storage: CacheStorage,
         private readonly dir: string,
         private readonly maxBytes: number,
+        private readonly maxMemoryBytes: number,
     ) {
         this.indexPath = `${dir}/index.json`;
     }
 
-    static async open(storage: CacheStorage, dir: string, maxBytes: number = DEFAULT_MAX_CACHE_BYTES): Promise<RasterCache> {
-        const cache = new RasterCache(storage, dir, maxBytes);
+    static async open(
+        storage: CacheStorage,
+        dir: string,
+        maxBytes: number = DEFAULT_MAX_CACHE_BYTES,
+        maxMemoryBytes: number = DEFAULT_MAX_MEMORY_CACHE_BYTES,
+    ): Promise<RasterCache> {
+        const cache = new RasterCache(storage, dir, maxBytes, maxMemoryBytes);
         await cache.loadIndex();
         return cache;
     }
@@ -99,8 +118,25 @@ export class RasterCache {
         return this.entries.size;
     }
 
+    get memoryCachedBytes(): number {
+        return this.memoryBytes;
+    }
+
+    get memoryEntryCount(): number {
+        return this.memoryCache.size;
+    }
+
     async get(noteHash: string, pageNumber: number): Promise<string | null> {
         const key = this.key(noteHash, pageNumber);
+
+        const memoized = this.memoryCache.get(key);
+        if (memoized !== undefined) {
+            // Touch this tier's own LRU order too.
+            this.memoryCache.delete(key);
+            this.memoryCache.set(key, memoized);
+            return memoized.dataUrl;
+        }
+
         const size = this.entries.get(key);
         if (size === undefined) return null;
         try {
@@ -109,7 +145,9 @@ export class RasterCache {
             // in memory, not persisted until the next put()/clear().
             this.entries.delete(key);
             this.entries.set(key, size);
-            return bytesToDataUrl(new Uint8Array(buf));
+            const dataUrl = bytesToDataUrl(new Uint8Array(buf));
+            this.rememberInMemory(key, dataUrl, size);
+            return dataUrl;
         } catch {
             // Indexed but unreadable (deleted out-of-band, corrupted, etc.) —
             // drop the stale entry and report a miss rather than throwing.
@@ -134,6 +172,7 @@ export class RasterCache {
 
         this.entries.set(key, bytes.byteLength);
         this.totalBytes += bytes.byteLength;
+        this.rememberInMemory(key, dataUrl, bytes.byteLength);
         await this.evictIfNeeded();
         await this.persist();
     }
@@ -145,6 +184,8 @@ export class RasterCache {
         const keys = Array.from(this.entries.keys());
         this.entries.clear();
         this.totalBytes = 0;
+        this.memoryCache.clear();
+        this.memoryBytes = 0;
         for (const key of keys) {
             try {
                 await this.storage.remove(this.pagePath(key));
@@ -157,6 +198,29 @@ export class RasterCache {
 
     private key(noteHash: string, pageNumber: number): string {
         return `${noteHash}-${pageNumber}`;
+    }
+
+    // Inserts/refreshes an entry in the memory tier and evicts
+    // least-recently-used entries from *that tier only* until back under its
+    // (independent, smaller) budget. Never touches disk.
+    private rememberInMemory(key: string, dataUrl: string, size: number): void {
+        const existing = this.memoryCache.get(key);
+        if (existing) {
+            this.memoryCache.delete(key);
+            this.memoryBytes -= existing.size;
+        }
+        this.memoryCache.set(key, { dataUrl, size });
+        this.memoryBytes += size;
+
+        const toEvict: string[] = [];
+        for (const [oldestKey, oldest] of this.memoryCache) {
+            if (this.memoryBytes <= this.maxMemoryBytes) break;
+            toEvict.push(oldestKey);
+            this.memoryBytes -= oldest.size;
+        }
+        for (const oldestKey of toEvict) {
+            this.memoryCache.delete(oldestKey);
+        }
     }
 
     private pagePath(key: string): string {
