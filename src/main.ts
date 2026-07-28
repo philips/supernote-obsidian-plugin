@@ -12,7 +12,8 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
-import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER } from './atelierView';
+import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl } from './atelierView';
+import { PDFDocument } from 'pdf-lib';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -441,6 +442,46 @@ class VaultWriter {
 		const pdfBytes = await assemblePdfFromImages(sn, images);
 
 		// Generate filename and save
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
+		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+	}
+
+	// `.spd` (Supernote Atelier) equivalents of the exports above. Unlike
+	// `.note`, `.spd` has no pages and no recognized/OCR text — just one
+	// flattened composite image (see renderAtelierCompositeDataUrl).
+	private async rasterizeAtelier(file: TFile): Promise<string> {
+		const dataUrl = await renderAtelierCompositeDataUrl(this.app, file);
+		if (dataUrl === null) {
+			throw new Error(`"${file.basename}.spd" has no drawn content to export.`);
+		}
+		return dataUrl;
+	}
+
+	async attachAtelierImage(file: TFile): Promise<TFile> {
+		const dataUrl = await this.rasterizeAtelier(file);
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.png`);
+		return this.app.vault.createBinary(filename, dataUrlToBuffer(dataUrl));
+	}
+
+	async exportAtelierToPDF(file: TFile) {
+		const dataUrl = await this.rasterizeAtelier(file);
+
+		// A single full-page image, same sizing convention
+		// createPdfContext/addPdfPage use for `.note` pages (see pdf.ts in
+		// supernote-typescript): 300dpi assumed source density, converted to
+		// PDF points (72/inch). `.spd` has no recognition/OCR text to lay an
+		// invisible text layer under, so this builds the PDF directly with
+		// pdf-lib rather than going through that `.note`-specific machinery.
+		const pdfDoc = await PDFDocument.create();
+		const pngImage = await pdfDoc.embedPng(dataUrlToBuffer(dataUrl));
+		const dpi = 300;
+		const pointsPerPixel = 72 / dpi;
+		const widthPts = pngImage.width * pointsPerPixel;
+		const heightPts = pngImage.height * pointsPerPixel;
+		const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
+		pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
+		const pdfBytes = await pdfDoc.save();
+
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
 		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 	}
@@ -1887,6 +1928,56 @@ export default class SupernotePlugin extends Plugin {
 						new ErrorModal(this.app, new Error("No file to attach")).open();
 					} else {
 						vw.attachMarkdownFile(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-atelier-as-png',
+			name: 'Export this .spd file as a PNG attachment',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "spd") {
+					if (checking) {
+						return true
+					}
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.attachAtelierImage(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-atelier-as-pdf',
+			name: 'Export this .spd file as PDF',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "spd") {
+					if (checking) {
+						return true
+					}
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.exportAtelierToPDF(file).catch((err: unknown) => {
 							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
 						});
 					}
