@@ -43,6 +43,28 @@ export async function fetchSupernoteDirectory(ip: string, path: string): Promise
     return data.fileList.sort(compareByDirectoryThenNameThenDate);
 }
 
+// Recursively walks the whole device tree starting at `path`, collecting
+// every `.note` file found. Shared by ImportTodayModal (which further
+// filters by date) and the device auto-sync engine (which filters by the
+// configured path patterns) — both need the same "list everything once"
+// traversal, just with different downstream filtering.
+export async function scanDeviceNoteTree(ip: string, path = '/', visited: Set<string> = new Set()): Promise<SupernoteFile[]> {
+    if (visited.has(path)) return [];
+    visited.add(path);
+
+    const entries = await fetchSupernoteDirectory(ip, path);
+    const results: SupernoteFile[] = [];
+
+    for (const entry of entries) {
+        if (entry.isDirectory) {
+            results.push(...await scanDeviceNoteTree(ip, entry.uri, visited));
+        } else if (entry.name.toLowerCase().endsWith('.note')) {
+            results.push(entry);
+        }
+    }
+    return results;
+}
+
 function compareByDirectoryThenNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
 

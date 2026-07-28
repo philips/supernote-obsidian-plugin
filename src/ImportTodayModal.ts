@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Editor } from 'obsidian';
 import SupernotePlugin from './main';
-import { SupernoteFile, fetchSupernoteDirectory } from './FileListModal';
+import { SupernoteFile, scanDeviceNoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
 import { ImportFormat, IMPORT_FORMAT_LABELS } from './settings';
@@ -42,7 +42,7 @@ export class ImportTodayModal extends Modal {
         const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
 
         try {
-            this.allNotes = await this.scanAllNotes('/', new Set());
+            this.allNotes = await this.scanAllNotes();
         } catch (err) {
             status.setText(`Failed to scan device: ${err instanceof Error ? err.message : String(err)}`);
             return;
@@ -140,21 +140,13 @@ export class ImportTodayModal extends Modal {
     // Walks the whole device tree once and records every .note file's parsed
     // date, so switching the date picker only needs to re-filter in memory
     // instead of re-fetching the device's directory tree over HTTP each time.
-    private async scanAllNotes(path: string, visited: Set<string>): Promise<ScannedNote[]> {
-        if (visited.has(path)) return [];
-        visited.add(path);
-
-        const entries = await fetchSupernoteDirectory(this.plugin.settings.directConnectIP, path);
+    private async scanAllNotes(): Promise<ScannedNote[]> {
+        const files = await scanDeviceNoteTree(this.plugin.settings.directConnectIP);
         const results: ScannedNote[] = [];
-
-        for (const entry of entries) {
-            if (entry.isDirectory) {
-                results.push(...await this.scanAllNotes(entry.uri, visited));
-            } else if (entry.name.toLowerCase().endsWith('.note')) {
-                const modified = parseDeviceDate(entry.date);
-                if (modified) {
-                    results.push({ file: entry, date: modified });
-                }
+        for (const file of files) {
+            const modified = parseDeviceDate(file.date);
+            if (modified) {
+                results.push({ file, date: modified });
             }
         }
         return results;
