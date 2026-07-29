@@ -1,4 +1,4 @@
-# Supernote Obsidian Plugin
+# Supernote Obsidian Plugin (Unofficial)
 
 I use my Supernote for capturing hand written notes and reading documents.
 
