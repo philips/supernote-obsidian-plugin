@@ -46,11 +46,6 @@ To test Beta builds of this plugin follow these steps:
 
 There are a handful of known issues. Please check the [issue list](https://github.com/philips/supernote-obsidian-plugin/issues). If you don't see a matching issue please [create a new issue](https://github.com/philips/supernote-obsidian-plugin/issues)?
 
-## Roadmap / Ideas
-
-- 🔗 Note linking
-- 🎛️ Settings panel to control file layout, linking, and more
-
 ## Thank You
 
 Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for developing the initial supernote Typescript library I forked.
@@ -61,13 +56,6 @@ Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for devel
 
 **A** Because the [Obsidian Outline](https://help.obsidian.md/Plugins/Outline) sidebar accomplishes this same feature.
 
-## Other Helpful Plugins
-
-These are not endorsements but might be useful to pair with this plugin.
-
-- [Mousewheel Image Zoom](https://obsidian.md/plugins?id=mousewheel-image-zoom)
-- [Image Toolkit](https://obsidian.md/plugins?id=obsidian-image-toolkit)
-
 ## Relevant Resources
 
 - [Obsidian and Supernote by Organizing for Change](https://www.youtube.com/watch?v=2zKD79e-V_U)
@@ -76,7 +64,7 @@ These are not endorsements but might be useful to pair with this plugin.
 
 ## Funding
 
-I personally don't accept funding or donations for this project. However, if you feel inclined, consider donating to the [Signal Foundation](https://signal.org/donate/).
+I personally don't accept funding or donations for this project. However, if you feel inclined, consider donating to the [Signal Foundation](https://signal.org/donate/) or [Internet Security Research Group (ISRG)](https://www.abetterinternet.org). Open an issue or send me an email to let me know about your donation. It will make my day.
 
 ## Developer Notes
 
