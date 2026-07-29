@@ -20,7 +20,7 @@ This plugin has seven main features:
 
 - ⬇️  Download & Upload files directly from your device via the Supernote [Browse & Access](https://support.supernote.com/en_US/Tools-Features/wi-fi-transfer) feature. ([demo video](https://www.youtube.com/watch?v=SEkp395hbBM)). Or sync all your Supernote files to your vault with the sync command.
 
-- ✏️ Extensible OCR: (**beta**) build a companion plugin to run OCR pages during conversion. See [`ocr-plugins.md`](ocr-plugins.md).
+- ✏️ Extensible OCR: (**beta**) build a companion plugin to customize OCR pages during conversion to markdown. See [`ocr-plugins.md`](ocr-plugins.md).
 
 **Video Demo**
 
