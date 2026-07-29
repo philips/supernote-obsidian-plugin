@@ -98,6 +98,11 @@ with:
 | `text` | `string` | This page's text so far: the device's own recognized text, if any, already run through any earlier-registered processors. Empty string if none |
 | `imageMimeType` | `string` | MIME type of what `readImage()` resolves to. Currently always `"image/png"` — read it rather than assuming, in case that changes |
 | `readImage()` | `() => Promise<ArrayBuffer>` | This page's rasterized image bytes. Raw bytes, not a vault `TFile` — this runs whether or not the export actually wants images saved into the vault, so there may be no `TFile` backing it at all |
+| `keywords` | `string[]` | This page's starred keywords, exactly as the device's own recognition read them. Raw OCR'd text, deduplicated — not sanitized into Obsidian tag form; that's a choice for your processor to make. Most starred keywords never appear as literal text elsewhere on the page, so this is the only way to see them at all |
+| `links` | `ILink[]` (from `supernote-typescript`) | This page's own internal links (Supernote's link feature). Same-file page anchors are already resolved (`ILink.text` gets `#Page N` appended). Cross-file anchors are not — `ILink.LINKFILE` is the base64-encoded absolute device path of the target `.note` file if you want to resolve that yourself |
+| `pageId` | `string` | This page's own `PAGEID`, if any (empty string otherwise) — the identifier other notes' links resolve against |
+| `orientation` | `string` | This page's orientation, exactly as recorded in the `.note` file |
+| `recognitionStatus` | `RecognitionStatuses` (from `supernote-typescript`) | Whether the device's own handwriting recognition ran on this page, and whether it completed. Distinguishes "never ran" and "ran, found nothing" from `text` alone, which conflates both with "ran and found nothing" |
 
 Pages are processed one at a time, in order — `pageNumber` reliably starts
 at 1 and counts up for a given run, with no concurrent calls to interleave.
