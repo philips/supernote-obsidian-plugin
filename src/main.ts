@@ -12,7 +12,7 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
-import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl } from './atelierView';
+import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
 function generateTimestamp(): string {
@@ -79,6 +79,25 @@ async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<
         await addPdfPage(ctx, sn.pages[i], pngBytes);
     }
     return ctx.pdfDoc.save();
+}
+
+// Wraps a single already-rasterized PNG (as a data URL) in a one-page PDF,
+// at the same 300dpi-assumed-source-density sizing convention `.note`'s PDF
+// export uses (createPdfContext/addPdfPage above). Used for `.spd`, which
+// has no recognition/OCR text to lay an invisible text layer under the way
+// addPdfPage does for `.note` pages, so this builds directly with pdf-lib
+// instead. Shared by VaultWriter.exportAtelierToPDF and its
+// buildInsertableContent .spd import path.
+async function buildSinglePagePdf(pngDataUrl: string): Promise<Uint8Array> {
+    const pdfDoc = await PDFDocument.create();
+    const pngImage = await pdfDoc.embedPng(dataUrlToBuffer(pngDataUrl));
+    const dpi = 300;
+    const pointsPerPixel = 72 / dpi;
+    const widthPts = pngImage.width * pointsPerPixel;
+    const heightPts = pngImage.height * pointsPerPixel;
+    const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
+    pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
+    return pdfDoc.save();
 }
 
 // Builds a PDF with only the invisible recognized-text layer, no page images
@@ -371,11 +390,16 @@ class VaultWriter {
 	}
 
 	/**
-	 * Converts a Supernote .note file (fetched from a device, not yet in the
-	 * vault) into the requested format and returns markdown for inserting it
-	 * inline into another note, rather than creating a new .md file for it.
+	 * Converts a Supernote .note or .spd file (fetched from a device, not yet
+	 * in the vault) into the requested format and returns markdown for
+	 * inserting it inline into another note, rather than creating a new .md
+	 * file for it.
 	 */
 	async buildInsertableContent(deviceFileName: string, noteBuffer: ArrayBuffer, targetPath: string, format: ImportFormat): Promise<string> {
+		if (/\.spd$/i.test(deviceFileName)) {
+			return this.buildInsertableAtelierContent(deviceFileName, noteBuffer, targetPath, format);
+		}
+
 		const basename = deviceFileName.replace(/\.note$/i, '');
 
 		// These two formats save the raw .note file itself into the vault and
@@ -402,6 +426,41 @@ class VaultWriter {
 		const rasterized = await this.rasterizePages(sn);
 		const imgs = await this.writeImageFiles(basename, rasterized);
 		return this.renderPagesMarkdown(basename, sn, imgs, targetPath, format, deviceFileName, rasterized);
+	}
+
+	// `.spd` equivalent of buildInsertableContent above. `.spd` has no pages
+	// and no recognized/OCR text (see rasterizeAtelier's doc comment below),
+	// so 'images' and 'images-text' both reduce to the same single-image
+	// output — there's no per-page text for the latter to add that the
+	// former doesn't already have.
+	private async buildInsertableAtelierContent(deviceFileName: string, buffer: ArrayBuffer, targetPath: string, format: ImportFormat): Promise<string> {
+		const basename = deviceFileName.replace(/\.spd$/i, '');
+
+		if (format === 'note-link' || format === 'embed') {
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(deviceFileName);
+			const tfile = await this.app.vault.createBinary(filename, buffer);
+			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
+			return `${format === 'embed' ? '!' : ''}${link}\n`;
+		}
+
+		const dataUrl = await renderAtelierCompositeFromBuffer(new Uint8Array(buffer));
+		if (dataUrl === null) {
+			throw new Error(`"${deviceFileName}" has no drawn content to import.`);
+		}
+
+		if (format === 'pdf') {
+			const pdfBytes = await buildSinglePagePdf(dataUrl);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
+			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
+			return `${link}\n`;
+		}
+
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.png`);
+		const tfile = await this.app.vault.createBinary(filename, dataUrlToBuffer(dataUrl));
+		const alt = this.settings.invertColorsWhenDark ? 'supernote-invert-dark' : '';
+		const link = generateMarkdownImageEmbed(this.app, tfile, targetPath, alt);
+		return `## ${basename}\n\n${link}\n`;
 	}
 
 	// Shared page-by-page markdown body (heading + optional recognized text +
@@ -465,22 +524,7 @@ class VaultWriter {
 
 	async exportAtelierToPDF(file: TFile) {
 		const dataUrl = await this.rasterizeAtelier(file);
-
-		// A single full-page image, same sizing convention
-		// createPdfContext/addPdfPage use for `.note` pages (see pdf.ts in
-		// supernote-typescript): 300dpi assumed source density, converted to
-		// PDF points (72/inch). `.spd` has no recognition/OCR text to lay an
-		// invisible text layer under, so this builds the PDF directly with
-		// pdf-lib rather than going through that `.note`-specific machinery.
-		const pdfDoc = await PDFDocument.create();
-		const pngImage = await pdfDoc.embedPng(dataUrlToBuffer(dataUrl));
-		const dpi = 300;
-		const pointsPerPixel = 72 / dpi;
-		const widthPts = pngImage.width * pointsPerPixel;
-		const heightPts = pngImage.height * pointsPerPixel;
-		const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
-		pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
-		const pdfBytes = await pdfDoc.save();
+		const pdfBytes = await buildSinglePagePdf(dataUrl);
 
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
 		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
@@ -1990,7 +2034,7 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addCommand({
 			id: 'import-todays-pages',
-			name: "Import notes edited today",
+			name: "Import notes and drawings edited today",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();

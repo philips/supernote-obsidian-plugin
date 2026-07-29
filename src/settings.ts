@@ -17,11 +17,11 @@ export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
 export type ImportFormat = 'note-link' | 'embed' | 'images' | 'pdf' | 'images-text';
 
 export const IMPORT_FORMAT_LABELS: Record<ImportFormat, string> = {
-    'note-link': 'Notes (save .note)',
-    'embed': 'Embedded note (save .note file, embed it)',
+    'note-link': 'Original file (save .note/.spd, link to it)',
+    'embed': 'Embedded original file (save .note/.spd file, embed it)',
     'images': 'Images only',
     'pdf': 'PDF',
-    'images-text': 'Images and text',
+    'images-text': 'Images and text (text only available for .note)',
 };
 
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().

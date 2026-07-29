@@ -11,13 +11,10 @@ import sqlWasmBinary from 'sql.js/dist/sql-wasm.wasm';
 export const VIEW_TYPE_SUPERNOTE_ATELIER = "supernote-atelier-view";
 
 // Opens a `.spd` file (Supernote Atelier app) via SupernoteAtelier.open()
-// (supernote-typescript#33). Shared by every entry point below — parsing the
-// sqlite database is the expensive part, so SupernoteAtelierView's layer
-// toggle (which needs to re-composite on every checkbox click) does this
-// once per file load and reuses the parsed SupernoteAtelier, rather than
-// re-parsing on every toggle.
-async function openAtelierFile(app: App, file: TFile): Promise<SupernoteAtelier> {
-	const buffer = await app.vault.readBinary(file);
+// (supernote-typescript#33), from raw bytes — a device fetch not yet
+// written into the vault (see renderAtelierCompositeFromBuffer), as well as
+// openAtelierFile below (an already-in-vault TFile).
+async function openAtelierBuffer(buffer: Uint8Array): Promise<SupernoteAtelier> {
 	// Uint8Array.buffer is typed ArrayBufferLike (could be a SharedArrayBuffer
 	// view) but sql.js's wasmBinary wants a plain ArrayBuffer; slice() always
 	// returns one sized to exactly this array's bytes.
@@ -25,7 +22,18 @@ async function openAtelierFile(app: App, file: TFile): Promise<SupernoteAtelier>
 		sqlWasmBinary.byteOffset,
 		sqlWasmBinary.byteOffset + sqlWasmBinary.byteLength,
 	) as ArrayBuffer;
-	return SupernoteAtelier.open(new Uint8Array(buffer), { wasmBinary });
+	return SupernoteAtelier.open(buffer, { wasmBinary });
+}
+
+// Opens a `.spd` file already in the vault. Shared by SupernoteAtelierView,
+// SupernoteAtelierEmbed, and VaultWriter's .spd export commands — parsing
+// the sqlite database is the expensive part, so SupernoteAtelierView's
+// layer toggle (which needs to re-composite on every checkbox click) does
+// this once per file load and reuses the parsed SupernoteAtelier, rather
+// than re-parsing on every toggle.
+async function openAtelierFile(app: App, file: TFile): Promise<SupernoteAtelier> {
+	const buffer = await app.vault.readBinary(file);
+	return openAtelierBuffer(new Uint8Array(buffer));
 }
 
 interface AtelierComposite {
@@ -48,12 +56,22 @@ async function compositeImage(spd: SupernoteAtelier, visibleSurfaces?: Iterable<
 	return image ? { dataUrl: encodeDataURL(image), width: image.width } : null;
 }
 
-// Opens a `.spd` file and flattens every layer in one step. Used by
-// SupernoteAtelierEmbed and VaultWriter's .spd export commands (see
-// main.ts), neither of which need repeated re-composites the way
+// Opens a `.spd` file already in the vault and flattens every layer in one
+// step. Used by SupernoteAtelierEmbed and VaultWriter's .spd export
+// commands, neither of which need repeated re-composites the way
 // SupernoteAtelierView's layer toggle does.
 export async function renderAtelierCompositeDataUrl(app: App, file: TFile): Promise<string | null> {
 	const spd = await openAtelierFile(app, file);
+	const composite = await compositeImage(spd);
+	return composite ? composite.dataUrl : null;
+}
+
+// Same as renderAtelierCompositeDataUrl, but from raw bytes rather than a
+// vault TFile — used by VaultWriter.buildInsertableContent's .spd import
+// path, where the file has just been fetched from a device and isn't (yet,
+// or ever, depending on the chosen import format) written into the vault.
+export async function renderAtelierCompositeFromBuffer(buffer: Uint8Array): Promise<string | null> {
+	const spd = await openAtelierBuffer(buffer);
 	const composite = await compositeImage(spd);
 	return composite ? composite.dataUrl : null;
 }
