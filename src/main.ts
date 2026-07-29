@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -263,6 +263,61 @@ export interface PageTextProcessorContext {
 	 *  actually wants image files saved into the vault, so there may be no
 	 *  TFile backing it at all. */
 	readImage(): Promise<ArrayBuffer>;
+	/** This page's starred keywords, as Supernote's own handwriting
+	 *  recognition read them (`IKeyword.KEYWORD`) — raw OCR'd text, in
+	 *  encounter order, deduplicated. Not sanitized into Obsidian tag form;
+	 *  that's a choice for whichever processor consumes this. Most starred
+	 *  keywords never appear as literal text elsewhere on the page, so this
+	 *  is the only way an external processor can see them at all. */
+	keywords: string[];
+	/** This page's own internal links (Supernote's link feature). Same-file
+	 *  page anchors are already resolved (`ILink.text` gets `#Page N`
+	 *  appended). Cross-file anchors are not — `ILink.LINKFILE` is the
+	 *  base64-encoded absolute device path of the target `.note` file, for a
+	 *  processor that wants to resolve that itself. */
+	links: ILink[];
+	/** This page's own PAGEID, if any — the identifier other notes' links
+	 *  resolve against (empty string if the page has none). */
+	pageId: string;
+	/** This page's orientation, exactly as recorded in the `.note` file. */
+	orientation: string;
+	/** Whether the device's own handwriting recognition ran on this page,
+	 *  and whether it completed — distinguishes "recognition never ran"
+	 *  and "ran, found nothing" from `text` alone, which conflates both with
+	 *  "recognition ran and found nothing". */
+	recognitionStatus: RecognitionStatuses;
+}
+
+// This page's starred keywords (IKeyword.KEYWORD), deduplicated. sn.keywords'
+// Record keys encode the 1-indexed page as their first 4 characters — the
+// same convention _parseLinks documents for sn.links (see collectPageLinks
+// below), and more reliable than IKeyword.KEYWORDPAGE, which can be '0'
+// (invalid).
+function collectPageKeywords(sn: SupernoteX, pageIndex: number): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const [key, entries] of Object.entries(sn.keywords)) {
+		if (parseInt(key.slice(0, 4)) - 1 !== pageIndex) continue;
+		for (const entry of entries) {
+			const text = entry.KEYWORD.trim();
+			if (text.length === 0 || seen.has(text)) continue;
+			seen.add(text);
+			result.push(text);
+		}
+	}
+	return result;
+}
+
+// This page's own links. See supernote-typescript's _parseLinks doc comment
+// for why sn.links' Record keys (not ILink.OBJPAGE) are the reliable way to
+// find which page a link is drawn on.
+function collectPageLinks(sn: SupernoteX, pageIndex: number): ILink[] {
+	const result: ILink[] = [];
+	for (const [key, entries] of Object.entries(sn.links)) {
+		if (parseInt(key.slice(0, 4)) - 1 !== pageIndex) continue;
+		result.push(...entries);
+	}
+	return result;
 }
 
 // Return the page's new text (replacing `ctx.text` entirely — a processor
@@ -287,19 +342,28 @@ class VaultWriter {
 	// writing that image out as a vault attachment — callers rasterize on
 	// demand (see rasterizePages()) whenever processors are registered, even
 	// for a markdown-only export that wouldn't otherwise touch images at all.
-	private async applyPageTextProcessors(sourceName: string, pageIndex: number, totalPages: number, text: string, imageDataUrl: string | undefined): Promise<string> {
+	private async applyPageTextProcessors(sourceName: string, pageIndex: number, sn: SupernoteX, text: string, imageDataUrl: string | undefined): Promise<string> {
 		if (!imageDataUrl || this.processors.size === 0) return text;
+
+		const page = sn.pages[pageIndex];
+		const keywords = collectPageKeywords(sn, pageIndex);
+		const links = collectPageLinks(sn, pageIndex);
 
 		let result = text;
 		for (const processor of this.processors) {
 			try {
 				const out = await processor({
 					pageNumber: pageIndex + 1,
-					totalPages,
+					totalPages: sn.pages.length,
 					sourceName,
 					text: result,
 					imageMimeType: dataUrlMimeType(imageDataUrl),
 					readImage: async () => dataUrlToBuffer(imageDataUrl),
+					keywords,
+					links,
+					pageId: page.PAGEID ?? '',
+					orientation: page.ORIENTATION,
+					recognitionStatus: page.RECOGNSTATUS,
 				});
 				if (out !== null && out !== undefined) result = out;
 			} catch (err) {
@@ -338,7 +402,7 @@ class VaultWriter {
 			let pageText = sn.pages[i].text !== undefined && sn.pages[i].text.length > 0
 				? processSupernoteText(sn.pages[i].text, this.settings)
 				: '';
-			pageText = await this.applyPageTextProcessors(file.name, i, sn.pages.length, pageText, images?.[i]);
+			pageText = await this.applyPageTextProcessors(file.name, i, sn, pageText, images?.[i]);
 			if (pageText.length > 0) {
 				content += `${pageText}\n`;
 			}
@@ -473,7 +537,7 @@ class VaultWriter {
 				let pageText = sn.pages[i].text !== undefined && sn.pages[i].text.length > 0
 					? processSupernoteText(sn.pages[i].text, this.settings)
 					: '';
-				pageText = await this.applyPageTextProcessors(sourceName, i, sn.pages.length, pageText, rasterized[i]);
+				pageText = await this.applyPageTextProcessors(sourceName, i, sn, pageText, rasterized[i]);
 				if (pageText.length > 0) {
 					content += `${pageText}\n`;
 				}
