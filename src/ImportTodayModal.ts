@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Editor } from 'obsidian';
 import SupernotePlugin from './main';
-import { SupernoteFile, scanDeviceNoteTree } from './FileListModal';
+import { SupernoteFile, scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
 import { ImportFormat, IMPORT_FORMAT_LABELS } from './settings';
@@ -38,7 +38,7 @@ export class ImportTodayModal extends Modal {
         // modal, instead of it applying to every CTA button in Obsidian (see
         // issue #74 — an unscoped rule shifted button text down app-wide).
         contentEl.addClass('supernote-import-modal');
-        contentEl.createEl('h2', { text: 'Import supernote pages' });
+        contentEl.createEl('h2', { text: 'Import supernote pages and drawings' });
         const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
 
         try {
@@ -137,11 +137,12 @@ export class ImportTodayModal extends Modal {
         }
     }
 
-    // Walks the whole device tree once and records every .note file's parsed
-    // date, so switching the date picker only needs to re-filter in memory
-    // instead of re-fetching the device's directory tree over HTTP each time.
+    // Walks the whole device tree once and records every .note/.spd file's
+    // parsed date, so switching the date picker only needs to re-filter in
+    // memory instead of re-fetching the device's directory tree over HTTP
+    // each time.
     private async scanAllNotes(): Promise<ScannedNote[]> {
-        const files = await scanDeviceNoteTree(this.plugin.settings.directConnectIP);
+        const files = await scanDeviceSupernoteTree(this.plugin.settings.directConnectIP);
         const results: ScannedNote[] = [];
         for (const file of files) {
             const modified = parseDeviceDate(file.date);

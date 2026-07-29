@@ -1,6 +1,6 @@
 import { App, TFile } from 'obsidian';
 import { SupernotePluginSettings } from './settings';
-import { scanDeviceNoteTree } from './FileListModal';
+import { scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
     DeviceNoteListing,
@@ -95,8 +95,8 @@ async function currentHash(app: App, vaultPath: string): Promise<string | null> 
 // manifest. Deliberately thin — all the actual decision-making lives in
 // deviceSync.ts and is unit tested there; this just wires those pure
 // decisions up to real device fetches and vault writes. Sync only ever
-// copies the raw .note file byte-for-byte — no rendering, no format choice —
-// see deviceSync.ts's top-of-file comment for why.
+// copies the raw .note/.spd file byte-for-byte — no rendering, no format
+// choice — see deviceSync.ts's top-of-file comment for why.
 export async function runDeviceSync(
     app: App,
     settings: SupernotePluginSettings,
@@ -107,7 +107,7 @@ export async function runDeviceSync(
         throw new Error('Supernote IP is unset');
     }
 
-    const deviceFiles = await scanDeviceNoteTree(ip);
+    const deviceFiles = await scanDeviceSupernoteTree(ip);
     const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({ uri: f.uri, date: f.date, size: f.size }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
     const plan = planSync(listings, settings.noteSyncState, patterns);

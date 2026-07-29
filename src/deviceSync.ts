@@ -1,7 +1,7 @@
-// Pure planning/decision logic for mirroring .note files from a Supernote
-// device (over "Browse and Access") into the vault, unmodified — see issue
-// #119. Sync only ever copies the raw .note file; it never converts it to
-// markdown/images/PDF (that's a separate, one-off "import" flow — see
+// Pure planning/decision logic for mirroring .note/.spd files from a
+// Supernote device (over "Browse and Access") into the vault, unmodified —
+// see issue #119. Sync only ever copies the raw file; it never converts it
+// to markdown/images/PDF (that's a separate, one-off "import" flow — see
 // ImportTodayModal/buildInsertableContent — which doesn't have to deal with
 // re-syncing or overwrite conflicts the way something that runs repeatedly
 // does). Deliberately has no dependency on Obsidian's API: everything here
