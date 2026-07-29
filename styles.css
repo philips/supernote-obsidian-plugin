@@ -316,6 +316,30 @@ div.supernote-canvas-wrap canvas {
     max-width: 100%;
 }
 
+.supernote-atelier-layers {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1em;
+    margin-bottom: 1em;
+    padding: 0.5em 0.8em;
+    background: var(--background-secondary);
+    border-radius: var(--radius-s);
+}
+
+.supernote-atelier-layers-label {
+    color: var(--text-muted);
+    font-size: var(--font-smaller);
+    font-weight: var(--font-semibold);
+}
+
+.supernote-atelier-layer-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    cursor: pointer;
+}
+
 .supernote-atelier-empty {
     color: var(--text-muted);
     padding: 1em;
