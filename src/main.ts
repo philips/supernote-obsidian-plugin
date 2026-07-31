@@ -1240,6 +1240,44 @@ export class SupernoteView extends FileView {
 		})();
 	}
 
+	// Best-effort memory estimate for logPageMemoryTrace() below - not used
+	// for any actual decision, just to give a sense of scale when
+	// investigating a suspected memory issue (see issue #154). Accounts for
+	// both the decoded ImageBitmap (native page resolution) and the canvas
+	// backing store, which is typically larger - up to 9x the bitmap's pixel
+	// count at capped 3x devicePixelRatio (see drawPageImage()) - since both
+	// are held in memory per loaded page. thumbnailDataUrl's own (much
+	// smaller) memory isn't included here - see ensureThumbnail()/
+	// evictThumbnail()'s own tracing below instead.
+	private estimatedPageMemoryBytes(state: PageRenderState): number {
+		if (!state.imageBitmap) return 0;
+		const bitmapBytes = state.imageBitmap.width * state.imageBitmap.height * 4;
+		const canvasBytes = state.canvas.width * state.canvas.height * 4;
+		return bitmapBytes + canvasBytes;
+	}
+
+	// Traces every full-resolution load/evict with a running total across
+	// every currently-loaded page - added to make a suspected leak (issue
+	// #154: scrolling through all 100 pages of a long document still
+	// eventually crashes, even after #155/#156/#158/#159/#162's fixes)
+	// directly observable. Watch whether "currently loaded" keeps climbing
+	// over a long scroll (something isn't actually being freed) or stays
+	// roughly bounded (eviction is working and the cause is something else
+	// entirely - see #166's fix for what that turned out to be: the whole
+	// note being cloned to a Worker on every lazy load, not a JS-visible
+	// leak at all). Easiest to correlate on desktop, where DevTools' own
+	// Memory tab (or, given #166's finding, a Worker-specific heap
+	// snapshot) can be cross-checked against these numbers directly.
+	private logPageMemoryTrace(action: 'loaded' | 'evicted', pageNumber: number, pageBytes: number): void {
+		const loadedStates = this.pageStates.filter((s) => s.imageBitmap !== null);
+		const totalBytes = loadedStates.reduce((sum, s) => sum + this.estimatedPageMemoryBytes(s), 0);
+		const mb = (bytes: number) => (bytes / 1_048_576).toFixed(1);
+		console.debug(
+			`Supernote: page ${pageNumber} ${action} (~${mb(pageBytes)}MB) — ` +
+			`${loadedStates.length} page(s) currently loaded, ~${mb(totalBytes)}MB estimated total`,
+		);
+	}
+
 	// Loads this page's own full-resolution rasterized image if it hasn't
 	// been already — triggered by pageObserver as a page nears the
 	// viewport, or forced immediately by page-jump/save-image so those
@@ -1260,6 +1298,7 @@ export class SupernoteView extends FileView {
 				const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
 				state.imageBitmap = await createImageBitmap(blob);
 				this.drawPageImage(state, this.zoomScale);
+				this.logPageMemoryTrace('loaded', state.pageNumber, this.estimatedPageMemoryBytes(state));
 			} catch (err) {
 				console.error(`Supernote: failed to load page ${state.pageNumber}'s image:`, err);
 			}
@@ -1299,6 +1338,7 @@ export class SupernoteView extends FileView {
 				state.thumbnailDataUrl = dataUrl;
 				const thumbImg = this.thumbImgs[state.pageNumber - 1];
 				if (thumbImg) thumbImg.src = dataUrl;
+				this.logThumbnailMemoryTrace('loaded', state.pageNumber, dataUrl.length);
 			} catch (err) {
 				console.error(`Supernote: failed to load page ${state.pageNumber}'s thumbnail:`, err);
 			}
@@ -1312,10 +1352,30 @@ export class SupernoteView extends FileView {
 	// has anything to do with the main view's own full-resolution state.
 	private evictThumbnail(state: PageRenderState): void {
 		if (!state.thumbnailDataUrl) return;
+		const dataUrlLength = state.thumbnailDataUrl.length;
 		state.thumbnailDataUrl = null;
 		state.thumbnailLoadPromise = null;
 		const thumbImg = this.thumbImgs[state.pageNumber - 1];
 		if (thumbImg) thumbImg.src = '';
+		this.logThumbnailMemoryTrace('evicted', state.pageNumber, dataUrlLength);
+	}
+
+	// Same trace as logPageMemoryTrace() above, but for the separate,
+	// much-cheaper thumbnail path (see THUMBNAIL_SCALE) - added alongside
+	// it so a suspected leak/residual memory issue (issue #154) can be
+	// attributed to whichever path is actually responsible, not just
+	// full-resolution main-view pages. Estimates bytes from the data URL's
+	// own string length (base64, ~4/3 of the underlying binary size) -
+	// there's no canvas backing store to account for here, unlike
+	// estimatedPageMemoryBytes().
+	private logThumbnailMemoryTrace(action: 'loaded' | 'evicted', pageNumber: number, dataUrlLength: number): void {
+		const loadedCount = this.pageStates.filter((s) => s.thumbnailDataUrl !== null).length;
+		const totalChars = this.pageStates.reduce((sum, s) => sum + (s.thumbnailDataUrl?.length ?? 0), 0);
+		const kb = (chars: number) => ((chars * 0.75) / 1024).toFixed(1);
+		console.debug(
+			`Supernote: page ${pageNumber} thumbnail ${action} (~${kb(dataUrlLength)}KB) — ` +
+			`${loadedCount} thumbnail(s) currently loaded, ~${kb(totalChars)}KB estimated total`,
+		);
 	}
 
 	// Draws the page's own already-decoded bitmap at the given scale — no
@@ -1378,6 +1438,9 @@ export class SupernoteView extends FileView {
 	// main view's own state, never the thumbnail sidebar's.
 	private evictPageImage(state: PageRenderState): void {
 		if (!state.imageBitmap) return;
+		// Captured before freeing anything below - there'd be nothing left
+		// to measure afterward.
+		const pageBytes = this.estimatedPageMemoryBytes(state);
 
 		// Releases the decoded bitmap's memory explicitly rather than
 		// waiting on GC to notice it's unreachable.
@@ -1396,6 +1459,8 @@ export class SupernoteView extends FileView {
 		// that correctly and it doesn't need to change) - only this.
 		state.canvas.width = 1;
 		state.canvas.height = 1;
+
+		this.logPageMemoryTrace('evicted', state.pageNumber, pageBytes);
 	}
 
 	// Repositions each link's clickable region to the page's current CSS
