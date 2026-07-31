@@ -854,7 +854,19 @@ export class SupernoteView extends FileView {
 		// ancestor's padding directly avoids combining sticky with a negative
 		// margin at all; .supernote-header's own (positive, sticky-safe)
 		// padding-top puts a little breathing room back.
-		this.contentEl.setCssStyles({ paddingTop: '0' });
+		//
+		// On mobile (issue #148 - reported on an iPhone 13 mini, but likely
+		// any small screen), that same ancestor padding on the left/right/
+		// bottom sides is real, wasted width on a screen already tight for
+		// legibility of handwritten content - left alone on desktop, where a
+		// window is normally wide enough that it isn't a meaningful loss.
+		// div.page-container's own margin gets the equivalent reduction in
+		// styles.css, scoped to body.is-mobile the same way.
+		this.contentEl.setCssStyles(
+			Platform.isMobile
+				? { paddingTop: '0', paddingLeft: '0.25em', paddingRight: '0.25em', paddingBottom: '0.25em' }
+				: { paddingTop: '0' },
+		);
 
 		this.scope?.register(['Mod'], 'f', (evt) => {
 			evt.preventDefault();
