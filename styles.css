@@ -49,7 +49,13 @@ div.supernote-canvas-wrap canvas {
 }
 
 /* Mirrors pdf.js's own text_layer_builder.css: canvas carries the pixels,
-   this transparent layer carries selectable/searchable text on top of it. */
+   this transparent layer carries selectable/searchable text on top of it.
+   pointer-events: none on the container (re-enabled per-span below) matters
+   beyond just this layer: without it, this fully covers every page's canvas
+   (position: absolute; inset: 0) and, being on top in paint order, would
+   swallow every mouse event anywhere on the page - including the canvas's
+   own manually-wired drag-out (see SupernoteView.onLoadFile()) - not just
+   clicks on an actual text span. */
 .textLayer {
     position: absolute;
     inset: 0;
@@ -57,6 +63,7 @@ div.supernote-canvas-wrap canvas {
     line-height: 1;
     text-align: initial;
     transform-origin: 0 0;
+    pointer-events: none;
 }
 
 .textLayer span,
@@ -66,6 +73,7 @@ div.supernote-canvas-wrap canvas {
     white-space: pre;
     cursor: text;
     transform-origin: 0% 0%;
+    pointer-events: auto;
 }
 
 .textLayer ::selection {
@@ -84,11 +92,15 @@ div.supernote-canvas-wrap canvas {
 /* Clickable overlay for Supernote internal links (see
    SupernoteView.positionLinkOverlay() in main.ts). Sits above the text
    layer; positioned/sized per-link via inline styles since geometry is
-   data-driven, same pattern as canvas/textLayer sizing. */
+   data-driven, same pattern as canvas/textLayer sizing. pointer-events: none
+   on the container (re-enabled on each link rect below) for the same reason
+   as .textLayer above - otherwise this, being topmost, would swallow every
+   mouse event on the page, not just clicks on an actual link. */
 .supernote-links-layer {
     position: absolute;
     inset: 0;
     overflow: hidden;
+    pointer-events: none;
 }
 
 .supernote-link-rect {
@@ -98,6 +110,7 @@ div.supernote-canvas-wrap canvas {
     cursor: pointer;
     background: transparent;
     transition: background-color 0.1s ease;
+    pointer-events: auto;
 }
 
 .supernote-link-rect:hover {
