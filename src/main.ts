@@ -720,17 +720,27 @@ type PageRenderState = {
 	linkEls: { el: HTMLElement; rect: [number, number, number, number] }[];
 	// Decoded once from the already-rasterized page image and reused for
 	// every zoom redraw (see drawPageImage()) — no pdf.js/decode work on the
-	// zoom-critical path. null until ensurePageImage() loads it.
+	// zoom-critical path. null until ensurePageImage() loads it, and again
+	// after evictPageImage() frees it.
 	imageBitmap: ImageBitmap | null;
 	// This page's rasterized PNG data URL, once ensurePageImage() loads it —
-	// needed for the canvas's drag-out and the "Save image to vault" button,
-	// which previously closed over a local `imageDataUrl` that no longer
-	// exists once every page isn't rasterized up front.
+	// needed for the "Save image to vault" button and to fill in this page's
+	// thumbnail (see ensurePageImage()). null again after evictPageImage().
 	imageDataUrl: string | null;
-	// In-flight/completed load, so a page nearing the viewport (pageObserver),
-	// an explicit jump (goToPage), and "Save image to vault" can't each kick
-	// off their own separate rasterization of the same page.
+	// In-flight/completed load, so a page nearing the viewport (pageObserver
+	// or thumbObserver), an explicit jump (goToPage), and "Save image to
+	// vault" can't each kick off their own separate rasterization of the
+	// same page. Reset to null by evictPageImage() so a later reload isn't
+	// mistaken for one already in flight/done.
 	imageLoadPromise: Promise<void> | null;
+	// Whether this page is currently within pageObserver's margin (main
+	// view) or its thumbnail item is within thumbObserver's margin (sidebar)
+	// - see updatePageLoadState(). A page is only evicted once both are
+	// false, so scrolling just one of the two views (either reproduces
+	// issue #154's crash on its own) doesn't evict a page the other still
+	// wants shown.
+	visibleInMainView: boolean;
+	visibleInThumbnail: boolean;
 	// Guards ensureTextLayer()'s one-time (per page) work.
 	textLayerLoaded: boolean;
 	text: string;
@@ -784,6 +794,13 @@ export class SupernoteView extends FileView {
 	// actually loaded — see ensureTextLayer()/pageObserver.
 	private pdfDocPromise: Promise<PdfJsDocument> | null = null;
 	private pageObserver: IntersectionObserver | null = null;
+	// Scoped to the thumbnail sidebar's own scroll container, not contentEl -
+	// re-created per file load in buildThumbSidebar() (thumbSidebarEl itself
+	// is a fresh element each load, and root can't be changed after an
+	// IntersectionObserver is constructed). See PageRenderState.
+	// visibleInThumbnail/updatePageLoadState() for why this exists alongside
+	// pageObserver rather than reusing it.
+	private thumbObserver: IntersectionObserver | null = null;
 
 	private layerMode: 'image' | 'text' = 'image';
 	private imageModeBtn: HTMLElement | null = null;
@@ -932,16 +949,42 @@ export class SupernoteView extends FileView {
 		// (and building N pages' worth of text-layer DOM) upfront is real,
 		// mostly wasted work if you only ever look at the first few pages,
 		// and scales memory with page count regardless (see issue #147).
+		// Also evicts a page's image once it scrolls back *out* of that same
+		// margin (see evictPageImage()/updatePageLoadState()) - loading
+		// lazily instead of upfront bounds memory by "how many pages are
+		// near the viewport right now" rather than "how many have been
+		// scrolled past so far", which for a long enough document (100
+		// pages, see issue #154) still grows without bound as you keep
+		// scrolling even though each individual page loads lazily. Text
+		// layers are left alone for eviction - much lighter (a string + some
+		// span elements, not a decoded bitmap/canvas backing store) and
+		// losing search state/highlights on scroll-past would be a worse
+		// trade for a small saving.
 		// Re-observes fresh page containers each file load; see onLoadFile().
 		this.pageObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
-				if (!entry.isIntersecting) continue;
 				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
 				if (!state) continue;
-				void this.ensurePageImage(state);
-				void this.ensureTextLayer(state);
+				state.visibleInMainView = entry.isIntersecting;
+				if (entry.isIntersecting) void this.ensureTextLayer(state);
+				this.updatePageLoadState(state);
 			}
 		}, { root: this.contentEl, rootMargin: '100% 0px' });
+	}
+
+	// Shared by pageObserver (main view) and thumbObserver (sidebar): a page
+	// loads if either view currently wants it shown, and only evicts once
+	// neither does. The thumbnail sidebar scrolls independently of the main
+	// view - a page can be near the viewport in one and far from it in the
+	// other - so either alone could reproduce issue #154's crash (it says
+	// so explicitly: "the user can also reproduce the crash by scrolling
+	// thumbnails only") if eviction only checked one of the two.
+	private updatePageLoadState(state: PageRenderState): void {
+		if (state.visibleInMainView || state.visibleInThumbnail) {
+			void this.ensurePageImage(state);
+		} else {
+			this.evictPageImage(state);
+		}
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -950,6 +993,7 @@ export class SupernoteView extends FileView {
 
 		window.clearTimeout(this.zoomDebounceTimer);
 		this.pageObserver?.disconnect();
+		this.thumbObserver?.disconnect();
 		this.pageStates = [];
 		this.zoomScale = 1;
 		this.renderedZoomScale = 1;
@@ -1042,6 +1086,8 @@ export class SupernoteView extends FileView {
 				imageBitmap: null,
 				imageDataUrl: null,
 				imageLoadPromise: null,
+				visibleInMainView: false,
+				visibleInThumbnail: false,
 				textLayerLoaded: false,
 				text: '',
 				spans: [],
@@ -1181,30 +1227,84 @@ export class SupernoteView extends FileView {
 		const width = Math.max(1, Math.round(state.nativeWidth * scale));
 		const height = Math.max(1, Math.round(state.nativeHeight * scale));
 
-		// The canvas's backing store (width/height attributes) previously
-		// matched its CSS display size 1:1, so on a high-DPR mobile screen the
-		// browser had to upscale it to cover the physical pixels — the "chunky
-		// artifacts" that make handwritten strokes hard to read. Rendering the
-		// backing store at devicePixelRatio and leaving the CSS size alone
-		// (via explicit style, since an unstyled <canvas> otherwise takes its
-		// size from its width/height attributes) fixes that; capped at 3 so an
-		// extreme DPR display doesn't blow up canvas memory for no visible
-		// benefit.
-		const dpr = Math.min(window.devicePixelRatio || 1, 3);
-		const bitmapWidth = Math.max(1, Math.round(width * dpr));
-		const bitmapHeight = Math.max(1, Math.round(height * dpr));
-
-		state.canvas.width = bitmapWidth;
-		state.canvas.height = bitmapHeight;
+		// CSS (layout) size always tracks the current zoom, for every page,
+		// regardless of whether its image is actually loaded right now.
+		// commitZoom() calls this unconditionally for every page on every
+		// zoom change - scroll position, thumbnail click-to-jump, and
+		// page-anchor links all depend on every page's box being the right
+		// height even for pages that aren't currently loaded (never viewed
+		// yet, or evicted after scrolling away - see evictPageImage()).
 		state.canvas.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.canvasWrap.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.textLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.linksLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		this.positionLinkOverlay(state, width, height);
 
-		if (state.imageBitmap) {
-			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
-		}
+		// The backing store (actual pixel buffer - the expensive part) only
+		// needs to match this size when there's a real image to draw into
+		// it. Previously resized unconditionally here, which meant
+		// commitZoom()'s loop over every page reallocated a full-size
+		// backing store for every page in the document on every zoom
+		// change, including pages nowhere near the viewport - undoing lazy
+		// loading's whole memory benefit for a long document the moment you
+		// touched zoom at all (see issue #154). A page with no imageBitmap
+		// keeps whatever backing store size it already has (a fresh
+		// <canvas>'s browser default, or evictPageImage()'s 1x1 shrink) -
+		// the browser just stretches/blurs that placeholder to fill the CSS
+		// box above, fine since such a page is off-screen by definition.
+		if (!state.imageBitmap) return;
+
+		// Rendering the backing store at devicePixelRatio and leaving the
+		// CSS size alone (set above) fixes the "chunky artifacts" a 1:1
+		// backing store gets upscaled into on a high-DPR mobile screen;
+		// capped at 3 so an extreme DPR display doesn't blow up canvas
+		// memory for no visible benefit.
+		const dpr = Math.min(window.devicePixelRatio || 1, 3);
+		const bitmapWidth = Math.max(1, Math.round(width * dpr));
+		const bitmapHeight = Math.max(1, Math.round(height * dpr));
+		state.canvas.width = bitmapWidth;
+		state.canvas.height = bitmapHeight;
+		state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
+	}
+
+	// Frees a page's decoded image once neither the main view nor the
+	// thumbnail sidebar wants it shown anymore (see updatePageLoadState()).
+	// Lazy *loading* alone still lets memory grow without bound on a long
+	// enough document as either view is scrolled, since nothing ever
+	// released an earlier page's bitmap/canvas backing store once loaded
+	// (see issue #154 - reproducible by scrolling the main view alone, or
+	// the thumbnail sidebar alone). Safe to call speculatively: a no-op if
+	// nothing's actually loaded (most pages, most of the time - both
+	// observers also report initial non-intersection for anything outside
+	// their own viewport at file-open time, before anything has loaded).
+	private evictPageImage(state: PageRenderState): void {
+		if (!state.imageBitmap) return;
+
+		// Releases the decoded bitmap's memory explicitly rather than
+		// waiting on GC to notice it's unreachable.
+		state.imageBitmap.close();
+		state.imageBitmap = null;
+		state.imageDataUrl = null;
+		// Lets a later re-entry actually reload instead of reusing this
+		// already-settled (but now stale) promise - ensurePageImage()'s
+		// imageBitmap check alone isn't enough once it's null again.
+		state.imageLoadPromise = null;
+
+		// The backing store doesn't shrink on its own just because nothing
+		// points at an ImageBitmap for it anymore - a canvas keeps its full
+		// pixel buffer resident until its width/height actually change.
+		// Deliberately doesn't touch CSS size (drawPageImage() already set
+		// that correctly and it doesn't need to change) - only this.
+		state.canvas.width = 1;
+		state.canvas.height = 1;
+
+		// The thumbnail <img> decodes and caches its own copy independent of
+		// the canvas/imageBitmap above - clearing its `src` releases that
+		// too. Only reached when neither view wants this page shown (see
+		// updatePageLoadState()), so this can't clear a thumbnail the
+		// sidebar still has visible.
+		const thumbImg = this.thumbImgs[state.pageNumber - 1];
+		if (thumbImg) thumbImg.src = '';
 	}
 
 	// Repositions each link's clickable region to the page's current CSS
@@ -1366,6 +1466,29 @@ export class SupernoteView extends FileView {
 		this.thumbItems = [];
 		this.thumbImgs = [];
 
+		// Scoped to this sidebar's own scroll container (it scrolls
+		// independently of the main view - see CSS `overflow-y: auto` on
+		// .supernote-thumb-sidebar), not contentEl. A fresh observer every
+		// file load: thumbSidebarEl above is itself a brand new element each
+		// time, and an IntersectionObserver's root can't be changed after
+		// construction, so the one from any previous file load (disconnected
+		// in onLoadFile()) can't just be reused here. While the sidebar is
+		// hidden (display: none, see applyThumbSidebarVisibility()) every
+		// item reports non-intersecting - it has no layout box to intersect
+		// with - so nothing loads until it's actually shown; opening it then
+		// only loads whichever thumbnails are actually scrolled into view in
+		// it, the same as the main view's own pageObserver.
+		this.thumbObserver = new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				const index = this.thumbItems.indexOf(entry.target as HTMLElement);
+				if (index === -1) continue;
+				const state = this.pageStates[index];
+				if (!state) continue;
+				state.visibleInThumbnail = entry.isIntersecting;
+				this.updatePageLoadState(state);
+			}
+		}, { root: thumbSidebarEl, rootMargin: '100% 0px' });
+
 		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
 			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
@@ -1377,6 +1500,7 @@ export class SupernoteView extends FileView {
 
 			this.thumbItems.push(item);
 			this.thumbImgs.push(img);
+			this.thumbObserver.observe(item);
 		}
 
 		this.applyThumbSidebarVisibility();
@@ -1385,17 +1509,6 @@ export class SupernoteView extends FileView {
 	private toggleThumbnails() {
 		this.thumbnailsVisible = !this.thumbnailsVisible;
 		this.applyThumbSidebarVisibility();
-
-		// The sidebar shows every page's thumbnail at once (it isn't itself
-		// virtualized/lazy), so opening it needs every page's image loaded,
-		// not just whatever the main view has scrolled past so far. Only
-		// triggered on open, not on every visibility change, so closing and
-		// reopening doesn't re-kick anything already loaded (ensurePageImage
-		// is a no-op once state.imageBitmap is set anyway, but no need to
-		// even iterate pageStates again for that).
-		if (this.thumbnailsVisible) {
-			for (const state of this.pageStates) void this.ensurePageImage(state);
-		}
 	}
 
 	private applyThumbSidebarVisibility() {
@@ -1446,7 +1559,13 @@ export class SupernoteView extends FileView {
 		state.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
 		// Don't wait on scroll+observer timing for a page the user (or link)
 		// explicitly asked to jump to — a fast programmatic jump can easily
-		// land before pageObserver's next tick fires.
+		// land before pageObserver's next tick fires. Marking it visible
+		// directly (rather than just calling ensurePageImage()) also closes
+		// off a narrow race with evictPageImage(): a stray non-intersecting
+		// callback firing for this page while the scroll is still settling
+		// would otherwise see visibleInMainView still false and could evict
+		// the very page we just asked to load.
+		state.visibleInMainView = true;
 		void this.ensurePageImage(state);
 		void this.ensureTextLayer(state);
 		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
@@ -1771,6 +1890,7 @@ export class SupernoteView extends FileView {
 		window.clearTimeout(this.fitWidthDebounceTimer);
 		this.resizeObserver?.disconnect();
 		this.pageObserver?.disconnect();
+		this.thumbObserver?.disconnect();
 	}
 }
 
