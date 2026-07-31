@@ -741,6 +741,9 @@ type PageRenderState = {
 	// wants shown.
 	visibleInMainView: boolean;
 	visibleInThumbnail: boolean;
+	// Debounces thumbObserver's load trigger (not eviction) - see its doc
+	// comment in buildThumbSidebar().
+	thumbLoadDebounceTimer: number | undefined;
 	// Guards ensureTextLayer()'s one-time (per page) work.
 	textLayerLoaded: boolean;
 	text: string;
@@ -994,6 +997,11 @@ export class SupernoteView extends FileView {
 		window.clearTimeout(this.zoomDebounceTimer);
 		this.pageObserver?.disconnect();
 		this.thumbObserver?.disconnect();
+		// Disconnecting the observer stops new callbacks, but doesn't cancel
+		// timers already scheduled by earlier ones - without this, one could
+		// still fire after the file switch and redundantly load a page from
+		// a note the user has already navigated away from.
+		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
 		this.pageStates = [];
 		this.zoomScale = 1;
 		this.renderedZoomScale = 1;
@@ -1088,6 +1096,7 @@ export class SupernoteView extends FileView {
 				imageLoadPromise: null,
 				visibleInMainView: false,
 				visibleInThumbnail: false,
+				thumbLoadDebounceTimer: undefined,
 				textLayerLoaded: false,
 				text: '',
 				spans: [],
@@ -1492,6 +1501,19 @@ export class SupernoteView extends FileView {
 		// path), just to fill in a 140px-wide image. A thumbnail popping in
 		// slightly after it's actually scrolled to is an acceptable trade-off
 		// for a navigation aid, unlike the main reading view.
+		// Loading itself (not eviction) is also debounced ~200ms - confirmed
+		// by testing (issue #154): even bounded to "only what's visible" and
+		// with the pop/reflow fixed, scrolling the sidebar *quickly* through
+		// many pages still crashed, while scrolling slowly was fine. A fast
+		// scroll flings most thumbnails past the viewport well within that
+		// window - each one is still a full, real-page-resolution
+		// rasterization (no separate cheap/low-res path for thumbnails), so
+		// a rapid flyby was triggering (then almost immediately evicting)
+		// dozens of them in quick succession. Debouncing means a thumbnail
+		// that's only ever transiently intersecting during a fast scroll
+		// never triggers a load at all - only ones the user actually lingers
+		// near for a moment do. Eviction isn't debounced: freeing memory
+		// promptly has no downside.
 		this.thumbObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
 				const index = this.thumbItems.indexOf(entry.target as HTMLElement);
@@ -1499,7 +1521,17 @@ export class SupernoteView extends FileView {
 				const state = this.pageStates[index];
 				if (!state) continue;
 				state.visibleInThumbnail = entry.isIntersecting;
-				this.updatePageLoadState(state);
+				window.clearTimeout(state.thumbLoadDebounceTimer);
+				if (entry.isIntersecting) {
+					state.thumbLoadDebounceTimer = window.setTimeout(() => {
+						// Re-checks rather than assuming still true - the
+						// timer firing doesn't mean nothing happened since
+						// it was scheduled.
+						if (state.visibleInThumbnail) this.updatePageLoadState(state);
+					}, 200);
+				} else {
+					this.updatePageLoadState(state);
+				}
 			}
 		}, { root: thumbSidebarEl });
 
@@ -1919,6 +1951,7 @@ export class SupernoteView extends FileView {
 		this.resizeObserver?.disconnect();
 		this.pageObserver?.disconnect();
 		this.thumbObserver?.disconnect();
+		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
 	}
 }
 
