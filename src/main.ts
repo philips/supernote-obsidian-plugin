@@ -1477,7 +1477,21 @@ export class SupernoteView extends FileView {
 		// item reports non-intersecting - it has no layout box to intersect
 		// with - so nothing loads until it's actually shown; opening it then
 		// only loads whichever thumbnails are actually scrolled into view in
-		// it, the same as the main view's own pageObserver.
+		// it.
+		//
+		// No rootMargin prefetch buffer here, unlike pageObserver's '100%
+		// 0px' - confirmed by testing (issue #154): opening the sidebar at
+		// all still crashed even after this observer existed, because a
+		// percentage margin is relative to the *root's own* size, and a
+		// thumbnail item (~150-250px, image + label) is much smaller than a
+		// main-view page (often near-full-viewport). The same 100% margin
+		// that only ever brings 1-2 main-view pages into range at once fits
+		// several times that many thumbnails into an equivalent pixel
+		// margin - each still triggering a full, real-page-resolution
+		// rasterization (ensurePageImage() has no separate cheap/low-res
+		// path), just to fill in a 140px-wide image. A thumbnail popping in
+		// slightly after it's actually scrolled to is an acceptable trade-off
+		// for a navigation aid, unlike the main reading view.
 		this.thumbObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
 				const index = this.thumbItems.indexOf(entry.target as HTMLElement);
@@ -1487,7 +1501,7 @@ export class SupernoteView extends FileView {
 				state.visibleInThumbnail = entry.isIntersecting;
 				this.updatePageLoadState(state);
 			}
-		}, { root: thumbSidebarEl, rootMargin: '100% 0px' });
+		}, { root: thumbSidebarEl });
 
 		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
