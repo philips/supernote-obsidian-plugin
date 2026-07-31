@@ -1047,7 +1047,7 @@ export class SupernoteView extends FileView {
 		this.updateThumbSidebarOffset();
 
 		const body = container.createDiv({ cls: 'supernote-body' });
-		this.buildThumbSidebar(body, sn.pages.length);
+		this.buildThumbSidebar(body, sn.pages.length, sn.pageWidth, sn.pageHeight);
 
 		this.pagesEl = body.createDiv({ cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
@@ -1460,7 +1460,7 @@ export class SupernoteView extends FileView {
 	// thumbnail fills in whenever its page happens to load - from scrolling
 	// the main view, or all at once when the sidebar is first opened, see
 	// toggleThumbnails().
-	private buildThumbSidebar(body: HTMLElement, pageCount: number) {
+	private buildThumbSidebar(body: HTMLElement, pageCount: number, pageWidth: number, pageHeight: number) {
 		const thumbSidebarEl = body.createDiv({ cls: 'supernote-thumb-sidebar' });
 		this.thumbSidebarEl = thumbSidebarEl;
 		this.thumbItems = [];
@@ -1506,6 +1506,20 @@ export class SupernoteView extends FileView {
 		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
 			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
+			// Reserves this thumbnail's correct box size (width is already
+			// fixed at 100% of the item via CSS; aspect-ratio derives the
+			// height from that) before ensurePageImage() ever sets `src` -
+			// an <img> with no src/dimensions otherwise collapses to ~0
+			// height, so it "pops" to full size right as it loads. That's
+			// not just visual: every pop shifts every later thumbnail's
+			// position, which reflows the whole sidebar and can re-trigger
+			// thumbObserver for a large swath of items at once - plausibly
+			// why scrolling the sidebar for a while still crashed (issue
+			// #154) even after loads were bounded to whatever's actually
+			// visible. A stable layout from the start means each item's
+			// intersection only ever changes because of an actual scroll,
+			// not a layout shift caused by a sibling loading in.
+			img.style.aspectRatio = `${pageWidth} / ${pageHeight}`;
 			item.createSpan({ cls: 'supernote-thumb-label', text: String(i + 1) });
 
 			item.addEventListener('click', () => {
