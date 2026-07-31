@@ -1386,7 +1386,8 @@ export class SupernoteView extends FileView {
 		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
 		this.zoomLabelEl = zoomGroup.createSpan({ cls: 'supernote-zoom-label', text: '100%' });
 		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
-		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
+		const zoomResetBtn = zoomGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Reset zoom' } });
+		setIcon(zoomResetBtn, 'rotate-ccw');
 		this.fitWidthBtn = zoomGroup.createEl('button', { text: 'Fit width', cls: 'clickable-icon', attr: { 'aria-label': 'Fit page to viewport width' } });
 
 		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));

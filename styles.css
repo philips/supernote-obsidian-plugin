@@ -139,14 +139,17 @@ div.supernote-canvas-wrap canvas {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 1em;
+    gap: 0.5em;
     margin: 0.5em 0;
 }
 
+/* display: contents lets each button wrap individually within
+   .supernote-toolbar's flex-wrap instead of the whole group wrapping as one
+   block - otherwise a single-button group (e.g. the thumbnail toggle) can
+   land alone on its own line while trailing space next to it goes unused
+   (see issue #157). */
 .supernote-toolbar-group {
-    display: flex;
-    align-items: center;
-    gap: 0.4em;
+    display: contents;
 }
 
 .supernote-zoom-label {
