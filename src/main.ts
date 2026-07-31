@@ -133,11 +133,7 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 	return processedText;
 }
 
-// Splits pageNumbers into at most `workerCount` chunks. Callers that then map
-// chunks[i] -> workers[i % workers.length] are guaranteed each worker gets at
-// most one chunk (chunks.length <= workers.length), so processing chunks
-// concurrently via Promise.all never has two in-flight calls fighting over
-// the same worker's onmessage handler.
+// Splits pageNumbers into at most `workerCount` chunks.
 function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][] {
     const chunkSize = Math.ceil(pageNumbers.length / workerCount);
     const chunks: number[][] = [];
@@ -149,15 +145,49 @@ function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][
 
 export class WorkerPool {
     private workers: Worker[];
+    // Chained onto so a new request to a given worker waits for that
+    // worker's previous request to actually resolve/reject before sending -
+    // see processChunk()'s comment for why this matters.
+    private queues: Promise<void>[];
+    // Round-robins across every call to processChunk(), not just within one
+    // processPages() call - see processChunk()'s comment.
+    private nextWorker = 0;
 
     constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
         this.workers = Array(maxWorkers).fill(null).map(() =>
             new Worker()
         );
+        this.queues = this.workers.map(() => Promise.resolve());
     }
 
-    private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<string[]> {
-        return new Promise((resolve, reject) => {
+    // Picks the next worker (round-robin across every call this pool ever
+    // makes, not reset per processPages() call - see below) and queues onto
+    // it rather than sending immediately.
+    //
+    // This used to just take a worker directly, relying on callers to keep
+    // at most one in-flight request per worker (safe when processPages() was
+    // the only caller: a single call's chunks always spread 1:1 across
+    // distinct workers). Lazy per-page image loading (SupernoteView's
+    // ensurePageImage(), see issue #147) broke that assumption - each is its
+    // own separate processPages() call for a single page, which
+    // chunkPageNumbers() always turns into exactly one chunk, previously
+    // always dispatched to workers[0] (chunks.map's index is always 0 for a
+    // one-chunk call). Several pages loading nearly at once (a fast scroll,
+    // or the thumbnail sidebar loading every page at once) meant several
+    // concurrent requests all landing on worker 0, each overwriting the
+    // last's onmessage handler before its response arrived - silently
+    // losing that page's result (rendered blank) or misdirecting it to
+    // resolve a *different* page's promise instead (wrong image on the
+    // wrong page). Queuing per-worker (so a worker only ever has one
+    // request in flight) and round-robining across every call (so
+    // concurrent single-page requests still spread across every worker,
+    // instead of piling onto worker 0) fixes both.
+    private processChunk(note: SupernoteX, pageNumbers: number[]): Promise<string[]> {
+        const workerIndex = this.nextWorker % this.workers.length;
+        this.nextWorker++;
+        const worker = this.workers[workerIndex];
+
+        const send = (): Promise<string[]> => new Promise((resolve, reject) => {
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
                 if (e.data.type === 'error') {
                     reject(new Error(e.data.error));
@@ -179,6 +209,14 @@ export class WorkerPool {
 
             worker.postMessage(message);
         });
+
+        const result = this.queues[workerIndex].then(send);
+        // Marks this worker free again once this request settles, regardless
+        // of outcome - a failed request shouldn't leave the next one waiting
+        // forever. Deliberately swallows the rejection here: `result` (what
+        // this call actually returns) still carries it to its own caller.
+        this.queues[workerIndex] = result.then(() => undefined, () => undefined);
+        return result;
     }
 
     async processPages(note: SupernoteX, allPageNumbers: number[]): Promise<string[]> {
@@ -188,11 +226,11 @@ export class WorkerPool {
 
         //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
 
-        // Process chunks in parallel using available workers
+        // Process chunks concurrently - safe now regardless of how many land
+        // on the same worker, or how many separate processPages() calls are
+        // in flight at once (see processChunk()'s comment).
         const results = await Promise.all(
-            chunks.map((chunk, index) =>
-                this.processChunk(this.workers[index % this.workers.length], note, chunk)
-            )
+            chunks.map((chunk) => this.processChunk(note, chunk))
         );
 
         //console.timeEnd('Total processing time');
