@@ -113,8 +113,15 @@ async function buildSinglePagePdf(pngDataUrl: string): Promise<Uint8Array> {
 async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     for (let i = 0; i < sn.pages.length; i++) {
+        // Per-page, not just before/after the whole loop: if this ever hangs
+        // or crashes partway through (see issue #147 - a hard crash with no
+        // catchable JS error, so the only trace of it is whatever was last
+        // logged), the last page number logged narrows it down to one page's
+        // recognition data rather than "somewhere in this note".
+        console.debug(`Supernote: text-only PDF — page ${i + 1}/${sn.pages.length}`);
         await addTextOnlyPdfPage(ctx, sn.pages[i], sn.pageWidth, sn.pageHeight);
     }
+    console.debug(`Supernote: text-only PDF — saving (${sn.pages.length} page(s))`);
     return ctx.pdfDoc.save();
 }
 
@@ -1043,9 +1050,20 @@ export class SupernoteView extends FileView {
 		// assemblePdfFromImages(), since this PDF is only ever handed to
 		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
 		this.pdfDocPromise = (async () => {
+			// Logged stage-by-stage (see issue #147): a hard native crash
+			// here has no catchable JS error to report — ensureTextLayer()'s
+			// own try/catch only fires for an ordinary thrown exception, and
+			// wouldn't run at all if nothing ever scrolled a page into view.
+			// The last of these lines to print is the closest thing to a
+			// stack trace such a crash leaves behind.
+			console.debug('Supernote: search text layer — building text-only PDF…');
 			const pdfBytes = await assembleTextOnlyPdf(sn);
+			console.debug(`Supernote: search text layer — text-only PDF built (${pdfBytes.byteLength} bytes), loading pdf.js…`);
 			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
-			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+			console.debug('Supernote: search text layer — pdf.js loaded, parsing PDF…');
+			const pdfDoc = await this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
+			console.debug('Supernote: search text layer — ready');
+			return pdfDoc;
 		})();
 	}
 
@@ -1126,6 +1144,10 @@ export class SupernoteView extends FileView {
 		state.textLayerLoaded = true; // set eagerly: no double-trigger race
 
 		try {
+			// See issue #147: if this ever crashes hard (no catchable JS
+			// error), the last of these lines to print is the closest thing
+			// to a stack trace it leaves behind.
+			console.debug(`Supernote: text layer — page ${state.pageNumber} awaiting PDF…`);
 			const pdfDoc = await this.pdfDocPromise;
 			if (!pdfDoc) return;
 
@@ -1134,8 +1156,10 @@ export class SupernoteView extends FileView {
 			}
 			const pdfPage = state.pdfPage;
 
+			console.debug(`Supernote: text layer — page ${state.pageNumber} building…`);
 			const viewport = pdfPage.getViewport({ scale: this.zoomScale });
 			await this.buildTextLayerForState(pdfPage, state, viewport);
+			console.debug(`Supernote: text layer — page ${state.pageNumber} ready`);
 		} catch (error) {
 			console.error(`Failed to build text layer for page ${state.pageNumber}:`, error);
 		}
