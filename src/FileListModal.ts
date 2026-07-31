@@ -60,11 +60,22 @@ export async function scanDeviceSupernoteTree(ip: string, path = '/', visited: S
     for (const entry of entries) {
         if (entry.isDirectory) {
             results.push(...await scanDeviceSupernoteTree(ip, entry.uri, visited));
-        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name)) {
+        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && uriMatchesName(entry.uri, entry.name)) {
             results.push(entry);
         }
     }
     return results;
+}
+
+// Defense in depth against a device listing whose `name` and `uri` fields
+// disagree (e.g. a crafted `uri` carrying `../` traversal segments while
+// `name` still passes the syncable-extension filter): only trust entries
+// where `uri`'s own filename matches `name`, since every downstream
+// consumer of `uri` (deviceUriToVaultPath) assumes the two describe the
+// same file.
+function uriMatchesName(uri: string, name: string): boolean {
+    const segments = uri.split('/').filter((s) => s.length > 0);
+    return segments[segments.length - 1] === name;
 }
 
 function compareByDirectoryThenNameThenDate(a: SupernoteFile, b: SupernoteFile): number {

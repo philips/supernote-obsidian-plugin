@@ -153,7 +153,7 @@ const INVALID_FILENAME_CHARS = /[\\:*?"<>|]/g;
 export function deviceUriToVaultPath(syncFolder: string, deviceUri: string): string {
     const segments = deviceUri
         .split('/')
-        .filter((s) => s.length > 0)
+        .filter((s) => s.length > 0 && s !== '.' && s !== '..')
         .map((s) => s.replace(INVALID_FILENAME_CHARS, '_'));
 
     const cleanRoot = syncFolder.replace(/^\/+|\/+$/g, '');
