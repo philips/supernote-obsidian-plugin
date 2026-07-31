@@ -675,8 +675,17 @@ type PageRenderState = {
 	linkEls: { el: HTMLElement; rect: [number, number, number, number] }[];
 	// Decoded once from the already-rasterized page image and reused for
 	// every zoom redraw (see drawPageImage()) — no pdf.js/decode work on the
-	// zoom-critical path.
+	// zoom-critical path. null until ensurePageImage() loads it.
 	imageBitmap: ImageBitmap | null;
+	// This page's rasterized PNG data URL, once ensurePageImage() loads it —
+	// needed for the canvas's drag-out and the "Save image to vault" button,
+	// which previously closed over a local `imageDataUrl` that no longer
+	// exists once every page isn't rasterized up front.
+	imageDataUrl: string | null;
+	// In-flight/completed load, so a page nearing the viewport (pageObserver),
+	// an explicit jump (goToPage), and "Save image to vault" can't each kick
+	// off their own separate rasterization of the same page.
+	imageLoadPromise: Promise<void> | null;
 	// Guards ensureTextLayer()'s one-time (per page) work.
 	textLayerLoaded: boolean;
 	text: string;
@@ -702,6 +711,10 @@ export class SupernoteView extends FileView {
 	// same-file link's PAGEID resolve to a page number without retaining the
 	// whole parsed SupernoteX. See handleLinkClick().
 	private pageIds: string[] = [];
+	// Retained (rather than a local in onLoadFile) so ensurePageImage() can
+	// rasterize a single page on demand, well after onLoadFile() itself has
+	// returned — see issue #147.
+	private sn: SupernoteX | null = null;
 
 	private zoomScale = 1;
 	private renderedZoomScale = 1;
@@ -735,6 +748,10 @@ export class SupernoteView extends FileView {
 	private thumbToggleBtn: HTMLElement | null = null;
 	private thumbSidebarEl: HTMLElement | null = null;
 	private thumbItems: HTMLElement[] = [];
+	// Parallel to thumbItems/pageStates — empty (no `src`) until
+	// ensurePageImage() loads that page, or until the sidebar is first
+	// opened (see toggleThumbnails()), whichever happens first.
+	private thumbImgs: HTMLImageElement[] = [];
 
 	private headerEl: HTMLElement | null = null;
 	private pageJumpInput: HTMLInputElement | null = null;
@@ -851,17 +868,21 @@ export class SupernoteView extends FileView {
 		});
 		this.resizeObserver.observe(this.contentEl);
 
-		// Loads each page's selectable text lazily, only once it's about to
-		// scroll into view (rootMargin prefetches a screen ahead/behind so it
-		// feels instant by the time you actually get there) — for a long note,
-		// building N pages' worth of text-layer DOM upfront is real, mostly
-		// wasted work if you only ever look at the first few. Re-observes
-		// fresh page containers each file load; see onLoadFile().
+		// Loads each page's image and selectable text lazily, only once it's
+		// about to scroll into view (rootMargin prefetches a screen ahead/
+		// behind so it feels instant by the time you actually get there) —
+		// for a long note, rasterizing/decoding/drawing every page's image
+		// (and building N pages' worth of text-layer DOM) upfront is real,
+		// mostly wasted work if you only ever look at the first few pages,
+		// and scales memory with page count regardless (see issue #147).
+		// Re-observes fresh page containers each file load; see onLoadFile().
 		this.pageObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
 				if (!entry.isIntersecting) continue;
 				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
-				if (state) void this.ensureTextLayer(state);
+				if (!state) continue;
+				void this.ensurePageImage(state);
+				void this.ensureTextLayer(state);
 			}
 		}, { root: this.contentEl, rootMargin: '100% 0px' });
 	}
@@ -884,9 +905,9 @@ export class SupernoteView extends FileView {
 
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
+		this.sn = sn;
 		this.pageIds = sn.pages.map((p) => p.PAGEID ?? '');
 		const linksByPage = bucketLinksByPage(sn.links);
-		const images = await new ImageConverter().convertToImages(sn);
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
@@ -920,30 +941,26 @@ export class SupernoteView extends FileView {
 		// Sticky header so the toolbar (and find bar, when open) stay visible
 		// while scrolling through a long note instead of scrolling away with it.
 		this.headerEl = container.createDiv({ cls: 'supernote-header' });
-		this.buildToolbar(this.headerEl, images.length);
+		this.buildToolbar(this.headerEl, sn.pages.length);
 		this.buildFindBar(this.headerEl);
 		this.updateThumbSidebarOffset();
 
 		const body = container.createDiv({ cls: 'supernote-body' });
-		this.buildThumbSidebar(body, images);
+		this.buildThumbSidebar(body, sn.pages.length);
 
 		this.pagesEl = body.createDiv({ cls: 'supernote-pages' });
 		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
 
-		// Decoded up front, all at once via Promise.all, rather than one at a
-		// time inside the loop below — createImageBitmap() previously being
-		// awaited per-page meant a note's pages were decoded strictly one
-		// after another, a real, page-count-scaling cost on every open.
+		// Page containers/canvases are built for every page up front (cheap —
+		// just DOM elements, sized from sn.pageWidth/pageHeight, which are
+		// already known without rasterizing anything), but each page's actual
+		// image is loaded lazily by ensurePageImage() — see pageObserver in
+		// onOpen(). Rasterizing, decoding, and drawing every page immediately
+		// (the previous behavior) scaled memory with page count regardless of
+		// how much of the note was ever actually looked at — see issue #147.
 		const renderStart = performance.now();
-		const bitmaps = await Promise.all(images.map(async (imageDataUrl) => {
-			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
-			return createImageBitmap(blob);
-		}));
-		const decodeEnd = performance.now();
 
-		for (let i = 0; i < images.length; i++) {
-			const imageDataUrl = images[i];
-
+		for (let i = 0; i < sn.pages.length; i++) {
 			const pageContainer = this.pagesEl.createDiv({
 				cls: 'page-container',
 			})
@@ -954,22 +971,6 @@ export class SupernoteView extends FileView {
 				canvas.addClass("supernote-invert-dark");
 			}
 
-			// Canvas doesn't get native image drag-out the way <img> did; wire it up
-			// manually against the same page PNG the canvas is rendered from. This
-			// is best-effort — worth confirming it actually reproduces useful
-			// drag-and-drop behavior in a real vault, since the pre-canvas <img>
-			// drag may not have produced a proper vault attachment link either.
-			canvas.draggable = true;
-			canvas.addEventListener('dragstart', (evt) => {
-				if (!evt.dataTransfer) return;
-				evt.dataTransfer.setData('text/uri-list', imageDataUrl);
-				evt.dataTransfer.setData('text/plain', imageDataUrl);
-				evt.dataTransfer.setDragImage(canvas, 0, 0);
-			});
-
-			const textLayerDiv = canvasWrap.createDiv({ cls: 'textLayer' });
-			const linksLayerDiv = canvasWrap.createDiv({ cls: 'supernote-links-layer' });
-
 			const state: PageRenderState = {
 				pageNumber: i + 1,
 				pdfPage: null,
@@ -978,20 +979,42 @@ export class SupernoteView extends FileView {
 				pageContainer,
 				canvasWrap,
 				canvas,
-				textLayerDiv,
-				linksLayerDiv,
+				textLayerDiv: canvasWrap.createDiv({ cls: 'textLayer' }),
+				linksLayerDiv: canvasWrap.createDiv({ cls: 'supernote-links-layer' }),
 				linkEls: [],
 				imageBitmap: null,
+				imageDataUrl: null,
+				imageLoadPromise: null,
 				textLayerLoaded: false,
 				text: '',
 				spans: [],
 			};
 			this.pageStates.push(state);
 
+			// Canvas doesn't get native image drag-out the way <img> did; wire it up
+			// manually against the same page PNG the canvas is rendered from. This
+			// is best-effort — worth confirming it actually reproduces useful
+			// drag-and-drop behavior in a real vault, since the pre-canvas <img>
+			// drag may not have produced a proper vault attachment link either.
+			// state.imageDataUrl is null until ensurePageImage() loads this page —
+			// dragging one out before that (very unlikely; by the time a user can
+			// interact with a canvas it's almost certainly already in view and
+			// thus already loading/loaded) just cancels the drag.
+			canvas.draggable = true;
+			canvas.addEventListener('dragstart', (evt) => {
+				if (!evt.dataTransfer || !state.imageDataUrl) {
+					evt.preventDefault();
+					return;
+				}
+				evt.dataTransfer.setData('text/uri-list', state.imageDataUrl);
+				evt.dataTransfer.setData('text/plain', state.imageDataUrl);
+				evt.dataTransfer.setDragImage(canvas, 0, 0);
+			});
+
 			for (const link of linksByPage.get(i) ?? []) {
 				const rect = parseLinkRect(link.LINKRECT);
 				if (!rect) continue;
-				const el = linksLayerDiv.createEl('a', {
+				const el = state.linksLayerDiv.createEl('a', {
 					cls: 'supernote-link-rect',
 					attr: { href: '#', title: link.text },
 				});
@@ -1002,9 +1025,10 @@ export class SupernoteView extends FileView {
 				state.linkEls.push({ el, rect });
 			}
 
-			// Already decoded above (in parallel, before this loop). Cached on
-			// the state and reused for every zoom redraw (drawPageImage()).
-			state.imageBitmap = bitmaps[i];
+			// No image yet (imageBitmap is null) — this only sizes the canvas
+			// and its overlays correctly from nativeWidth/nativeHeight, same as
+			// every subsequent zoom redraw. ensurePageImage() calls this again
+			// once the page's actual image is loaded.
 			this.drawPageImage(state, this.zoomScale);
 
 			this.pageObserver?.observe(pageContainer);
@@ -1017,14 +1041,20 @@ export class SupernoteView extends FileView {
 				});
 
 				saveButton.addEventListener("click", () => void (async () => {
+					// Force the load rather than assuming pageObserver already
+					// triggered it — a save click is always possible before a
+					// page's ever scrolled into view (e.g. a very tall page,
+					// or a fast click right after load).
+					await this.ensurePageImage(state);
+					if (!state.imageDataUrl) return;
 					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i + 1}.png`);
-					const buffer = dataUrlToBuffer(imageDataUrl);
+					const buffer = dataUrlToBuffer(state.imageDataUrl);
 					await this.app.vault.createBinary(filename, buffer);
 				})());
 			}
 		}
 
-		console.debug(`Supernote: page render — decode ${(decodeEnd - renderStart).toFixed(1)}ms, DOM build ${(performance.now() - decodeEnd).toFixed(1)}ms, total ${(performance.now() - renderStart).toFixed(1)}ms for ${images.length} page(s)`);
+		console.debug(`Supernote: page render — DOM build ${(performance.now() - renderStart).toFixed(1)}ms for ${sn.pages.length} page(s) (images load lazily as pages scroll into view)`);
 
 		if (this.fitWidthEnabled) {
 			this.applyFitWidth();
@@ -1047,6 +1077,38 @@ export class SupernoteView extends FileView {
 			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
 			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
 		})();
+	}
+
+	// Loads this page's own rasterized image if it hasn't been already —
+	// triggered by pageObserver as a page nears the viewport, or forced
+	// immediately by page-jump/save-image so those don't have to wait on
+	// scroll+observer timing. Idempotent (safe to call speculatively) and
+	// de-duplicated against a concurrent call via imageLoadPromise, the same
+	// pattern ensureTextLayer() uses for its own one-time work.
+	private ensurePageImage(state: PageRenderState): Promise<void> {
+		if (state.imageBitmap) return Promise.resolve();
+		if (state.imageLoadPromise) return state.imageLoadPromise;
+
+		state.imageLoadPromise = (async () => {
+			try {
+				if (!this.sn) return;
+				const [imageDataUrl] = await new ImageConverter().convertToImages(this.sn, [state.pageNumber]);
+				state.imageDataUrl = imageDataUrl;
+				const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
+				state.imageBitmap = await createImageBitmap(blob);
+				this.drawPageImage(state, this.zoomScale);
+
+				// Fills in this page's thumbnail too, whether it loaded because
+				// the main view scrolled to it or because the thumbnail sidebar
+				// was opened (see toggleThumbnails()) — either way the sidebar
+				// shouldn't show a blank slot once the image is actually ready.
+				const thumbImg = this.thumbImgs[state.pageNumber - 1];
+				if (thumbImg) thumbImg.src = imageDataUrl;
+			} catch (err) {
+				console.error(`Supernote: failed to load page ${state.pageNumber}'s image:`, err);
+			}
+		})();
+		return state.imageLoadPromise;
 	}
 
 	// Draws the page's own already-decoded bitmap at the given scale — no
@@ -1223,19 +1285,22 @@ export class SupernoteView extends FileView {
 		this.textModeBtn?.toggleClass('is-active', this.layerMode === 'text');
 	}
 
-	// Reuses the same page PNGs already generated for the save-to-vault/
-	// drag-out buttons — no separate low-res render pass, just let CSS scale
-	// them down. Built up front (images are ready before pdf.js even starts),
-	// independent of the pdf.js page-render loop below.
-	private buildThumbSidebar(body: HTMLElement, images: string[]) {
+	// Reuses the same page PNGs ensurePageImage() rasterizes for the main
+	// view (see thumbImg assignment there) — no separate low-res render pass,
+	// just let CSS scale them down. Starts empty (no `src`) for every page:
+	// images are no longer all ready up front (see issue #147), so a
+	// thumbnail fills in whenever its page happens to load - from scrolling
+	// the main view, or all at once when the sidebar is first opened, see
+	// toggleThumbnails().
+	private buildThumbSidebar(body: HTMLElement, pageCount: number) {
 		const thumbSidebarEl = body.createDiv({ cls: 'supernote-thumb-sidebar' });
 		this.thumbSidebarEl = thumbSidebarEl;
 		this.thumbItems = [];
+		this.thumbImgs = [];
 
-		images.forEach((dataUrl, i) => {
+		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
 			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
-			img.src = dataUrl;
 			item.createSpan({ cls: 'supernote-thumb-label', text: String(i + 1) });
 
 			item.addEventListener('click', () => {
@@ -1243,7 +1308,8 @@ export class SupernoteView extends FileView {
 			});
 
 			this.thumbItems.push(item);
-		});
+			this.thumbImgs.push(img);
+		}
 
 		this.applyThumbSidebarVisibility();
 	}
@@ -1251,6 +1317,17 @@ export class SupernoteView extends FileView {
 	private toggleThumbnails() {
 		this.thumbnailsVisible = !this.thumbnailsVisible;
 		this.applyThumbSidebarVisibility();
+
+		// The sidebar shows every page's thumbnail at once (it isn't itself
+		// virtualized/lazy), so opening it needs every page's image loaded,
+		// not just whatever the main view has scrolled past so far. Only
+		// triggered on open, not on every visibility change, so closing and
+		// reopening doesn't re-kick anything already loaded (ensurePageImage
+		// is a no-op once state.imageBitmap is set anyway, but no need to
+		// even iterate pageStates again for that).
+		if (this.thumbnailsVisible) {
+			for (const state of this.pageStates) void this.ensurePageImage(state);
+		}
 	}
 
 	private applyThumbSidebarVisibility() {
@@ -1287,7 +1364,7 @@ export class SupernoteView extends FileView {
 
 	// Shared by the toolbar's page-jump input, the thumbnail sidebar, and
 	// setEphemeralState() (a `#page=N` link anchor) — all three just need to
-	// scroll a given 1-indexed page into view and prime its text layer.
+	// scroll a given 1-indexed page into view and prime its image/text layer.
 	private async goToPage(pageNumber: number): Promise<void> {
 		if (this.pageStates.length === 0) return;
 		// Wait out any in-flight fit-width/zoom re-render first — see
@@ -1300,7 +1377,9 @@ export class SupernoteView extends FileView {
 		if (!state) return;
 		state.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
 		// Don't wait on scroll+observer timing for a page the user (or link)
-		// explicitly asked to jump to.
+		// explicitly asked to jump to — a fast programmatic jump can easily
+		// land before pageObserver's next tick fires.
+		void this.ensurePageImage(state);
 		void this.ensureTextLayer(state);
 		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
 	}
