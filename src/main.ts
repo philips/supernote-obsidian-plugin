@@ -730,18 +730,19 @@ type PageRenderState = {
 	// Decoded once from the already-rasterized page image and reused for
 	// every zoom redraw (see drawPageImage()) — no pdf.js/decode work on the
 	// zoom-critical path. null until ensurePageImage() loads it, and again
-	// after evictPageImage() frees it. Full page resolution - see
-	// thumbnailDataUrl below for the separate, cheap thumbnail-only path.
+	// after evictPageImage() frees it. Rasterized at whatever resolution the
+	// zoom level was when loaded (see currentRasterScale()), not
+	// necessarily full page resolution - see thumbnailDataUrl below for the
+	// separate, cheap thumbnail-only path, and "Save image to vault"'s own
+	// handler for why it doesn't reuse this for saving.
 	imageBitmap: ImageBitmap | null;
-	// This page's full-resolution rasterized PNG data URL, once
-	// ensurePageImage() loads it — needed for the "Save image to vault"
-	// button. null again after evictPageImage().
+	// This page's rasterized PNG data URL, once ensurePageImage() loads it.
+	// null again after evictPageImage().
 	imageDataUrl: string | null;
-	// In-flight/completed load, so a page nearing the viewport (pageObserver),
-	// an explicit jump (goToPage), and "Save image to vault" can't each kick
-	// off their own separate rasterization of the same page. Reset to null
-	// by evictPageImage() so a later reload isn't mistaken for one already
-	// in flight/done.
+	// In-flight/completed load, so a page nearing the viewport (pageObserver)
+	// and an explicit jump (goToPage) can't each kick off their own separate
+	// rasterization of the same page. Reset to null by evictPageImage() so a
+	// later reload isn't mistaken for one already in flight/done.
 	imageLoadPromise: Promise<void> | null;
 	// This page's thumbnail, entirely independent of imageBitmap/imageDataUrl
 	// above: rasterized at THUMBNAIL_SCALE (a fraction of full page
@@ -1163,14 +1164,16 @@ export class SupernoteView extends FileView {
 				});
 
 				saveButton.addEventListener("click", () => void (async () => {
-					// Force the load rather than assuming pageObserver already
-					// triggered it — a save click is always possible before a
-					// page's ever scrolled into view (e.g. a very tall page,
-					// or a fast click right after load).
-					await this.ensurePageImage(state);
-					if (!state.imageDataUrl) return;
+					if (!this.sn) return;
+					// Independent full-resolution fetch, not ensurePageImage() -
+					// that now rasterizes at whatever scale the current zoom
+					// calls for (see currentRasterScale()), which is the right
+					// thing for on-screen display but the wrong thing to save:
+					// an explicit "save to vault" click should get the real,
+					// full-quality page image regardless of the current zoom.
+					const [imageDataUrl] = await new ImageConverter().convertToImages(this.sn, [state.pageNumber]);
 					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i + 1}.png`);
-					const buffer = dataUrlToBuffer(state.imageDataUrl);
+					const buffer = dataUrlToBuffer(imageDataUrl);
 					await this.app.vault.createBinary(filename, buffer);
 				})());
 			}
@@ -1212,14 +1215,50 @@ export class SupernoteView extends FileView {
 		})();
 	}
 
-	// Loads this page's own full-resolution rasterized image if it hasn't
-	// been already — triggered by pageObserver as a page nears the
-	// viewport, or forced immediately by page-jump/save-image so those
-	// don't have to wait on scroll+observer timing. Idempotent (safe to
-	// call speculatively) and de-duplicated against a concurrent call via
+	// Rasterizing every page at full native resolution regardless of the
+	// current zoom wastes memory proportional to how far zoomed out the
+	// view actually is - "fit width" on a phone screen showing a much wider
+	// native page (a common case; see issue #154 - a crash scrolling the
+	// *main view* through ~30 pages even after lazy-loading/eviction) can
+	// mean rendering far more pixel detail than the page is ever actually
+	// displayed at. drawPageImage() already sizes the canvas *backing
+	// store* to nativeWidth * zoomScale * devicePixelRatio (capped at 3x)
+	// for crisp text on high-DPI screens without wasting memory on
+	// resolution nothing shows at; this computes the matching integer
+	// downsample factor for supernote-typescript's toImage({ scale }) (see
+	// https://github.com/philips/supernote-typescript/issues/40) so the
+	// *decode* doesn't produce far more detail than that backing store
+	// will ever display either.
+	//
+	// Deliberately evaluated once per load, not re-evaluated/upgraded if
+	// zoom later increases without the page first scrolling away - an
+	// already-loaded page just looks softer (canvas upscaling an
+	// insufficiently-detailed bitmap) until it's next evicted and reloaded
+	// at the new zoom's scale, rather than immediately re-rasterizing on
+	// every zoom change. Simpler, and zoom changes are already rare/
+	// deliberate compared to how often pages naturally cycle through
+	// load/evict via scrolling.
+	private currentRasterScale(): number {
+		const dpr = Math.min(window.devicePixelRatio || 1, 3);
+		const effectiveScale = this.zoomScale * dpr;
+		return Math.max(1, Math.round(1 / effectiveScale));
+	}
+
+	// Loads this page's own rasterized image (at whatever resolution the
+	// current zoom actually calls for - see currentRasterScale()) if it
+	// hasn't been already — triggered by pageObserver as a page nears the
+	// viewport, or forced immediately by a page-jump so it doesn't have to
+	// wait on scroll+observer timing. Idempotent (safe to call
+	// speculatively) and de-duplicated against a concurrent call via
 	// imageLoadPromise, the same pattern ensureTextLayer() uses for its own
 	// one-time work. Entirely independent of ensureThumbnail() below - see
 	// PageRenderState.thumbnailDataUrl for why they no longer share a load.
+	//
+	// Not used by "Save image to vault" (see its own handler) - that always
+	// fetches full resolution directly, regardless of whatever scale (if
+	// any) is currently loaded here for on-screen display. An explicit save
+	// click should get the real, full-quality page image, not whatever's
+	// convenient for the current zoom level.
 	private ensurePageImage(state: PageRenderState): Promise<void> {
 		if (state.imageBitmap) return Promise.resolve();
 		if (state.imageLoadPromise) return state.imageLoadPromise;
@@ -1227,7 +1266,9 @@ export class SupernoteView extends FileView {
 		state.imageLoadPromise = (async () => {
 			try {
 				if (!this.sn) return;
-				const [imageDataUrl] = await new ImageConverter().convertToImages(this.sn, [state.pageNumber]);
+				const [imageDataUrl] = await new ImageConverter().convertToImages(
+					this.sn, [state.pageNumber], this.currentRasterScale(),
+				);
 				state.imageDataUrl = imageDataUrl;
 				const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
 				state.imageBitmap = await createImageBitmap(blob);
