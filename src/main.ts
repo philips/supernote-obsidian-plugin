@@ -1449,8 +1449,10 @@ export class SupernoteView extends FileView {
 		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
 		this.zoomLabelEl = zoomGroup.createSpan({ cls: 'supernote-zoom-label', text: '100%' });
 		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
-		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
-		this.fitWidthBtn = zoomGroup.createEl('button', { text: 'Fit width', cls: 'clickable-icon', attr: { 'aria-label': 'Fit page to viewport width' } });
+		const zoomResetBtn = zoomGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Reset zoom' } });
+		setIcon(zoomResetBtn, 'rotate-ccw');
+		this.fitWidthBtn = zoomGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Fit page to viewport width' } });
+		setIcon(this.fitWidthBtn, 'stretch-horizontal');
 
 		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
 		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
@@ -1465,8 +1467,10 @@ export class SupernoteView extends FileView {
 		this.updateFitWidthButton();
 
 		const layerGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
-		this.imageModeBtn = layerGroup.createEl('button', { text: 'Image', cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
-		this.textModeBtn = layerGroup.createEl('button', { text: 'Text', cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text' } });
+		this.imageModeBtn = layerGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
+		setIcon(this.imageModeBtn, 'image');
+		this.textModeBtn = layerGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text' } });
+		setIcon(this.textModeBtn, 'type');
 		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
 		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
 		this.updateLayerModeButtons();

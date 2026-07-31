@@ -1,4 +1,4 @@
-import { App, Component, FileView, TFile } from 'obsidian';
+import { App, Component, FileView, TFile, setIcon } from 'obsidian';
 import { SupernoteAtelier, IAtelierSurfaceName } from 'supernote-typescript';
 import { encodeDataURL } from 'image-js';
 // esbuild's "binary" loader (see esbuild.config.mjs) embeds the wasm file as
@@ -207,8 +207,10 @@ export class SupernoteAtelierView extends FileView {
 		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
 		this.zoomLabelEl = zoomGroup.createSpan({ cls: 'supernote-zoom-label', text: '100%' });
 		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
-		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
-		this.fitWidthBtn = zoomGroup.createEl('button', { text: 'Fit width', cls: 'clickable-icon', attr: { 'aria-label': 'Fit image to viewport width' } });
+		const zoomResetBtn = zoomGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Reset zoom' } });
+		setIcon(zoomResetBtn, 'rotate-ccw');
+		this.fitWidthBtn = zoomGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Fit image to viewport width' } });
+		setIcon(this.fitWidthBtn, 'stretch-horizontal');
 
 		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
 		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
