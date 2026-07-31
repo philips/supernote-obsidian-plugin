@@ -37,6 +37,15 @@ div.page-container {
     margin: 1.2em;
 }
 
+/* Issue #148: 1.2em of margin on every side of every page is real, wasted
+   width on a small screen already tight for legibility of handwritten
+   content - a phone doesn't have the spare width a desktop window does.
+   Left alone elsewhere; SupernoteView.onOpen() reduces its own ancestor
+   .view-content padding the same way, scoped the same way. */
+body.is-mobile div.page-container {
+    margin: 0.3em;
+}
+
 div.supernote-canvas-wrap {
     position: relative;
     display: inline-block;
