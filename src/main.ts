@@ -1290,6 +1290,35 @@ export class SupernoteView extends FileView {
 		if (thumbImg) thumbImg.src = '';
 	}
 
+	// Ceiling on the devicePixelRatio drawPageImage() renders each page's
+	// canvas backing store at. Backing-store memory scales with the
+	// *square* of this (it sizes both width and height), so the cap matters
+	// far more than it might look like at a glance: capping at 3 (the
+	// previous value - matches an iPhone's own native devicePixelRatio)
+	// meant a currently-loaded page's backing store could be up to 9x its
+	// CSS-displayed pixel count. Lowering to 2 cuts that to 4x - a ~56%
+	// reduction in backing-store memory for every currently-loaded page on
+	// any 3x-DPR device, at *any* zoom level (unlike ensurePageImage()'s
+	// zoom-aware raster scale, which - confirmed by testing issue #154 -
+	// computes to no reduction at all at a typical fit-width zoom on
+	// exactly this kind of device, since high-DPI crispness at that zoom
+	// genuinely wants close to full native resolution). Confirmed by real
+	// profiling on issue #154: a SupernoteView note measured 900MB+ heap
+	// usage, vs. 108MB for the same content already exported to plain
+	// markdown + image attachments - most of that gap is this backing
+	// store, resident once per currently-loaded page.
+	//
+	// 2 is a deliberate middle ground, not the theoretical minimum: capping
+	// at 1 (no supersampling at all) would cut backing-store memory further
+	// still (down to ~11% of the original, vs. ~44% at a cap of 2) but
+	// visibly reintroduces the "chunky artifacts on a high-DPR screen" this
+	// whole DPR-aware rendering scheme exists to avoid in the first place -
+	// see this method's own history. 2 still supersamples enough for
+	// legible handwriting on typical high-DPI phones/tablets while
+	// meaningfully bounding memory; revisit if 900MB-ish usage is still too
+	// much even at this cap.
+	private static readonly MAX_DEVICE_PIXEL_RATIO = 2;
+
 	// Draws the page's own already-decoded bitmap at the given scale — no
 	// pdf.js involved. Synchronous (drawImage from an ImageBitmap doesn't
 	// need awaiting), so redrawing on every zoom tick is cheap; pdf.js's own
@@ -1328,9 +1357,10 @@ export class SupernoteView extends FileView {
 		// Rendering the backing store at devicePixelRatio and leaving the
 		// CSS size alone (set above) fixes the "chunky artifacts" a 1:1
 		// backing store gets upscaled into on a high-DPR mobile screen;
-		// capped at 3 so an extreme DPR display doesn't blow up canvas
-		// memory for no visible benefit.
-		const dpr = Math.min(window.devicePixelRatio || 1, 3);
+		// capped (see MAX_DEVICE_PIXEL_RATIO) so an extreme DPR display
+		// doesn't blow up canvas memory for comparatively little visible
+		// benefit.
+		const dpr = Math.min(window.devicePixelRatio || 1, SupernoteView.MAX_DEVICE_PIXEL_RATIO);
 		const bitmapWidth = Math.max(1, Math.round(width * dpr));
 		const bitmapHeight = Math.max(1, Math.round(height * dpr));
 		state.canvas.width = bitmapWidth;
