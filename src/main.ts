@@ -1029,25 +1029,19 @@ export class SupernoteView extends FileView {
 			};
 			this.pageStates.push(state);
 
-			// Canvas doesn't get native image drag-out the way <img> did; wire it up
-			// manually against the same page PNG the canvas is rendered from. This
-			// is best-effort — worth confirming it actually reproduces useful
-			// drag-and-drop behavior in a real vault, since the pre-canvas <img>
-			// drag may not have produced a proper vault attachment link either.
-			// state.imageDataUrl is null until ensurePageImage() loads this page —
-			// dragging one out before that (very unlikely; by the time a user can
-			// interact with a canvas it's almost certainly already in view and
-			// thus already loading/loaded) just cancels the drag.
-			canvas.draggable = true;
-			canvas.addEventListener('dragstart', (evt) => {
-				if (!evt.dataTransfer || !state.imageDataUrl) {
-					evt.preventDefault();
-					return;
-				}
-				evt.dataTransfer.setData('text/uri-list', state.imageDataUrl);
-				evt.dataTransfer.setData('text/plain', state.imageDataUrl);
-				evt.dataTransfer.setDragImage(canvas, 0, 0);
-			});
+			// Deliberately NOT draggable. A previous version wired up manual
+			// drag-out (canvas doesn't get it natively the way <img> does) by
+			// putting the page's raw data: URL straight into the drag data —
+			// dropping that into a note inserts the *entire* base64-encoded
+			// PNG as literal text (there's no vault file to link to; nothing
+			// was ever saved), which for a real page-resolution image is
+			// enough text to lock up the editor. "Save image to vault" below
+			// is the safe equivalent: it creates a real attachment file and
+			// only does so on an explicit click, not on every page anyone
+			// happens to view. A correct drag-out would need the same
+			// save-to-vault to finish *before* the drop, and dataTransfer can
+			// only be populated synchronously inside dragstart — not
+			// attempted here for that reason. See #152.
 
 			for (const link of linksByPage.get(i) ?? []) {
 				const rect = parseLinkRect(link.LINKRECT);
