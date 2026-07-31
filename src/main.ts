@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage, extractPageRenderData, IRenderableNote } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -150,6 +150,30 @@ function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][
     return chunks;
 }
 
+// Slices out only the requested pages, in the given order, into a
+// structured-clone-safe IRenderableNote - see supernote-typescript's
+// extractPageRenderData() (which this wraps to cover more than one page at
+// once) for exactly why this matters: postMessage-ing the *whole* parsed
+// SupernoteX to a Worker - which is what this replaced - clones every
+// page's raw layer data across, not just the page(s) actually requested.
+// WorkerPool round-robins across every worker it has (see processChunk()),
+// so as a user scrolls through a long document, every worker eventually
+// receives - and holds, in its own separate V8 heap, invisible to the main
+// thread's own heap snapshots/profiling - a full copy of the entire
+// document, just to render one page at a time. Confirmed via real
+// profiling on issue #154: navigator.hardwareConcurrency (8, on the
+// reporting device) separate ~100MB Worker heaps, matching a ~900MB total
+// that neither DPR capping nor zoom-aware rasterization could ever have
+// addressed, since neither touches what gets sent to a Worker in the first
+// place.
+function extractPagesRenderData(note: SupernoteX, pageNumbers: number[]): IRenderableNote {
+    return {
+        pageWidth: note.pageWidth,
+        pageHeight: note.pageHeight,
+        pages: pageNumbers.map((n) => extractPageRenderData(note, n).pages[0]),
+    };
+}
+
 export class WorkerPool {
     private workers: Worker[];
     // Chained onto so a new request to a given worker waits for that
@@ -194,6 +218,11 @@ export class WorkerPool {
         this.nextWorker++;
         const worker = this.workers[workerIndex];
 
+        // Sliced *before* ever constructing the message - see
+        // extractPagesRenderData()'s comment for why sending the whole
+        // `note` here was a real, serious memory bug (issue #154).
+        const renderableNote = extractPagesRenderData(note, pageNumbers);
+
         const send = (): Promise<string[]> => new Promise((resolve, reject) => {
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
                 if (e.data.type === 'error') {
@@ -210,8 +239,7 @@ export class WorkerPool {
 
             const message: SupernoteWorkerMessage = {
                 type: 'convert',
-                note,
-                pageNumbers,
+                note: renderableNote,
                 scale
             };
 
