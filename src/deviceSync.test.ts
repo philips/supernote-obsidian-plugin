@@ -246,6 +246,27 @@ describe('deviceUriToVaultPath (safety: deterministic, collision-free naming —
         const b = deviceUriToVaultPath('Sync', '/Work/x.note');
         expect(a).not.toBe(b);
     });
+
+    // Regression for GHSA-3gx3-r874-5pp4: a malicious/rogue device could send a
+    // `uri` containing `..` segments to escape the sync folder (and the vault
+    // entirely) on write, despite `name` alone passing the syncable-extension
+    // filter upstream.
+    it('strips ".." segments instead of letting them escape the sync folder', () => {
+        expect(deviceUriToVaultPath('Supernote sync', '/../../PWNED.txt')).toBe(
+            'Supernote sync/PWNED.txt',
+        );
+    });
+
+    it('strips "." and ".." segments anywhere in the path, not just at the start', () => {
+        expect(deviceUriToVaultPath('Sync', '/Diary/../../../etc/x.note')).toBe('Sync/Diary/etc/x.note');
+        expect(deviceUriToVaultPath('Sync', '/Diary/./x.note')).toBe('Sync/Diary/x.note');
+    });
+
+    it('never produces a resolved path outside the sync folder for any ".."-laden input', () => {
+        const path = deviceUriToVaultPath('Supernote sync', '/../../../../../../PWNED.txt');
+        expect(path.startsWith('Supernote sync/')).toBe(true);
+        expect(path).not.toContain('..');
+    });
 });
 
 describe('hashBytes', () => {
