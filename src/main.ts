@@ -932,14 +932,27 @@ export class SupernoteView extends FileView {
 		// (and building N pages' worth of text-layer DOM) upfront is real,
 		// mostly wasted work if you only ever look at the first few pages,
 		// and scales memory with page count regardless (see issue #147).
+		// Also evicts a page's image once it scrolls back *out* of that same
+		// margin (see evictPageImage()) - loading lazily instead of upfront
+		// bounds memory by "how many pages are near the viewport right now"
+		// rather than "how many have been scrolled past so far", which for a
+		// long enough document (100 pages, see issue #154) still grows
+		// without bound as you keep scrolling even though each individual
+		// page loads lazily. Text layers are left alone here - much lighter
+		// (a string + some span elements, not a decoded bitmap/canvas
+		// backing store) and losing search state/highlights on scroll-past
+		// would be a worse trade for a small saving.
 		// Re-observes fresh page containers each file load; see onLoadFile().
 		this.pageObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
-				if (!entry.isIntersecting) continue;
 				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
 				if (!state) continue;
-				void this.ensurePageImage(state);
-				void this.ensureTextLayer(state);
+				if (entry.isIntersecting) {
+					void this.ensurePageImage(state);
+					void this.ensureTextLayer(state);
+				} else {
+					this.evictPageImage(state);
+				}
 			}
 		}, { root: this.contentEl, rootMargin: '100% 0px' });
 	}
@@ -1181,30 +1194,75 @@ export class SupernoteView extends FileView {
 		const width = Math.max(1, Math.round(state.nativeWidth * scale));
 		const height = Math.max(1, Math.round(state.nativeHeight * scale));
 
-		// The canvas's backing store (width/height attributes) previously
-		// matched its CSS display size 1:1, so on a high-DPR mobile screen the
-		// browser had to upscale it to cover the physical pixels — the "chunky
-		// artifacts" that make handwritten strokes hard to read. Rendering the
-		// backing store at devicePixelRatio and leaving the CSS size alone
-		// (via explicit style, since an unstyled <canvas> otherwise takes its
-		// size from its width/height attributes) fixes that; capped at 3 so an
-		// extreme DPR display doesn't blow up canvas memory for no visible
-		// benefit.
-		const dpr = Math.min(window.devicePixelRatio || 1, 3);
-		const bitmapWidth = Math.max(1, Math.round(width * dpr));
-		const bitmapHeight = Math.max(1, Math.round(height * dpr));
-
-		state.canvas.width = bitmapWidth;
-		state.canvas.height = bitmapHeight;
+		// CSS (layout) size always tracks the current zoom, for every page,
+		// regardless of whether its image is actually loaded right now.
+		// commitZoom() calls this unconditionally for every page on every
+		// zoom change - scroll position, thumbnail click-to-jump, and
+		// page-anchor links all depend on every page's box being the right
+		// height even for pages that aren't currently loaded (never viewed
+		// yet, or evicted after scrolling away - see evictPageImage()).
 		state.canvas.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.canvasWrap.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.textLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		state.linksLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
 		this.positionLinkOverlay(state, width, height);
 
-		if (state.imageBitmap) {
-			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
-		}
+		// The backing store (actual pixel buffer - the expensive part) only
+		// needs to match this size when there's a real image to draw into
+		// it. Previously resized unconditionally here, which meant
+		// commitZoom()'s loop over every page reallocated a full-size
+		// backing store for every page in the document on every zoom
+		// change, including pages nowhere near the viewport - undoing lazy
+		// loading's whole memory benefit for a long document the moment you
+		// touched zoom at all (see issue #154). A page with no imageBitmap
+		// keeps whatever backing store size it already has (a fresh
+		// <canvas>'s browser default, or evictPageImage()'s 1x1 shrink) -
+		// the browser just stretches/blurs that placeholder to fill the CSS
+		// box above, fine since such a page is off-screen by definition.
+		if (!state.imageBitmap) return;
+
+		// Rendering the backing store at devicePixelRatio and leaving the
+		// CSS size alone (set above) fixes the "chunky artifacts" a 1:1
+		// backing store gets upscaled into on a high-DPR mobile screen;
+		// capped at 3 so an extreme DPR display doesn't blow up canvas
+		// memory for no visible benefit.
+		const dpr = Math.min(window.devicePixelRatio || 1, 3);
+		const bitmapWidth = Math.max(1, Math.round(width * dpr));
+		const bitmapHeight = Math.max(1, Math.round(height * dpr));
+		state.canvas.width = bitmapWidth;
+		state.canvas.height = bitmapHeight;
+		state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
+	}
+
+	// Frees a page's decoded image once it's scrolled back out of
+	// pageObserver's margin (see onOpen()) - lazy *loading* alone still lets
+	// memory grow without bound on a long enough document as you keep
+	// scrolling, since nothing ever released an earlier page's bitmap/
+	// canvas backing store once loaded (see issue #154). Safe to call
+	// speculatively: a no-op if nothing's actually loaded (most pages, most
+	// of the time - pageObserver also reports initial non-intersection for
+	// every page outside the viewport at file-open time, before anything
+	// has loaded at all).
+	private evictPageImage(state: PageRenderState): void {
+		if (!state.imageBitmap) return;
+
+		// Releases the decoded bitmap's memory explicitly rather than
+		// waiting on GC to notice it's unreachable.
+		state.imageBitmap.close();
+		state.imageBitmap = null;
+		state.imageDataUrl = null;
+		// Lets a later re-entry actually reload instead of reusing this
+		// already-settled (but now stale) promise - ensurePageImage()'s
+		// imageBitmap check alone isn't enough once it's null again.
+		state.imageLoadPromise = null;
+
+		// The backing store doesn't shrink on its own just because nothing
+		// points at an ImageBitmap for it anymore - a canvas keeps its full
+		// pixel buffer resident until its width/height actually change.
+		// Deliberately doesn't touch CSS size (drawPageImage() already set
+		// that correctly and it doesn't need to change) - only this.
+		state.canvas.width = 1;
+		state.canvas.height = 1;
 	}
 
 	// Repositions each link's clickable region to the page's current CSS
