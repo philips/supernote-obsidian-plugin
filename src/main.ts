@@ -1196,6 +1196,43 @@ export class SupernoteView extends FileView {
 		})();
 	}
 
+	// Best-effort memory estimate for logPageMemoryTrace() below - not used
+	// for any actual decision, just to give a sense of scale when
+	// investigating a suspected memory issue (see issue #154). Accounts for
+	// both the decoded ImageBitmap (native page resolution) and the canvas
+	// backing store, which is typically larger - up to 9x the bitmap's pixel
+	// count at capped 3x devicePixelRatio (see drawPageImage()) - since both
+	// are held in memory per loaded page.
+	private estimatedPageMemoryBytes(state: PageRenderState): number {
+		if (!state.imageBitmap) return 0;
+		const bitmapBytes = state.imageBitmap.width * state.imageBitmap.height * 4;
+		const canvasBytes = state.canvas.width * state.canvas.height * 4;
+		return bitmapBytes + canvasBytes;
+	}
+
+	// Traces every load/evict with a running total across all pages (main
+	// view and thumbnails alike, since both go through ensurePageImage()/
+	// evictPageImage()) - added to make a suspected leak (issue #154:
+	// scrolling through all 100 pages of a long document still eventually
+	// crashes, even after #155/#156/#158/#159's fixes) directly observable.
+	// Watch whether "currently loaded" keeps climbing over a long scroll
+	// (something isn't actually being freed) or stays roughly bounded
+	// (eviction is working and the cause is something else entirely, e.g.
+	// pure CPU/GC pressure from the rasterization work itself rather than
+	// standing memory - see supernote-typescript#40 for the thumbnail
+	// resolution angle on that). Easiest to correlate on desktop, where
+	// DevTools' own Memory tab can be cross-checked against these numbers
+	// directly.
+	private logPageMemoryTrace(action: 'loaded' | 'evicted', pageNumber: number, pageBytes: number): void {
+		const loadedStates = this.pageStates.filter((s) => s.imageBitmap !== null);
+		const totalBytes = loadedStates.reduce((sum, s) => sum + this.estimatedPageMemoryBytes(s), 0);
+		const mb = (bytes: number) => (bytes / 1_048_576).toFixed(1);
+		console.debug(
+			`Supernote: page ${pageNumber} ${action} (~${mb(pageBytes)}MB) — ` +
+			`${loadedStates.length} page(s) currently loaded, ~${mb(totalBytes)}MB estimated total`,
+		);
+	}
+
 	// Loads this page's own rasterized image if it hasn't been already —
 	// triggered by pageObserver as a page nears the viewport, or forced
 	// immediately by page-jump/save-image so those don't have to wait on
@@ -1214,6 +1251,7 @@ export class SupernoteView extends FileView {
 				const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
 				state.imageBitmap = await createImageBitmap(blob);
 				this.drawPageImage(state, this.zoomScale);
+				this.logPageMemoryTrace('loaded', state.pageNumber, this.estimatedPageMemoryBytes(state));
 
 				// Fills in this page's thumbnail too, whether it loaded because
 				// the main view scrolled to it or because the thumbnail sidebar
@@ -1288,6 +1326,9 @@ export class SupernoteView extends FileView {
 	// their own viewport at file-open time, before anything has loaded).
 	private evictPageImage(state: PageRenderState): void {
 		if (!state.imageBitmap) return;
+		// Captured before freeing anything below - there'd be nothing left
+		// to measure afterward.
+		const pageBytes = this.estimatedPageMemoryBytes(state);
 
 		// Releases the decoded bitmap's memory explicitly rather than
 		// waiting on GC to notice it's unreachable.
@@ -1314,6 +1355,8 @@ export class SupernoteView extends FileView {
 		// sidebar still has visible.
 		const thumbImg = this.thumbImgs[state.pageNumber - 1];
 		if (thumbImg) thumbImg.src = '';
+
+		this.logPageMemoryTrace('evicted', state.pageNumber, pageBytes);
 	}
 
 	// Repositions each link's clickable region to the page's current CSS
