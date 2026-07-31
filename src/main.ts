@@ -699,6 +699,14 @@ interface PdfJsPage {
 
 interface PdfJsDocument {
 	getPage(pageNumber: number): Promise<PdfJsPage>;
+	// Releases this document's resources in pdf.js's own internal Worker -
+	// see onLoadFile()'s call to this before replacing pdfDocPromise with a
+	// new file's document. Without it, pdf.js's worker keeps every
+	// previously-opened note's parsed PDF resident for as long as the
+	// Supernote view itself stays open, accumulating across every note
+	// switch in a session (confirmed via a real Task Manager reading on
+	// issue #154: pdf.worker.min.mjs alone was 82.4MB).
+	destroy(): Promise<void>;
 }
 
 interface PdfJsTextLayer {
@@ -1035,6 +1043,19 @@ export class SupernoteView extends FileView {
 	async onLoadFile(file: TFile): Promise<void> {
 		const container = this.contentEl;
 		container.empty();
+
+		// Releases the *previous* file's pdf.js document, if any, in pdf.js's
+		// own internal Worker - see PdfJsDocument.destroy()'s comment for why
+		// this matters (confirmed via a real Task Manager reading on issue
+		// #154: pdf.worker.min.mjs alone was 82.4MB, apparently never
+		// released across note switches). Fire-and-forget: doesn't block
+		// this file's own loading on the previous one's teardown, and the
+		// previous promise may still be in-flight (a fast note switch) -
+		// .then() waits for whatever state it's actually in first. Silently
+		// swallows a rejection - a note that failed to build a PDF in the
+		// first place has nothing to destroy, and either way there's
+		// nothing useful to do about it here.
+		this.pdfDocPromise?.then((doc) => doc.destroy()).catch(() => { /* nothing to clean up */ });
 
 		window.clearTimeout(this.zoomDebounceTimer);
 		this.pageObserver?.disconnect();
@@ -2105,6 +2126,10 @@ export class SupernoteView extends FileView {
 		this.pageObserver?.disconnect();
 		this.thumbObserver?.disconnect();
 		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
+		// See onLoadFile()'s matching call for why this matters - closing the
+		// view entirely shouldn't leave its last file's pdf.js document
+		// resident in pdf.js's own Worker either.
+		this.pdfDocPromise?.then((doc) => doc.destroy()).catch(() => { /* nothing to clean up */ });
 	}
 }
 
