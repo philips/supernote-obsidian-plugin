@@ -47,6 +47,10 @@ note — handy paired with [daily notes](https://obsidian.md/help/plugins/daily-
 
 ![Scanning the device for today's notes](assets/screenshots/04-import-today-modal.png)
 
+If the device isn't reachable, the plugin says so plainly instead of hanging:
+
+![Device connection error message](assets/screenshots/04c-import-today-error.png)
+
 ## 📺 Insert a screen mirroring image
 
 Copy an image straight from a [screen-mirrored](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring)
