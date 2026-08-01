@@ -66,6 +66,24 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+// Hands a turn back to the browser between pages of pdf-lib assembly (see
+// assemblePdfFromImages()/assembleTextOnlyPdf() below) - pdf-lib's own
+// embedPng()/save() etc. are `async` in name, but the actual PNG
+// decode/font-glyph-placement/serialization work they do is synchronous CPU
+// work with no real await inside it, so a tight loop over 100+ pages never
+// naturally yields to the event loop and reads as the whole app locking up
+// (no repaint, no input handled) for as long as the loop runs, even on a
+// pool-based/off-main-thread rasterization pass that itself never touches
+// the main thread (see WorkerPool) - confirmed on a real 100-page export
+// that hung the main thread for ~30s. setTimeout(0) rather than
+// requestAnimationFrame so this still yields promptly even if the window
+// isn't currently focused/visible (rAF is throttled/suspended in the
+// background, and there's no reason export should stall just because the
+// user switched away while it ran).
+function yieldToMainThread(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
 // Assembles a PDF from pages already rasterized elsewhere (the `images`
 // array from ImageConverter, used for thumbnails/save-to-vault/drag-out),
 // instead of rasterizing a second time. addPdfPage() accepts pre-encoded PNG
@@ -77,6 +95,7 @@ async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<
     for (let i = 0; i < sn.pages.length; i++) {
         const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
         await addPdfPage(ctx, sn.pages[i], pngBytes);
+        await yieldToMainThread();
     }
     return ctx.pdfDoc.save();
 }
@@ -120,6 +139,7 @@ async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
         // recognition data rather than "somewhere in this note".
         console.debug(`Supernote: text-only PDF — page ${i + 1}/${sn.pages.length}`);
         await addTextOnlyPdfPage(ctx, sn.pages[i], sn.pageWidth, sn.pageHeight);
+        await yieldToMainThread();
     }
     console.debug(`Supernote: text-only PDF — saving (${sn.pages.length} page(s))`);
     return ctx.pdfDoc.save();
