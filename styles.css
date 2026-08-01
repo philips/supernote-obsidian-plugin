@@ -271,31 +271,54 @@ div.supernote-canvas-wrap canvas {
     font-size: var(--font-smaller);
 }
 
+/* Issue #179: .supernote-pages and .supernote-thumb-sidebar both sit in this
+   single grid cell (see grid-row/grid-column below) instead of splitting a
+   flex row between them. Previously, opening/closing the sidebar changed how
+   much of that row pagesEl got, which fit-width then re-rendered every page's
+   size against, reflowing the whole note and bouncing whatever page was
+   currently in view. Stacking them means pagesEl always gets the cell's full
+   width regardless of whether the sidebar is showing - it overlays pagesEl
+   instead of squeezing it. */
 .supernote-body {
-    display: flex;
-    align-items: flex-start;
-    gap: 1em;
+    display: grid;
+    grid-template-columns: 1fr;
 }
 
 .supernote-pages {
-    flex: 1 1 auto;
+    grid-column: 1;
+    grid-row: 1;
     min-width: 0;
 }
 
+/* justify-self/align-self (not the old flex gap/align-items on .supernote-body)
+   position this within the shared grid cell - hugging the top-left corner,
+   same spot it occupied back when it was a flex sibling (it's built before
+   pagesEl in the DOM, so it landed first/left in that flex row). Still
+   position: sticky (unchanged from before this issue - that part already
+   worked, it's only the flex-row width-sharing that caused the bounce) so it
+   keeps tracking scroll the same way .supernote-header does. z-index lifts
+   it above pagesEl's own (unpositioned, z-index: auto) canvases so it
+   visibly overlays them rather than being painted underneath. */
 .supernote-thumb-sidebar {
     display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
+    align-self: start;
     position: sticky;
-    align-self: flex-start;
+    z-index: 5;
     flex-flow: column;
     flex-shrink: 0;
     width: 140px;
     max-height: calc(100vh - 4em);
+    margin-left: 0.5em;
     overflow-y: auto;
     gap: 0.75em;
     padding: 0.5em;
     background: var(--background-secondary);
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-s);
+    box-shadow: var(--shadow-l);
 }
 
 .supernote-thumb-item {
