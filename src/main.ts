@@ -219,7 +219,15 @@ export class WorkerPool {
     // recreating the worker is the practical way to bound that when the
     // actual growth lives inside a dependency's own native/WASM state, not
     // anything reachable from this code.
-    private static readonly MAX_CALLS_PER_WORKER = 20;
+    //
+    // First tried at 20: confirmed the mechanism works (memory climbed to
+    // 1.2GB, then dropped to 243MB once recycling kicked in), but a 1.2GB
+    // peak before the first recycle landed is still far too high - it means
+    // every worker ran nearly its whole lifetime before any of them got
+    // replaced. Lowered to recycle more often, trading a bit more
+    // Worker-recreation overhead (spinning up a fresh Worker and reloading
+    // its bundled script isn't free) for a substantially lower ceiling.
+    private static readonly MAX_CALLS_PER_WORKER = 8;
 
     constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
         this.workers = Array(maxWorkers).fill(null).map(() =>
