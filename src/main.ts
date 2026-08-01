@@ -15,6 +15,24 @@ import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
+// TEMPORARY, for bisecting issue #154's remaining memory growth (worker
+// instances staying large - 100MB+ - across a long scroll session, even
+// though the plugin's own page load/evict tracking shows a healthy, bounded
+// total) between the two independent subsystems that could cause it: the
+// text-layer pipeline (pdf-lib assembling a whole-document PDF + pdf.js
+// parsing it, both used only for search/selection - see onLoadFile()'s
+// pdfDocPromise) and the image pipeline (the Worker pool rasterizing pages -
+// see ensurePageImage()/ensureThumbnail()). Toggle from the DevTools console
+// without needing a rebuild - affects every currently-open and future
+// SupernoteView immediately, so flip a flag, close and reopen the note (or
+// just open it fresh) to test:
+//   supernoteDebug.disableTextLayer = true   // skip pdf-lib/pdf.js entirely
+//   supernoteDebug.disableImages = true      // skip page/thumbnail rasterization entirely
+// Remove this whole block (and its three call sites) once the bisection
+// is done and the real cause is found.
+const supernoteDebugFlags = { disableTextLayer: false, disableImages: false };
+(window as unknown as { supernoteDebug: typeof supernoteDebugFlags }).supernoteDebug = supernoteDebugFlags;
+
 function generateTimestamp(): string {
 	const date = new Date();
 	const year = date.getFullYear();
@@ -1243,6 +1261,11 @@ export class SupernoteView extends FileView {
 		// page images at all — see its doc comment) rather than
 		// assemblePdfFromImages(), since this PDF is only ever handed to
 		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
+		if (supernoteDebugFlags.disableTextLayer) {
+			console.debug('Supernote: search text layer — skipped (supernoteDebug.disableTextLayer)');
+			this.pdfDocPromise = null;
+			return;
+		}
 		this.pdfDocPromise = (async () => {
 			// Logged stage-by-stage (see issue #147): a hard native crash
 			// here has no catchable JS error to report — ensureTextLayer()'s
@@ -1308,6 +1331,7 @@ export class SupernoteView extends FileView {
 	// one-time work. Entirely independent of ensureThumbnail() below - see
 	// PageRenderState.thumbnailDataUrl for why they no longer share a load.
 	private ensurePageImage(state: PageRenderState): Promise<void> {
+		if (supernoteDebugFlags.disableImages) return Promise.resolve();
 		if (state.imageBitmap) return Promise.resolve();
 		if (state.imageLoadPromise) return state.imageLoadPromise;
 
@@ -1374,6 +1398,7 @@ export class SupernoteView extends FileView {
 	// imply the main view wants this page's full-resolution image too, and
 	// vice versa, so there's no reason for one to force-load the other.
 	private ensureThumbnail(state: PageRenderState): Promise<void> {
+		if (supernoteDebugFlags.disableImages) return Promise.resolve();
 		if (state.thumbnailDataUrl) return Promise.resolve();
 		if (state.thumbnailLoadPromise) return state.thumbnailLoadPromise;
 
