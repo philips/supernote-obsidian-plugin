@@ -189,13 +189,24 @@ div.supernote-canvas-wrap canvas {
    handwriting layout, unlike .textLayer above), so selection/copy behaves
    like any other text and a sparse page doesn't leave a huge blank gap.
    Hidden outside text mode; sized independently of the page's own pixel
-   dimensions/aspect ratio, unlike canvasWrap/textLayer. */
+   dimensions/aspect ratio, unlike canvasWrap/textLayer.
+
+   user-select: text is not the default and has to be opted into explicitly
+   - Obsidian sets `body { user-select: none; }` and only opts specific
+   elements it controls back in (its editor, markdown preview, its own PDF
+   viewer's .textLayer via `.pdf-container .textLayer`, which - being scoped
+   to .pdf-container - doesn't reach this plugin's own same-named .textLayer
+   either). Without this, the text renders exactly as intended but a drag
+   across it does nothing - confirmed via issue #171's own follow-up. */
 .supernote-compact-text {
     display: none;
     box-sizing: border-box;
     width: 100%;
     max-width: 42em;
     padding: 1em 1.2em;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
     white-space: pre-wrap;
     overflow-wrap: break-word;
     color: var(--text-normal);
