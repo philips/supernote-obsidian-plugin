@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage, extractPageRenderData, IRenderableNote } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addTextOnlyPdfPage, extractPageRenderData, extractPdfPageData, IRenderableNote } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -67,105 +67,65 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 // Hands a turn back to the browser between pages of pdf-lib assembly (see
-// assemblePdfFromNote()/assembleTextOnlyPdf() below) - pdf-lib's own
-// embedPng()/save() etc. are `async` in name, but the actual PNG
-// decode/font-glyph-placement/serialization work they do is synchronous CPU
-// work with no real await inside it, so a tight loop over 100+ pages never
-// naturally yields to the event loop and reads as the whole app locking up
-// (no repaint, no input handled) for as long as the loop runs, even on a
-// pool-based/off-main-thread rasterization pass that itself never touches
-// the main thread (see WorkerPool) - confirmed on a real 100-page export
-// that hung the main thread for ~30s. setTimeout(0) rather than
+// assembleTextOnlyPdf() below) - pdf-lib's own embedPng()/save() etc. are
+// `async` in name, but the actual PNG decode/font-glyph-placement/
+// serialization work they do is synchronous CPU work with no real await
+// inside it, so a tight loop over 100+ pages never naturally yields to the
+// event loop and reads as the whole app locking up (no repaint, no input
+// handled) for as long as the loop runs. Confirmed on a real 100-page note's
+// PDF export (back when this ran on the main thread too - see
+// buildPdfInWorker() for why that moved into a Worker instead) that this
+// hung the main thread for ~30s. setTimeout(0) rather than
 // requestAnimationFrame so this still yields promptly even if the window
 // isn't currently focused/visible (rAF is throttled/suspended in the
-// background, and there's no reason export should stall just because the
+// background, and there's no reason this should stall just because the
 // user switched away while it ran).
 function yieldToMainThread(): Promise<void> {
     return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
-// How many pages get rasterized (and briefly held as encoded PNGs on the
-// main thread) at once while assembling a PDF. Previously the *entire*
-// document was rasterized upfront into one big `images` array before PDF
-// assembly even started, so a 100-page note held all 100 pages' encoded PNGs
-// on the main thread *in addition to* whatever pdf-lib's own ctx.pdfDoc was
-// simultaneously accumulating internally for each already-embedded page
-// (unavoidable - it needs every page's bytes present until .save()
-// serializes the whole file). Confirmed via real-device testing to still
-// peak near 2GB even after capping how many pages a single Worker call
-// rasterizes at once (MAX_PAGES_PER_CHUNK, issue #154's export fix) - that
-// only bounded memory *inside* a Worker, not how many already-decoded pages
-// piled up afterward on the main thread. A small batch keeps both pooled
-// workers busy (see WorkerPool.DEFAULT_MAX_WORKERS) without ever
-// materializing more than a handful of pages' encoded bytes outside
-// pdf-lib's own document state at once.
-const PDF_ASSEMBLY_BATCH_SIZE = 8;
-
-// Chrome-only, non-standard diagnostic API - undefined on other engines, so
-// this always guards its presence rather than assuming it. This file's other
-// memory traces (logPageMemoryTrace()/logThumbnailMemoryTrace()) only track
-// this plugin's *own known* allocations (canvas backing stores, data URL
-// lengths) - they have no visibility into a dependency's own internal
-// retention (e.g. pdf-lib's ctx.pdfDoc holding every embedded page). Reading
-// the JS engine's actual heap size instead catches that too, at the cost of
-// only working in Chromium (Obsidian's own runtime, so fine for debugging
-// real reports against it).
-function currentHeapMB(): string {
-    const memory = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
-    return memory ? (memory.usedJSHeapSize / 1_048_576).toFixed(0) : 'unknown';
-}
-
-// Rasterizes and assembles a PDF for `sn`, one small batch of pages at a
-// time (see PDF_ASSEMBLY_BATCH_SIZE) rather than rasterizing the whole
-// document upfront - see that constant's comment for why. addPdfPage()
-// accepts pre-encoded PNG bytes directly, so each batch's data URLs just
-// need decoding back to bytes (a cheap base64 decode, not a re-render)
-// before handing them to the library's own createPdfContext/addPdfPage
-// assembly. `flatten: true` drops each page's alpha channel first - see
-// SupernoteWorkerMessage's doc comment (myworker.worker.ts) for why.
+// Rasterizes and assembles the *entire* PDF for `sn` inside a dedicated
+// Worker (see the 'buildPdf' message in myworker.worker.ts) rather than on
+// the main thread - pdf-lib's own embedPng() is genuinely expensive, and
+// entirely inherent to it: confirmed via real-device testing (see
+// myworker.worker.ts's own doc comment on 'buildPdf' for the full trail)
+// that it still peaks ~1.7GB and takes 10+ seconds for a 100-page note even
+// after dropping each page's alpha channel, since it always fully decodes
+// every embedded PNG to raw pixels and retains that until pdfDoc.save().
+// None of that is fixable short of not using pdf-lib, but running it inside
+// a Worker at least means Obsidian's own UI thread never carries any of that
+// cost, regardless of how large it is.
 //
-// Batching alone didn't fix a reported ~2.4GB peak and 20+s freeze - traced
-// (via pdf-lib's own source, src/utils/png.ts and PDFImage.embed()) to
-// pdf-lib's embedPng() itself: it always fully decodes the PNG to raw RGBA8
-// via UPNG.toRGBA8() (regardless of the source PNG's own color type) and
-// retains that raw buffer - plus a *separate* raw alpha-channel copy, for
-// any page with a non-255 alpha value, which every one of these pages has
-// by design (see the `flatten` comment) - in `ctx.pdfDoc` until save()
-// finally compresses and releases each one (its own doc comment: "we clear
-// this.embedder so the indirectly referenced image data can be garbage
-// collected"). So heap necessarily climbs roughly linearly batch over
-// batch regardless of how the pages were sourced or batched, and save()
-// itself is a single synchronous call, over the *entire* document, that
-// pdf-lib gives no way to chunk or yield during - confirmed via logging
-// (heap per batch, wall time around save()) that save() alone accounted for
-// the ~20s freeze. Dropping the alpha channel removes one whole raw
-// buffer + compression pass per page; the remaining raw-RGB retention
-// during the loop and the monolithic save() are both inherent to pdf-lib's
-// embedPng() and can't be fixed short of not using it.
-async function assemblePdfFromNote(sn: SupernoteX): Promise<Uint8Array> {
-    const ctx = await createPdfContext();
-    const converter = new ImageConverter();
-    for (let start = 0; start < sn.pages.length; start += PDF_ASSEMBLY_BATCH_SIZE) {
-        const batchSize = Math.min(PDF_ASSEMBLY_BATCH_SIZE, sn.pages.length - start);
-        const pageNumbers = Array.from({ length: batchSize }, (_, i) => start + i + 1);
-        const images = await converter.convertToImages(sn, pageNumbers, undefined, true);
-        for (let i = 0; i < pageNumbers.length; i++) {
-            const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
-            await addPdfPage(ctx, sn.pages[pageNumbers[i] - 1], pngBytes);
-            await yieldToMainThread();
-        }
-        console.debug(
-            `Supernote: PDF export — embedded page ${start + batchSize}/${sn.pages.length}, heap ~${currentHeapMB()}MB`,
-        );
+// A *dedicated* Worker, not the shared pool (getSharedWorkerPool()) used for
+// on-screen rendering: this can run for many seconds, and tying up one of
+// the pool's 2 workers for that whole time would stall on-screen page/
+// thumbnail loading for just as long, since only one worker would remain to
+// serve them - a large export shouldn't compete with actually reading the
+// note. Terminated once done regardless of outcome; this is a one-shot,
+// long-running task, not something worth keeping warm for reuse.
+async function buildPdfInWorker(sn: SupernoteX): Promise<Uint8Array> {
+    const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
+    const pages = pageNumbers.map((n) => extractPdfPageData(sn, n).pages[0]);
+
+    const worker = new Worker();
+    try {
+        return await new Promise<Uint8Array>((resolve, reject) => {
+            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+                if (e.data.type === 'error') reject(new Error(e.data.error));
+                else if (e.data.type === 'pdfResult') resolve(e.data.pdfBytes);
+            };
+            worker.onerror = (error) => reject(new Error(error.message));
+            const message: SupernoteWorkerMessage = {
+                type: 'buildPdf',
+                pageWidth: sn.pageWidth,
+                pageHeight: sn.pageHeight,
+                pages,
+            };
+            worker.postMessage(message);
+        });
+    } finally {
+        worker.terminate();
     }
-    console.debug(`Supernote: PDF export — calling pdfDoc.save(), heap ~${currentHeapMB()}MB`);
-    const saveStart = performance.now();
-    const bytes = await ctx.pdfDoc.save();
-    console.debug(
-        `Supernote: PDF export — save() done in ${(performance.now() - saveStart).toFixed(0)}ms, ` +
-        `${(bytes.length / 1_048_576).toFixed(1)}MB output, heap ~${currentHeapMB()}MB`,
-    );
-    return bytes;
 }
 
 // Wraps a single already-rasterized PNG (as a data URL) in a one-page PDF,
@@ -196,7 +156,7 @@ async function buildSinglePagePdf(pngDataUrl: string): Promise<Uint8Array> {
 // pdf-lib to decode, recompress, and serialize turned out to be genuinely
 // expensive (multiple seconds for a many-page or high-resolution note) for
 // bytes nothing ever looks at. Don't use this for anything the user actually
-// opens/exports as a PDF — see assemblePdfFromNote() for that.
+// opens/exports as a PDF — see buildPdfInWorker() for that.
 async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     for (let i = 0; i < sn.pages.length; i++) {
@@ -342,7 +302,7 @@ export class WorkerPool {
     // request in flight) and round-robining across every call (so
     // concurrent single-page requests still spread across every worker,
     // instead of piling onto worker 0) fixes both.
-    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number, flatten?: boolean): Promise<string[]> {
+    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number): Promise<string[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
         const worker = this.workers[workerIndex];
@@ -370,7 +330,6 @@ export class WorkerPool {
                 type: 'convert',
                 note: renderableNote,
                 scale,
-                flatten,
             };
 
             worker.postMessage(message);
@@ -385,7 +344,7 @@ export class WorkerPool {
         return result;
     }
 
-    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number, flatten?: boolean): Promise<string[]> {
+    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number): Promise<string[]> {
         //console.time('Total processing time');
 
         const chunks = chunkPageNumbers(allPageNumbers);
@@ -396,7 +355,7 @@ export class WorkerPool {
         // on the same worker, or how many separate processPages() calls are
         // in flight at once (see processChunk()'s comment).
         const results = await Promise.all(
-            chunks.map((chunk) => this.processChunk(note, chunk, scale, flatten))
+            chunks.map((chunk) => this.processChunk(note, chunk, scale))
         );
 
         //console.timeEnd('Total processing time');
@@ -474,17 +433,11 @@ export class ImageConverter {
     // SupernoteView's thumbnail sidebar (see ensureThumbnail()), which
     // otherwise paid the same decode/memory cost as actually viewing the
     // page just to fill in a ~140px preview.
-    //
-    // `flatten`: drops the alpha channel before encoding - see
-    // SupernoteWorkerMessage's own doc comment (myworker.worker.ts) for why
-    // that's both safe and worthwhile for a caller (PDF export, via
-    // assemblePdfFromNote()) that's never going to composite these over
-    // anything but a plain page background anyway.
-    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number, flatten?: boolean): Promise<string[]> {
+    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
         activeWorkerCalls++;
         try {
-            return await getSharedWorkerPool().processPages(note, pages, scale, flatten);
+            return await getSharedWorkerPool().processPages(note, pages, scale);
         } finally {
             activeWorkerCalls--;
             scheduleIdleTeardownIfIdle();
@@ -740,7 +693,7 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(noteBuffer));
 
 		if (format === 'pdf') {
-			const pdfBytes = await assemblePdfFromNote(sn);
+			const pdfBytes = await buildPdfInWorker(sn);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
@@ -817,11 +770,10 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Rasterizes and assembles in small batches (see
-		// assemblePdfFromNote()/PDF_ASSEMBLY_BATCH_SIZE) rather than
-		// rasterizing the whole document upfront - bounds peak memory on a
-		// long note regardless of page count.
-		const pdfBytes = await assemblePdfFromNote(sn);
+		// Runs entirely inside a dedicated Worker (see buildPdfInWorker()) so
+		// pdf-lib's own considerable memory/CPU cost never blocks Obsidian's
+		// UI thread, regardless of note length.
+		const pdfBytes = await buildPdfInWorker(sn);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
@@ -1451,7 +1403,7 @@ export class SupernoteView extends FileView {
 		// page — see ensureTextLayer() — so delaying it only delays search
 		// readiness, not anything visible. Uses assembleTextOnlyPdf() (no
 		// page images at all — see its doc comment) rather than
-		// assemblePdfFromNote(), since this PDF is only ever handed to
+		// buildPdfInWorker(), since this PDF is only ever handed to
 		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
 		this.pdfDocPromise = (async () => {
 			// Logged stage-by-stage (see issue #147): a hard native crash
