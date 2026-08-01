@@ -1,0 +1,109 @@
+#!/bin/sh
+# Runs the Obsidian instance set up by scripts/setup-obsidian-test-env under
+# a virtual (Xvfb) display, so it can be driven and screenshotted from a
+# terminal with no real display attached - useful for visually confirming a
+# rendering/UI change actually works, not just that it type-checks.
+#
+# Usage:
+#   scripts/obsidian-headless start                 # launch Xvfb + Obsidian
+#   scripts/obsidian-headless screenshot out.png     # capture the display
+#   scripts/obsidian-headless click <x> <y>          # click at coordinates
+#   scripts/obsidian-headless key <keysym>           # e.g. Escape, ctrl+o
+#   scripts/obsidian-headless status
+#   scripts/obsidian-headless stop                   # kill Obsidian + Xvfb
+#
+# There's no window manager running on the virtual display, so every window
+# (main window, settings dialog, ...) is unmanaged/unstacked - use
+# screenshots to find click targets rather than assuming focus-follows.
+set -e
+
+DISPLAY_NUM="${OBSIDIAN_HEADLESS_DISPLAY:-99}"
+RES="${OBSIDIAN_HEADLESS_RES:-1400x1000x24}"
+OBSIDIAN_DIR="${OBSIDIAN_INSTALL_DIR:-$HOME/opt/obsidian}"
+STATE_DIR="$HOME/.cache/obsidian-headless"
+mkdir -p "$STATE_DIR"
+XVFB_PID_FILE="$STATE_DIR/xvfb.pid"
+OBSIDIAN_PID_FILE="$STATE_DIR/obsidian.pid"
+
+is_running() {
+	# $1 = pid file
+	[ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null
+}
+
+cmd_start() {
+	if is_running "$XVFB_PID_FILE"; then
+		echo "Xvfb already running on :$DISPLAY_NUM (pid $(cat "$XVFB_PID_FILE"))"
+	else
+		Xvfb ":$DISPLAY_NUM" -screen 0 "$RES" -nolisten tcp >"$STATE_DIR/xvfb.log" 2>&1 &
+		echo $! > "$XVFB_PID_FILE"
+		sleep 1
+		echo "Started Xvfb on :$DISPLAY_NUM (pid $(cat "$XVFB_PID_FILE"))"
+	fi
+
+	if is_running "$OBSIDIAN_PID_FILE"; then
+		echo "Obsidian already running (pid $(cat "$OBSIDIAN_PID_FILE"))"
+		return
+	fi
+
+	if [ ! -x "$OBSIDIAN_DIR/obsidian" ]; then
+		echo "No Obsidian binary at $OBSIDIAN_DIR - run scripts/setup-obsidian-test-env first." >&2
+		exit 1
+	fi
+
+	# --no-sandbox: Electron's setuid sandbox helper needs privileges this
+	# container's user doesn't have; --disable-gpu avoids needing a real
+	# GPU/DRM device behind Xvfb.
+	(cd "$OBSIDIAN_DIR" && DISPLAY=":$DISPLAY_NUM" ./obsidian --no-sandbox --disable-gpu --disable-dev-shm-usage \
+		>"$STATE_DIR/obsidian.log" 2>&1 &
+		echo $! > "$OBSIDIAN_PID_FILE")
+	sleep 5
+	echo "Started Obsidian (pid $(cat "$OBSIDIAN_PID_FILE")); log at $STATE_DIR/obsidian.log"
+}
+
+cmd_stop() {
+	if is_running "$OBSIDIAN_PID_FILE"; then
+		pkill -P "$(cat "$OBSIDIAN_PID_FILE")" 2>/dev/null || true
+		kill "$(cat "$OBSIDIAN_PID_FILE")" 2>/dev/null || true
+	fi
+	rm -f "$OBSIDIAN_PID_FILE"
+	if is_running "$XVFB_PID_FILE"; then
+		kill "$(cat "$XVFB_PID_FILE")" 2>/dev/null || true
+	fi
+	rm -f "$XVFB_PID_FILE"
+	echo "Stopped."
+}
+
+cmd_status() {
+	if is_running "$XVFB_PID_FILE"; then echo "Xvfb: running (:$DISPLAY_NUM)"; else echo "Xvfb: stopped"; fi
+	if is_running "$OBSIDIAN_PID_FILE"; then echo "Obsidian: running"; else echo "Obsidian: stopped"; fi
+}
+
+cmd_screenshot() {
+	OUT="${1:?usage: obsidian-headless screenshot <output.png>}"
+	DISPLAY=":$DISPLAY_NUM" import -window root "$OUT"
+	echo "Saved $OUT"
+}
+
+cmd_click() {
+	X="${1:?usage: obsidian-headless click <x> <y>}"
+	Y="${2:?usage: obsidian-headless click <x> <y>}"
+	DISPLAY=":$DISPLAY_NUM" xdotool mousemove "$X" "$Y" click 1
+}
+
+cmd_key() {
+	KEYS="${1:?usage: obsidian-headless key <keysym-or-combo>}"
+	DISPLAY=":$DISPLAY_NUM" xdotool key "$KEYS"
+}
+
+case "$1" in
+	start) cmd_start ;;
+	stop) cmd_stop ;;
+	status) cmd_status ;;
+	screenshot) shift; cmd_screenshot "$@" ;;
+	click) shift; cmd_click "$@" ;;
+	key) shift; cmd_key "$@" ;;
+	*)
+		echo "Usage: $0 {start|stop|status|screenshot <out.png>|click <x> <y>|key <keys>}" >&2
+		exit 1
+		;;
+esac

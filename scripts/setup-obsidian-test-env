@@ -1,0 +1,122 @@
+#!/bin/sh
+# One-time setup for testing this plugin inside a real (headless) Obsidian
+# instance on Linux. Installs the system libraries Electron/Obsidian needs to
+# run under Xvfb, downloads Obsidian itself, and wires up a throwaway test
+# vault with this plugin symlinked in (so a rebuild of main.js/styles.css is
+# picked up on next launch without re-running this script).
+#
+# After this, use `scripts/obsidian-headless start` to actually launch it.
+#
+# Only tested on Fedora/RHEL (dnf). On a Debian/Ubuntu box, install the
+# equivalent -dev-less runtime libs via apt instead (nss, nspr, atk,
+# at-spi2-core, cups, libdrm2, libgbm1, libasound2, pango, cairo, libgtk-3-0,
+# the libx11/libxcomposite/libxdamage/libxfixes/libxrandr/libxtst family,
+# xvfb, dbus-x11, fonts-liberation) - the package names differ but the set of
+# shared libraries needed is the same.
+set -e
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VAULT="${OBSIDIAN_TEST_VAULT:-$HOME/obsidian-test-vault}"
+OBSIDIAN_DIR="${OBSIDIAN_INSTALL_DIR:-$HOME/opt/obsidian}"
+
+if ! command -v dnf >/dev/null 2>&1; then
+	echo "This script's package install step targets dnf (Fedora/RHEL)." >&2
+	echo "See the comment at the top of this script for the Debian/Ubuntu equivalent." >&2
+	exit 1
+fi
+
+echo "==> Installing runtime libraries Obsidian's Electron needs to render under Xvfb"
+sudo dnf install -y \
+	alsa-lib at-spi2-atk at-spi2-core atk cairo cups-libs dbus-x11 gtk3 \
+	libXScrnSaver libXcomposite libXcursor libXdamage libXext libXfixes libXi \
+	libXrandr libXrender libXtst libdrm libxshmfence mesa-dri-drivers mesa-libgbm \
+	nspr nss pango xorg-x11-server-Xvfb xorg-x11-xauth xdotool \
+	liberation-sans-fonts liberation-mono-fonts ImageMagick
+
+if [ -x "$OBSIDIAN_DIR/obsidian" ] && [ "$1" != "--force" ]; then
+	echo "==> Obsidian already installed at $OBSIDIAN_DIR (pass --force to re-download)"
+else
+	case "$(uname -m)" in
+		aarch64|arm64) ASSET_ARCH="arm64" ;;
+		x86_64|amd64) ASSET_ARCH="x64" ;;
+		*) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+	esac
+
+	echo "==> Looking up latest Obsidian release for linux-$ASSET_ARCH"
+	if [ "$ASSET_ARCH" = "x64" ]; then
+		# The x64 tarball's name has no arch suffix at all (just
+		# obsidian-<version>.tar.gz), unlike arm64's
+		# obsidian-<version>-arm64.tar.gz - so this can't just grep
+		# for "x64", it has to grep for tar.gz and exclude arm64.
+		URL=$(curl -sL https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest \
+			| grep browser_download_url \
+			| grep '\.tar\.gz"' \
+			| grep -v arm64 \
+			| cut -d'"' -f4)
+	else
+		URL=$(curl -sL https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest \
+			| grep browser_download_url \
+			| grep -- "-${ASSET_ARCH}.tar.gz\"" \
+			| cut -d'"' -f4)
+	fi
+	if [ -z "$URL" ]; then
+		echo "Couldn't find a linux-$ASSET_ARCH tarball in the latest obsidian-releases release." >&2
+		exit 1
+	fi
+
+	echo "==> Downloading $URL"
+	TMP_TGZ="$(mktemp --suffix=.tar.gz)"
+	curl -sL "$URL" -o "$TMP_TGZ"
+
+	rm -rf "$OBSIDIAN_DIR"
+	mkdir -p "$OBSIDIAN_DIR"
+	tar xzf "$TMP_TGZ" -C "$OBSIDIAN_DIR" --strip-components=1
+	rm -f "$TMP_TGZ"
+fi
+
+echo "==> Setting up test vault at $VAULT"
+PLUGIN_DIR="$VAULT/.obsidian/plugins/supernote"
+mkdir -p "$PLUGIN_DIR"
+
+# Symlinked, not copied: a rebuild (npm run build / npm run dev) in the repo
+# is reflected the next time Obsidian (re)loads the plugin, no re-run of this
+# script needed.
+ln -sf "$REPO_ROOT/manifest.json" "$PLUGIN_DIR/manifest.json"
+ln -sf "$REPO_ROOT/main.js" "$PLUGIN_DIR/main.js"
+ln -sf "$REPO_ROOT/styles.css" "$PLUGIN_DIR/styles.css"
+
+if [ ! -f "$VAULT/.obsidian/community-plugins.json" ]; then
+	echo '["supernote"]' > "$VAULT/.obsidian/community-plugins.json"
+fi
+
+# Drop in a real .note file to open, if the repo has one checked in and the
+# vault doesn't have one of its own yet (leaves any already there alone, in
+# case a previous run's manual edits/exports should be kept).
+if ! find "$VAULT" -maxdepth 1 -iname '*.note' -print -quit | grep -q . ; then
+	SAMPLE_NOTE=$(find "$REPO_ROOT" -maxdepth 1 -iname '*.note' -print -quit)
+	if [ -n "$SAMPLE_NOTE" ]; then
+		cp "$SAMPLE_NOTE" "$VAULT/"
+	fi
+fi
+
+echo "==> Registering $VAULT with Obsidian and marking it open-on-launch"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/obsidian"
+mkdir -p "$CONFIG_DIR"
+OBSIDIAN_JSON="$CONFIG_DIR/obsidian.json"
+[ -f "$OBSIDIAN_JSON" ] || echo '{"vaults":{}}' > "$OBSIDIAN_JSON"
+
+VAULT_ID=$(python3 -c "import uuid; print(uuid.uuid4().hex[:16])")
+TS=$(date +%s%3N)
+jq --arg id "$VAULT_ID" --arg path "$VAULT" --argjson ts "$TS" '
+	.vaults = (.vaults // {}) |
+	((.vaults | to_entries | map(select(.value.path == $path)))[0].key) as $existing_id |
+	if $existing_id then
+		.vaults[$existing_id].ts = $ts | .vaults[$existing_id].open = true
+	else
+		.vaults[$id] = {path: $path, ts: $ts, open: true}
+	end
+' "$OBSIDIAN_JSON" > "$OBSIDIAN_JSON.tmp"
+mv "$OBSIDIAN_JSON.tmp" "$OBSIDIAN_JSON"
+
+echo
+echo "Done. Next: scripts/obsidian-headless start"
