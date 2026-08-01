@@ -1315,9 +1315,36 @@ export class SupernoteView extends FileView {
 			try {
 				if (!this.sn) return;
 				const [imageDataUrl] = await new ImageConverter().convertToImages(this.sn, [state.pageNumber]);
+				// The page can easily have scrolled back out of view while
+				// this was in flight (a worker round-trip, ~100-300ms) - on a
+				// fast scroll through a long document, most in-flight loads
+				// lose this race. Finalizing anyway would leave this page
+				// "stuck" loaded forever: eviction only re-triggers on the
+				// *next* intersection transition (see pageObserver in
+				// onOpen()), which won't happen again until the user
+				// scrolls back to this exact page. Confirmed as the actual
+				// cause of issue #154's runaway growth during a fast scroll
+				// via real profiling: "currently loaded" climbed past 30
+				// pages with zero evictions, well beyond pageObserver's
+				// rootMargin window. Resetting imageLoadPromise (not just
+				// bailing out) lets a later re-visit trigger a fresh load
+				// instead of reusing this now-settled, empty-result promise.
+				if (!state.visibleInMainView) {
+					state.imageLoadPromise = null;
+					return;
+				}
 				state.imageDataUrl = imageDataUrl;
 				const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
-				state.imageBitmap = await createImageBitmap(blob);
+				const bitmap = await createImageBitmap(blob);
+				// Re-checked again here - createImageBitmap() is itself
+				// async, another window for the same race to happen in.
+				if (!state.visibleInMainView) {
+					bitmap.close();
+					state.imageDataUrl = null;
+					state.imageLoadPromise = null;
+					return;
+				}
+				state.imageBitmap = bitmap;
 				this.drawPageImage(state, this.zoomScale);
 				this.logPageMemoryTrace('loaded', state.pageNumber, this.estimatedPageMemoryBytes(state));
 			} catch (err) {
@@ -1356,6 +1383,15 @@ export class SupernoteView extends FileView {
 				const [dataUrl] = await new ImageConverter().convertToImages(
 					this.sn, [state.pageNumber], SupernoteView.THUMBNAIL_SCALE,
 				);
+				// Same race as ensurePageImage()'s own check above - the
+				// sidebar can easily have scrolled this item back out of
+				// view while the (debounced, but still real) rasterization
+				// was in flight. See that comment for why finalizing anyway
+				// would leave this stuck loaded forever.
+				if (!state.visibleInThumbnail) {
+					state.thumbnailLoadPromise = null;
+					return;
+				}
 				state.thumbnailDataUrl = dataUrl;
 				const thumbImg = this.thumbImgs[state.pageNumber - 1];
 				if (thumbImg) thumbImg.src = dataUrl;
