@@ -174,6 +174,20 @@ function extractPagesRenderData(note: SupernoteX, pageNumbers: number[]): IRende
     };
 }
 
+// TEMPORARY, for testing issue #154's worker-memory fixes against real
+// devices - not a user-facing setting. Toggle from the DevTools console via
+// `window.supernoteDebug.disableWorkerRecycling = true`. Remove once the
+// idle-teardown/recycling trade-off is settled.
+const supernoteDebugFlags = {
+    disableWorkerRecycling: false,
+};
+declare global {
+    interface Window {
+        supernoteDebug: typeof supernoteDebugFlags;
+    }
+}
+window.supernoteDebug = supernoteDebugFlags;
+
 export class WorkerPool {
     private workers: Worker[];
     // Chained onto so a new request to a given worker waits for that
@@ -247,6 +261,7 @@ export class WorkerPool {
     // and before the next queued one runs, so there's never an in-flight
     // request on the worker being replaced.
     private recycleWorkerIfNeeded(workerIndex: number): void {
+        if (supernoteDebugFlags.disableWorkerRecycling) return;
         this.callCounts[workerIndex]++;
         if (this.callCounts[workerIndex] < WorkerPool.MAX_CALLS_PER_WORKER) return;
         this.workers[workerIndex].terminate();
@@ -356,13 +371,34 @@ export class WorkerPool {
 // actual use) so plugin activation itself doesn't spin up workers before
 // any note is opened; torn down once in SupernotePlugin.onunload().
 let sharedWorkerPool: WorkerPool | undefined;
+
+// Complements MAX_CALLS_PER_WORKER/DEFAULT_MAX_WORKERS above, which bound
+// memory *during* sustained scrolling (issue #154's original peak problem),
+// but do nothing for the pool's resting footprint once the user has simply
+// stopped interacting with a note - the 2 pooled workers just sit there,
+// each still holding whatever they'd accumulated. Tearing the whole pool
+// down after a period of inactivity reclaims that, at the cost of a small
+// worker re-init the next time it's needed. Debounced (reset on every call,
+// not just the first) so a brief pause mid-scroll - not "actually done" -
+// doesn't tear anything down; only a real idle period does.
+const WORKER_POOL_IDLE_TEARDOWN_MS = 15000;
+let workerPoolIdleTimer: number | undefined;
+
 function getSharedWorkerPool(): WorkerPool {
     if (!sharedWorkerPool) {
         sharedWorkerPool = new WorkerPool();
+        console.debug('Supernote: worker pool created');
     }
+    window.clearTimeout(workerPoolIdleTimer);
+    workerPoolIdleTimer = window.setTimeout(() => {
+        console.debug(`Supernote: worker pool idle for ${WORKER_POOL_IDLE_TEARDOWN_MS}ms, tearing down`);
+        terminateSharedWorkerPool();
+    }, WORKER_POOL_IDLE_TEARDOWN_MS);
     return sharedWorkerPool;
 }
 function terminateSharedWorkerPool(): void {
+    window.clearTimeout(workerPoolIdleTimer);
+    workerPoolIdleTimer = undefined;
     sharedWorkerPool?.terminate();
     sharedWorkerPool = undefined;
 }
