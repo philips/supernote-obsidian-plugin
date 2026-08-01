@@ -1894,6 +1894,9 @@ export class SupernoteView extends FileView {
 		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
 			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
+			if (this.settings.invertColorsWhenDark) {
+				img.addClass("supernote-invert-dark");
+			}
 			// Reserves this thumbnail's correct box size (width is already
 			// fixed at 100% of the item via CSS; aspect-ratio derives the
 			// height from that) before ensurePageImage() ever sets `src` -
