@@ -22,6 +22,8 @@ This plugin has seven main features:
 
 - ✏️ Extensible OCR: (**beta**) build a companion plugin to customize OCR pages during conversion to markdown. See [`ocr-plugins.md`](ocr-plugins.md).
 
+See [`SCREENSHOTS.md`](SCREENSHOTS.md) for a screenshot gallery of each of these features.
+
 **Video Demo**
 
 [![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=tEoW35fYVew)
