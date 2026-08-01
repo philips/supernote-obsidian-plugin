@@ -174,20 +174,6 @@ function extractPagesRenderData(note: SupernoteX, pageNumbers: number[]): IRende
     };
 }
 
-// TEMPORARY, for testing issue #154's worker-memory fixes against real
-// devices - not a user-facing setting. Toggle from the DevTools console via
-// `window.supernoteDebug.disableWorkerRecycling = true`. Remove once the
-// idle-teardown/recycling trade-off is settled.
-const supernoteDebugFlags = {
-    disableWorkerRecycling: false,
-};
-declare global {
-    interface Window {
-        supernoteDebug: typeof supernoteDebugFlags;
-    }
-}
-window.supernoteDebug = supernoteDebugFlags;
-
 export class WorkerPool {
     private workers: Worker[];
     // Chained onto so a new request to a given worker waits for that
@@ -197,48 +183,24 @@ export class WorkerPool {
     // Round-robins across every call to processChunk(), not just within one
     // processPages() call - see processChunk()'s comment.
     private nextWorker = 0;
-    // How many rasterization calls each worker (by index) has handled since
-    // it was last (re)created - see recycleWorkerIfNeeded()'s comment.
-    private callCounts: number[];
-
-    // Recycle a worker after this many calls, regardless of anything else.
-    // Confirmed via real profiling and a bisection test on issue #154: a
-    // worker's own memory footprint grows with how many pages it's ever
-    // rasterized over its lifetime (100MB+ after ~25 calls), not with
-    // anything currently held on the JS side - disabling image
-    // rasterization entirely kept total memory around 200MB even after a
-    // full scroll through a 100+ page document, while disabling the
-    // separate text-layer/pdf.js pipeline made no difference at all. Very
-    // likely image-js's own internal decode/encode buffers, or a WASM
-    // codec's linear memory, neither ever released mid-lifetime regardless
-    // of what this plugin does on the JS side. Periodically discarding and
-    // recreating the worker is the practical way to bound that when the
-    // actual growth lives inside a dependency's own native/WASM state, not
-    // anything reachable from this code.
-    //
-    // First tried at 20: confirmed the mechanism works (memory climbed to
-    // 1.2GB, then dropped to 243MB once recycling kicked in). Lowered to 8
-    // to recycle more often - but the *peak* stayed exactly 1.2GB either
-    // way (only the post-recovery resting value changed, 243MB -> 361MB).
-    // That makes sense in hindsight: this threshold only controls how long
-    // a single worker gets to keep growing before its own reset, not how
-    // many workers can be simultaneously mid-growth at once - the actual
-    // peak is reached *during* a fast scroll, while every worker in the
-    // pool is independently accumulating in parallel, well before any of
-    // them individually reaches even a low per-worker threshold. Reducing
-    // the peak itself needed a different lever entirely - see maxWorkers'
-    // own default below.
-    private static readonly MAX_CALLS_PER_WORKER = 8;
 
     // Deliberately NOT navigator.hardwareConcurrency (the previous default,
     // and the usual choice for CPU-bound parallel work) - confirmed via
-    // real profiling on issue #154 that the peak scales with how many
-    // workers can be simultaneously mid-growth during a fast scroll (see
-    // MAX_CALLS_PER_WORKER's comment for why recycling alone doesn't touch
-    // that), so *fewer* concurrent workers directly caps it, independent of
-    // the recycle threshold. A small fixed number, not tied to core count,
-    // is deliberate: more cores would otherwise mean a *higher* ceiling on
-    // a more capable device, backwards from what actually matters here.
+    // real profiling on issue #154 that a worker's own memory footprint
+    // grows with how many pages it's ever rasterized over its lifetime
+    // (likely image-js's own internal decode/encode buffers, or a WASM
+    // codec's linear memory, neither ever released mid-lifetime regardless
+    // of what this plugin does on the JS side), and that the resulting peak
+    // during a fast scroll scales with how many workers can be
+    // simultaneously mid-growth at once - so *fewer* concurrent workers
+    // directly caps it. A small fixed number, not tied to core count, is
+    // deliberate: more cores would otherwise mean a *higher* ceiling on a
+    // more capable device, backwards from what actually matters here. (A
+    // per-worker call-count recycling scheme was also tried as a
+    // complementary fix, but disabling it made no measurable difference to
+    // real-device heap usage, so it was removed rather than kept as
+    // unjustified complexity - see getSharedWorkerPool()'s idle teardown
+    // for what actually addresses the resting-footprint side of this.)
     // Trade-off: bulk operations that rasterize every page at once (a full
     // PDF/markdown-with-images export) get less parallelism and take
     // longer - acceptable, since those are rare, deliberate, one-off
@@ -252,21 +214,6 @@ export class WorkerPool {
             new Worker()
         );
         this.queues = this.workers.map(() => Promise.resolve());
-        this.callCounts = this.workers.map(() => 0);
-    }
-
-    // Terminates and replaces the worker at this index once it's handled
-    // MAX_CALLS_PER_WORKER calls - see that constant's comment. Only called
-    // from within processChunk()'s own queue chain, after a call settles
-    // and before the next queued one runs, so there's never an in-flight
-    // request on the worker being replaced.
-    private recycleWorkerIfNeeded(workerIndex: number): void {
-        if (supernoteDebugFlags.disableWorkerRecycling) return;
-        this.callCounts[workerIndex]++;
-        if (this.callCounts[workerIndex] < WorkerPool.MAX_CALLS_PER_WORKER) return;
-        this.workers[workerIndex].terminate();
-        this.workers[workerIndex] = new Worker();
-        this.callCounts[workerIndex] = 0;
     }
 
     // Picks the next worker (round-robin across every call this pool ever
@@ -294,6 +241,7 @@ export class WorkerPool {
     private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number): Promise<string[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
+        const worker = this.workers[workerIndex];
 
         // Sliced *before* ever constructing the message - see
         // extractPagesRenderData()'s comment for why sending the whole
@@ -301,10 +249,6 @@ export class WorkerPool {
         const renderableNote = extractPagesRenderData(note, pageNumbers);
 
         const send = (): Promise<string[]> => new Promise((resolve, reject) => {
-            // Looked up now, not captured at the top of processChunk() - a
-            // prior queued call on this same index may have recycled the
-            // worker (see recycleWorkerIfNeeded()) in the meantime.
-            const worker = this.workers[workerIndex];
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
                 if (e.data.type === 'error') {
                     reject(new Error(e.data.error));
@@ -332,10 +276,7 @@ export class WorkerPool {
         // of outcome - a failed request shouldn't leave the next one waiting
         // forever. Deliberately swallows the rejection here: `result` (what
         // this call actually returns) still carries it to its own caller.
-        // Also where recycling is checked - after the call settles, before
-        // whatever's next in this worker's own queue runs.
-        this.queues[workerIndex] = result.then(() => undefined, () => undefined)
-            .then(() => this.recycleWorkerIfNeeded(workerIndex));
+        this.queues[workerIndex] = result.then(() => undefined, () => undefined);
         return result;
     }
 
@@ -372,28 +313,32 @@ export class WorkerPool {
 // any note is opened; torn down once in SupernotePlugin.onunload().
 let sharedWorkerPool: WorkerPool | undefined;
 
-// Complements MAX_CALLS_PER_WORKER/DEFAULT_MAX_WORKERS above, which bound
-// memory *during* sustained scrolling (issue #154's original peak problem),
-// but do nothing for the pool's resting footprint once the user has simply
-// stopped interacting with a note - the 2 pooled workers just sit there,
-// each still holding whatever they'd accumulated. Tearing the whole pool
-// down after a period of inactivity reclaims that, at the cost of a small
-// worker re-init the next time it's needed. Debounced (reset on every call,
-// not just the first) so a brief pause mid-scroll - not "actually done" -
-// doesn't tear anything down; only a real idle period does.
-const WORKER_POOL_IDLE_TEARDOWN_MS = 15000;
+// Bounds the pool's *resting* footprint once the user has simply stopped
+// interacting with a note - DEFAULT_MAX_WORKERS above only bounds memory
+// *during* sustained scrolling (issue #154's original peak problem); left
+// alone, the 2 pooled workers just sit there afterward, still holding
+// whatever they'd accumulated. Tearing the whole pool down after a period of
+// inactivity reclaims that, at the cost of a small worker re-init the next
+// time it's needed. Confirmed via real-device testing: ~200MB reclaimed once
+// this fires.
+//
+// Only scheduled once activeWorkerCalls (below) drops back to zero, and
+// cancelled the moment a new call starts - so this can only ever fire
+// between calls, never while a rasterization is actually in flight. That
+// matters: WorkerPool.terminate() just calls Worker.terminate() outright,
+// which abandons any pending onmessage with no error - if a call's own
+// worker were torn out from under it mid-request, that call's promise would
+// never resolve or reject, hanging its caller forever.
+const WORKER_POOL_IDLE_TEARDOWN_MS = 2000;
 let workerPoolIdleTimer: number | undefined;
+let activeWorkerCalls = 0;
 
 function getSharedWorkerPool(): WorkerPool {
+    window.clearTimeout(workerPoolIdleTimer);
     if (!sharedWorkerPool) {
         sharedWorkerPool = new WorkerPool();
         console.debug('Supernote: worker pool created');
     }
-    window.clearTimeout(workerPoolIdleTimer);
-    workerPoolIdleTimer = window.setTimeout(() => {
-        console.debug(`Supernote: worker pool idle for ${WORKER_POOL_IDLE_TEARDOWN_MS}ms, tearing down`);
-        terminateSharedWorkerPool();
-    }, WORKER_POOL_IDLE_TEARDOWN_MS);
     return sharedWorkerPool;
 }
 function terminateSharedWorkerPool(): void {
@@ -401,6 +346,18 @@ function terminateSharedWorkerPool(): void {
     workerPoolIdleTimer = undefined;
     sharedWorkerPool?.terminate();
     sharedWorkerPool = undefined;
+}
+// Called once a call into the shared pool settles (see ImageConverter.
+// convertToImages()) - only actually schedules the teardown if nothing
+// else is still in flight, since activeWorkerCalls is shared across every
+// concurrent caller, not just this one.
+function scheduleIdleTeardownIfIdle(): void {
+    window.clearTimeout(workerPoolIdleTimer);
+    if (activeWorkerCalls > 0) return;
+    workerPoolIdleTimer = window.setTimeout(() => {
+        console.debug(`Supernote: worker pool idle for ${WORKER_POOL_IDLE_TEARDOWN_MS}ms, tearing down`);
+        terminateSharedWorkerPool();
+    }, WORKER_POOL_IDLE_TEARDOWN_MS);
 }
 
 export class ImageConverter {
@@ -414,7 +371,13 @@ export class ImageConverter {
     // page just to fill in a ~140px preview.
     async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        return getSharedWorkerPool().processPages(note, pages, scale);
+        activeWorkerCalls++;
+        try {
+            return await getSharedWorkerPool().processPages(note, pages, scale);
+        } finally {
+            activeWorkerCalls--;
+            scheduleIdleTeardownIfIdle();
+        }
     }
 }
 
