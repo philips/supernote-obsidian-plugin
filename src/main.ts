@@ -140,12 +140,28 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 	return processedText;
 }
 
-// Splits pageNumbers into at most `workerCount` chunks.
-function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][] {
-    const chunkSize = Math.ceil(pageNumbers.length / workerCount);
+// Caps how many pages a single worker call ever rasterizes at once -
+// deliberately NOT `pageNumbers.length / workerCount` (this function's
+// previous behavior). That scheme sized each chunk to the *pool's* size, not
+// to what's actually safe to hold in memory at once: fine while the pool
+// defaulted to navigator.hardwareConcurrency (8-9 workers, ~12 pages per
+// chunk), but once WorkerPool.DEFAULT_MAX_WORKERS was deliberately shrunk to
+// 2 to bound the *scrolling* peak (see issue #154), a full-note export of a
+// 100+ page document started handing each of those 2 workers ~50 pages in a
+// single toImage() call - confirmed via real-device testing to peak over 2GB
+// (~1GB held per worker simultaneously decoding/encoding its own ~50 pages).
+// A small fixed cap keeps each individual worker call's own peak bounded
+// regardless of pool size or document length; the existing per-worker queue
+// (see WorkerPool.processChunk()) still processes every chunk, just more of
+// them, sequentially per worker - slower for a large bulk export, but that's
+// an acceptable trade for a rare, deliberate, one-off action (see
+// DEFAULT_MAX_WORKERS' own comment for the same reasoning).
+const MAX_PAGES_PER_CHUNK = 4;
+
+function chunkPageNumbers(pageNumbers: number[]): number[][] {
     const chunks: number[][] = [];
-    for (let i = 0; i < pageNumbers.length; i += chunkSize) {
-        chunks.push(pageNumbers.slice(i, i + chunkSize));
+    for (let i = 0; i < pageNumbers.length; i += MAX_PAGES_PER_CHUNK) {
+        chunks.push(pageNumbers.slice(i, i + MAX_PAGES_PER_CHUNK));
     }
     return chunks;
 }
@@ -283,7 +299,7 @@ export class WorkerPool {
     async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number): Promise<string[]> {
         //console.time('Total processing time');
 
-        const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
+        const chunks = chunkPageNumbers(allPageNumbers);
 
         //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
 
