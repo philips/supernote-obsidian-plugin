@@ -852,16 +852,16 @@ type PageRenderState = {
 	// above: rasterized at THUMBNAIL_SCALE (a fraction of full page
 	// resolution, see ensureThumbnail()) rather than reusing the full-size
 	// image, since most of the time a visible thumbnail's page isn't also
-	// open in the main view. null until ensureThumbnail() loads it, and
-	// again after evictThumbnail() frees it.
+	// open in the main view. null until ensureThumbnail() loads it. Unlike
+	// the full-resolution image, this is never evicted once loaded - see
+	// ensureThumbnail()'s own comment for why that's cheap enough to be fine.
 	thumbnailDataUrl: string | null;
 	thumbnailLoadPromise: Promise<void> | null;
 	// Whether this page is currently within pageObserver's margin (main
 	// view), or its thumbnail item is within thumbObserver's margin
-	// (sidebar) - each drives its own independent load/evict cycle
-	// (ensurePageImage()/evictPageImage() for the former,
-	// ensureThumbnail()/evictThumbnail() for the latter), since the two no
-	// longer share a resolution/cost to begin with.
+	// (sidebar) - drives ensurePageImage()/evictPageImage() for the former,
+	// and just ensureThumbnail()'s load trigger for the latter (no thumbnail
+	// eviction - see that method).
 	visibleInMainView: boolean;
 	visibleInThumbnail: boolean;
 	// Debounces thumbObserver's load trigger (not eviction) - see its doc
@@ -923,11 +923,10 @@ export class SupernoteView extends FileView {
 	// Scoped to the thumbnail sidebar's own scroll container, not contentEl -
 	// re-created per file load in buildThumbSidebar() (thumbSidebarEl itself
 	// is a fresh element each load, and root can't be changed after an
-	// IntersectionObserver is constructed). Drives ensureThumbnail()/
-	// evictThumbnail(), entirely independent of pageObserver/
-	// ensurePageImage()/evictPageImage() above - see
-	// PageRenderState.thumbnailDataUrl for why the two no longer share a
-	// load/evict cycle.
+	// IntersectionObserver is constructed). Drives ensureThumbnail(),
+	// entirely independent of pageObserver/ensurePageImage()/
+	// evictPageImage() above - see PageRenderState.thumbnailDataUrl for why
+	// the two don't share a load/evict cycle.
 	private thumbObserver: IntersectionObserver | null = null;
 
 	private layerMode: 'image' | 'text' = 'image';
@@ -1337,8 +1336,8 @@ export class SupernoteView extends FileView {
 	// backing store, which is typically larger - up to 9x the bitmap's pixel
 	// count at capped 3x devicePixelRatio (see drawPageImage()) - since both
 	// are held in memory per loaded page. thumbnailDataUrl's own (much
-	// smaller) memory isn't included here - see ensureThumbnail()/
-	// evictThumbnail()'s own tracing below instead.
+	// smaller) memory isn't included here - see ensureThumbnail()'s own
+	// tracing below instead.
 	private estimatedPageMemoryBytes(state: PageRenderState): number {
 		if (!state.imageBitmap) return 0;
 		const bitmapBytes = state.imageBitmap.width * state.imageBitmap.height * 4;
@@ -1442,6 +1441,19 @@ export class SupernoteView extends FileView {
 	// rasterization at THUMBNAIL_SCALE - a thumbnail being visible doesn't
 	// imply the main view wants this page's full-resolution image too, and
 	// vice versa, so there's no reason for one to force-load the other.
+	//
+	// Unlike ensurePageImage(), a completed load is never evicted and is
+	// finalized unconditionally, even if the item has since scrolled back
+	// out of thumbObserver's view. A full document's worth of these (even
+	// several hundred pages) only amounts to a few MB total at
+	// THUMBNAIL_SCALE - see issue #154 - so there's no memory pressure to
+	// evict for, and keeping them around means scrolling back to an
+	// already-visited thumbnail never has to redecode or re-show a blank/
+	// broken placeholder. This also sidesteps a UI bug: an evicted <img>
+	// (src set back to '') paired with the aspect-ratio box reserved below
+	// renders as a visible "broken image" icon rather than just collapsing,
+	// since the box no longer has a legitimate reason to be empty once
+	// something has actually loaded into it.
 	private ensureThumbnail(state: PageRenderState): Promise<void> {
 		if (state.thumbnailDataUrl) return Promise.resolve();
 		if (state.thumbnailLoadPromise) return state.thumbnailLoadPromise;
@@ -1452,38 +1464,15 @@ export class SupernoteView extends FileView {
 				const [dataUrl] = await new ImageConverter().convertToImages(
 					this.sn, [state.pageNumber], SupernoteView.THUMBNAIL_SCALE,
 				);
-				// Same race as ensurePageImage()'s own check above - the
-				// sidebar can easily have scrolled this item back out of
-				// view while the (debounced, but still real) rasterization
-				// was in flight. See that comment for why finalizing anyway
-				// would leave this stuck loaded forever.
-				if (!state.visibleInThumbnail) {
-					state.thumbnailLoadPromise = null;
-					return;
-				}
 				state.thumbnailDataUrl = dataUrl;
 				const thumbImg = this.thumbImgs[state.pageNumber - 1];
 				if (thumbImg) thumbImg.src = dataUrl;
-				this.logThumbnailMemoryTrace('loaded', state.pageNumber, dataUrl.length);
+				this.logThumbnailMemoryTrace(state.pageNumber, dataUrl.length);
 			} catch (err) {
 				console.error(`Supernote: failed to load page ${state.pageNumber}'s thumbnail:`, err);
 			}
 		})();
 		return state.thumbnailLoadPromise;
-	}
-
-	// Frees a page's thumbnail once its sidebar item scrolls back out of
-	// thumbObserver's viewport (see buildThumbSidebar()) - independent of
-	// evictPageImage() below, since loading/evicting a thumbnail no longer
-	// has anything to do with the main view's own full-resolution state.
-	private evictThumbnail(state: PageRenderState): void {
-		if (!state.thumbnailDataUrl) return;
-		const dataUrlLength = state.thumbnailDataUrl.length;
-		state.thumbnailDataUrl = null;
-		state.thumbnailLoadPromise = null;
-		const thumbImg = this.thumbImgs[state.pageNumber - 1];
-		if (thumbImg) thumbImg.src = '';
-		this.logThumbnailMemoryTrace('evicted', state.pageNumber, dataUrlLength);
 	}
 
 	// Same trace as logPageMemoryTrace() above, but for the separate,
@@ -1493,13 +1482,14 @@ export class SupernoteView extends FileView {
 	// full-resolution main-view pages. Estimates bytes from the data URL's
 	// own string length (base64, ~4/3 of the underlying binary size) -
 	// there's no canvas backing store to account for here, unlike
-	// estimatedPageMemoryBytes().
-	private logThumbnailMemoryTrace(action: 'loaded' | 'evicted', pageNumber: number, dataUrlLength: number): void {
+	// estimatedPageMemoryBytes(). Thumbnails are never evicted (see
+	// ensureThumbnail()), so this only ever logs a load.
+	private logThumbnailMemoryTrace(pageNumber: number, dataUrlLength: number): void {
 		const loadedCount = this.pageStates.filter((s) => s.thumbnailDataUrl !== null).length;
 		const totalChars = this.pageStates.reduce((sum, s) => sum + (s.thumbnailDataUrl?.length ?? 0), 0);
 		const kb = (chars: number) => ((chars * 0.75) / 1024).toFixed(1);
 		console.debug(
-			`Supernote: page ${pageNumber} thumbnail ${action} (~${kb(dataUrlLength)}KB) — ` +
+			`Supernote: page ${pageNumber} thumbnail loaded (~${kb(dataUrlLength)}KB) — ` +
 			`${loadedCount} thumbnail(s) currently loaded, ~${kb(totalChars)}KB estimated total`,
 		);
 	}
@@ -1560,8 +1550,8 @@ export class SupernoteView extends FileView {
 	// call speculatively: a no-op if nothing's actually loaded (most pages,
 	// most of the time - pageObserver also reports initial non-intersection
 	// for anything outside the viewport at file-open time). Entirely
-	// independent of evictThumbnail() below - this only ever touches the
-	// main view's own state, never the thumbnail sidebar's.
+	// independent of the thumbnail sidebar's own state (see
+	// ensureThumbnail()), which this never touches.
 	private evictPageImage(state: PageRenderState): void {
 		if (!state.imageBitmap) return;
 		// Captured before freeing anything below - there'd be nothing left
@@ -1765,34 +1755,29 @@ export class SupernoteView extends FileView {
 		// only loads whichever thumbnails are actually scrolled into view in
 		// it.
 		//
-		// No rootMargin prefetch buffer here, unlike pageObserver's '100%
-		// 0px' - confirmed by testing (issue #154): opening the sidebar at
-		// all still crashed even after this observer existed, because a
-		// percentage margin is relative to the *root's own* size, and a
-		// thumbnail item (~150-250px, image + label) is much smaller than a
-		// main-view page (often near-full-viewport). The same 100% margin
-		// that only ever brings 1-2 main-view pages into range at once fit
-		// several times that many thumbnails into an equivalent pixel
-		// margin. A thumbnail popping in slightly after it's actually
-		// scrolled to is an acceptable trade-off for a navigation aid,
-		// unlike the main reading view.
-		// Loading itself (not eviction) is also debounced ~200ms - confirmed
-		// by testing (issue #154): even bounded to "only what's visible" and
-		// with the pop/reflow fixed, scrolling the sidebar *quickly* through
-		// many pages still crashed, while scrolling slowly was fine. A fast
+		// rootMargin here originally had no prefetch buffer at all, unlike
+		// pageObserver's '100% 0px': a percentage margin resolves against
+		// the *root's own* size, and a thumbnail item (~150-250px, image +
+		// label) is much smaller than a main-view page (often
+		// near-full-viewport), so the same 100% margin that only ever
+		// brings 1-2 main-view pages into range at once used to fit several
+		// times that many thumbnails into an equivalent pixel margin - at
+		// full page resolution, that was a crash risk (issue #154). Now
+		// that thumbnails rasterize at THUMBNAIL_SCALE and are never
+		// evicted (see ensureThumbnail()), that same prefetch buffer only
+		// costs a handful of small decodes, so it's brought back to load a
+		// sidebar's worth of thumbnails ahead of/behind the visible ones,
+		// for smoother scrolling.
+		//
+		// Loading is also debounced ~200ms - confirmed by testing (issue
+		// #154): even bounded to "only what's visible" and with the
+		// pop/reflow fixed, scrolling the sidebar *quickly* through many
+		// pages still crashed, while scrolling slowly was fine. A fast
 		// scroll flings most thumbnails past the viewport well within that
-		// window, each one triggering (then almost immediately evicting) a
-		// rasterization in quick succession. Debouncing means a thumbnail
-		// that's only ever transiently intersecting during a fast scroll
-		// never triggers a load at all - only ones the user actually lingers
-		// near for a moment do. Eviction isn't debounced: freeing memory
-		// promptly has no downside. Since ensureThumbnail() below now
-		// rasterizes at a small fraction of full page resolution rather than
-		// reusing the same path as the main view (see
-		// https://github.com/philips/supernote-typescript/issues/40), this
-		// debounce mostly just avoids pointless work for a fast flyby, not a
-		// crash risk on its own - kept regardless, since there's still no
-		// reason to rasterize a thumbnail nobody actually looked at.
+		// window, each one triggering a rasterization in quick succession.
+		// Debouncing means a thumbnail that's only ever transiently
+		// intersecting during a fast scroll never triggers a load at all -
+		// only ones the user actually lingers near for a moment do.
 		this.thumbObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
 				const index = this.thumbItems.indexOf(entry.target as HTMLElement);
@@ -1808,11 +1793,9 @@ export class SupernoteView extends FileView {
 						// it was scheduled.
 						if (state.visibleInThumbnail) void this.ensureThumbnail(state);
 					}, 200);
-				} else {
-					this.evictThumbnail(state);
 				}
 			}
-		}, { root: thumbSidebarEl });
+		}, { root: thumbSidebarEl, rootMargin: '100% 0px' });
 
 		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
