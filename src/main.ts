@@ -121,28 +121,34 @@ function currentHeapMB(): string {
 // accepts pre-encoded PNG bytes directly, so each batch's data URLs just
 // need decoding back to bytes (a cheap base64 decode, not a re-render)
 // before handing them to the library's own createPdfContext/addPdfPage
-// assembly.
+// assembly. `flatten: true` drops each page's alpha channel first - see
+// SupernoteWorkerMessage's doc comment (myworker.worker.ts) for why.
 //
-// Logged per batch (heap size) and around save() (heap size + wall time) -
-// added to track down a report of ~2.4GB peak and a 20+s freeze that
-// persisted even after this function stopped ever holding more than
-// PDF_ASSEMBLY_BATCH_SIZE pages' own encoded bytes at once. Two distinct
-// things could still explain that, and these logs are what tells them
-// apart: (1) ctx.pdfDoc's own internal per-page retention (unavoidable -
-// pdf-lib needs every embedded page's bytes present until save(), so heap
-// should climb roughly linearly batch over batch regardless of how the
-// pages were sourced), and (2) save() itself, which serializes the *entire*
-// document in one synchronous call pdf-lib gives no way to chunk or yield
-// during - if that one call is where most of the time and/or the peak
-// actually lands, no amount of batching the rasterization/embedding loop
-// above it would ever help, since none of that runs during save() at all.
+// Batching alone didn't fix a reported ~2.4GB peak and 20+s freeze - traced
+// (via pdf-lib's own source, src/utils/png.ts and PDFImage.embed()) to
+// pdf-lib's embedPng() itself: it always fully decodes the PNG to raw RGBA8
+// via UPNG.toRGBA8() (regardless of the source PNG's own color type) and
+// retains that raw buffer - plus a *separate* raw alpha-channel copy, for
+// any page with a non-255 alpha value, which every one of these pages has
+// by design (see the `flatten` comment) - in `ctx.pdfDoc` until save()
+// finally compresses and releases each one (its own doc comment: "we clear
+// this.embedder so the indirectly referenced image data can be garbage
+// collected"). So heap necessarily climbs roughly linearly batch over
+// batch regardless of how the pages were sourced or batched, and save()
+// itself is a single synchronous call, over the *entire* document, that
+// pdf-lib gives no way to chunk or yield during - confirmed via logging
+// (heap per batch, wall time around save()) that save() alone accounted for
+// the ~20s freeze. Dropping the alpha channel removes one whole raw
+// buffer + compression pass per page; the remaining raw-RGB retention
+// during the loop and the monolithic save() are both inherent to pdf-lib's
+// embedPng() and can't be fixed short of not using it.
 async function assemblePdfFromNote(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     const converter = new ImageConverter();
     for (let start = 0; start < sn.pages.length; start += PDF_ASSEMBLY_BATCH_SIZE) {
         const batchSize = Math.min(PDF_ASSEMBLY_BATCH_SIZE, sn.pages.length - start);
         const pageNumbers = Array.from({ length: batchSize }, (_, i) => start + i + 1);
-        const images = await converter.convertToImages(sn, pageNumbers);
+        const images = await converter.convertToImages(sn, pageNumbers, undefined, true);
         for (let i = 0; i < pageNumbers.length; i++) {
             const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
             await addPdfPage(ctx, sn.pages[pageNumbers[i] - 1], pngBytes);
@@ -336,7 +342,7 @@ export class WorkerPool {
     // request in flight) and round-robining across every call (so
     // concurrent single-page requests still spread across every worker,
     // instead of piling onto worker 0) fixes both.
-    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number): Promise<string[]> {
+    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number, flatten?: boolean): Promise<string[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
         const worker = this.workers[workerIndex];
@@ -363,7 +369,8 @@ export class WorkerPool {
             const message: SupernoteWorkerMessage = {
                 type: 'convert',
                 note: renderableNote,
-                scale
+                scale,
+                flatten,
             };
 
             worker.postMessage(message);
@@ -378,7 +385,7 @@ export class WorkerPool {
         return result;
     }
 
-    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number): Promise<string[]> {
+    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number, flatten?: boolean): Promise<string[]> {
         //console.time('Total processing time');
 
         const chunks = chunkPageNumbers(allPageNumbers);
@@ -389,7 +396,7 @@ export class WorkerPool {
         // on the same worker, or how many separate processPages() calls are
         // in flight at once (see processChunk()'s comment).
         const results = await Promise.all(
-            chunks.map((chunk) => this.processChunk(note, chunk, scale))
+            chunks.map((chunk) => this.processChunk(note, chunk, scale, flatten))
         );
 
         //console.timeEnd('Total processing time');
@@ -467,11 +474,17 @@ export class ImageConverter {
     // SupernoteView's thumbnail sidebar (see ensureThumbnail()), which
     // otherwise paid the same decode/memory cost as actually viewing the
     // page just to fill in a ~140px preview.
-    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number): Promise<string[]> {
+    //
+    // `flatten`: drops the alpha channel before encoding - see
+    // SupernoteWorkerMessage's own doc comment (myworker.worker.ts) for why
+    // that's both safe and worthwhile for a caller (PDF export, via
+    // assemblePdfFromNote()) that's never going to composite these over
+    // anything but a plain page background anyway.
+    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number, flatten?: boolean): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
         activeWorkerCalls++;
         try {
-            return await getSharedWorkerPool().processPages(note, pages, scale);
+            return await getSharedWorkerPool().processPages(note, pages, scale, flatten);
         } finally {
             activeWorkerCalls--;
             scheduleIdleTeardownIfIdle();
