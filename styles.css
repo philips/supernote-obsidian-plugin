@@ -229,18 +229,19 @@ div.supernote-canvas-wrap canvas {
 }
 
 /* justify-self/align-self (not the old flex gap/align-items on .supernote-body)
-   position this within the shared grid cell - hugging the top-right corner,
-   same spot it occupied back when it was a flex sibling. Still position:
-   sticky (unchanged from before this issue - that part already worked, it's
-   only the flex-row width-sharing that caused the bounce) so it keeps
-   tracking scroll the same way .supernote-header does. z-index lifts it
-   above pagesEl's own (unpositioned, z-index: auto) canvases so it visibly
-   overlays them rather than being painted underneath. */
+   position this within the shared grid cell - hugging the top-left corner,
+   same spot it occupied back when it was a flex sibling (it's built before
+   pagesEl in the DOM, so it landed first/left in that flex row). Still
+   position: sticky (unchanged from before this issue - that part already
+   worked, it's only the flex-row width-sharing that caused the bounce) so it
+   keeps tracking scroll the same way .supernote-header does. z-index lifts
+   it above pagesEl's own (unpositioned, z-index: auto) canvases so it
+   visibly overlays them rather than being painted underneath. */
 .supernote-thumb-sidebar {
     display: flex;
     grid-column: 1;
     grid-row: 1;
-    justify-self: end;
+    justify-self: start;
     align-self: start;
     position: sticky;
     z-index: 5;
@@ -248,7 +249,7 @@ div.supernote-canvas-wrap canvas {
     flex-shrink: 0;
     width: 140px;
     max-height: calc(100vh - 4em);
-    margin-right: 0.5em;
+    margin-left: 0.5em;
     overflow-y: auto;
     gap: 0.75em;
     padding: 0.5em;
