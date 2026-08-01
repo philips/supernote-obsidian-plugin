@@ -67,7 +67,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 // Hands a turn back to the browser between pages of pdf-lib assembly (see
-// assemblePdfFromImages()/assembleTextOnlyPdf() below) - pdf-lib's own
+// assemblePdfFromNote()/assembleTextOnlyPdf() below) - pdf-lib's own
 // embedPng()/save() etc. are `async` in name, but the actual PNG
 // decode/font-glyph-placement/serialization work they do is synchronous CPU
 // work with no real await inside it, so a tight loop over 100+ pages never
@@ -84,18 +84,42 @@ function yieldToMainThread(): Promise<void> {
     return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
-// Assembles a PDF from pages already rasterized elsewhere (the `images`
-// array from ImageConverter, used for thumbnails/save-to-vault/drag-out),
-// instead of rasterizing a second time. addPdfPage() accepts pre-encoded PNG
-// bytes directly, so this just needs to decode the data URLs already sitting
-// in memory back to bytes (a cheap base64 decode, not a re-render) and hand
-// them to the library's own createPdfContext/addPdfPage assembly.
-async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<Uint8Array> {
+// How many pages get rasterized (and briefly held as encoded PNGs on the
+// main thread) at once while assembling a PDF. Previously the *entire*
+// document was rasterized upfront into one big `images` array before PDF
+// assembly even started, so a 100-page note held all 100 pages' encoded PNGs
+// on the main thread *in addition to* whatever pdf-lib's own ctx.pdfDoc was
+// simultaneously accumulating internally for each already-embedded page
+// (unavoidable - it needs every page's bytes present until .save()
+// serializes the whole file). Confirmed via real-device testing to still
+// peak near 2GB even after capping how many pages a single Worker call
+// rasterizes at once (MAX_PAGES_PER_CHUNK, issue #154's export fix) - that
+// only bounded memory *inside* a Worker, not how many already-decoded pages
+// piled up afterward on the main thread. A small batch keeps both pooled
+// workers busy (see WorkerPool.DEFAULT_MAX_WORKERS) without ever
+// materializing more than a handful of pages' encoded bytes outside
+// pdf-lib's own document state at once.
+const PDF_ASSEMBLY_BATCH_SIZE = 8;
+
+// Rasterizes and assembles a PDF for `sn`, one small batch of pages at a
+// time (see PDF_ASSEMBLY_BATCH_SIZE) rather than rasterizing the whole
+// document upfront - see that constant's comment for why. addPdfPage()
+// accepts pre-encoded PNG bytes directly, so each batch's data URLs just
+// need decoding back to bytes (a cheap base64 decode, not a re-render)
+// before handing them to the library's own createPdfContext/addPdfPage
+// assembly.
+async function assemblePdfFromNote(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
-    for (let i = 0; i < sn.pages.length; i++) {
-        const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
-        await addPdfPage(ctx, sn.pages[i], pngBytes);
-        await yieldToMainThread();
+    const converter = new ImageConverter();
+    for (let start = 0; start < sn.pages.length; start += PDF_ASSEMBLY_BATCH_SIZE) {
+        const batchSize = Math.min(PDF_ASSEMBLY_BATCH_SIZE, sn.pages.length - start);
+        const pageNumbers = Array.from({ length: batchSize }, (_, i) => start + i + 1);
+        const images = await converter.convertToImages(sn, pageNumbers);
+        for (let i = 0; i < pageNumbers.length; i++) {
+            const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
+            await addPdfPage(ctx, sn.pages[pageNumbers[i] - 1], pngBytes);
+            await yieldToMainThread();
+        }
     }
     return ctx.pdfDoc.save();
 }
@@ -128,7 +152,7 @@ async function buildSinglePagePdf(pngDataUrl: string): Promise<Uint8Array> {
 // pdf-lib to decode, recompress, and serialize turned out to be genuinely
 // expensive (multiple seconds for a many-page or high-resolution note) for
 // bytes nothing ever looks at. Don't use this for anything the user actually
-// opens/exports as a PDF — see assemblePdfFromImages() for that.
+// opens/exports as a PDF — see assemblePdfFromNote() for that.
 async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     for (let i = 0; i < sn.pages.length; i++) {
@@ -665,8 +689,7 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(noteBuffer));
 
 		if (format === 'pdf') {
-			const images = await this.rasterizePages(sn);
-			const pdfBytes = await assemblePdfFromImages(sn, images);
+			const pdfBytes = await assemblePdfFromNote(sn);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
@@ -743,12 +766,11 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Rasterizes across the Worker pool in parallel (same pass the other
-		// export paths use), then assembles the PDF from those images rather
-		// than rendering a second time.
-		const images = await this.rasterizePages(sn);
-
-		const pdfBytes = await assemblePdfFromImages(sn, images);
+		// Rasterizes and assembles in small batches (see
+		// assemblePdfFromNote()/PDF_ASSEMBLY_BATCH_SIZE) rather than
+		// rasterizing the whole document upfront - bounds peak memory on a
+		// long note regardless of page count.
+		const pdfBytes = await assemblePdfFromNote(sn);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
@@ -1378,7 +1400,7 @@ export class SupernoteView extends FileView {
 		// page — see ensureTextLayer() — so delaying it only delays search
 		// readiness, not anything visible. Uses assembleTextOnlyPdf() (no
 		// page images at all — see its doc comment) rather than
-		// assemblePdfFromImages(), since this PDF is only ever handed to
+		// assemblePdfFromNote(), since this PDF is only ever handed to
 		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
 		this.pdfDocPromise = (async () => {
 			// Logged stage-by-stage (see issue #147): a hard native crash
