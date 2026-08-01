@@ -1312,6 +1312,16 @@ export class SupernoteView extends FileView {
 			if (this.settings.invertColorsWhenDark) {
 				canvas.addClass("supernote-invert-dark");
 			}
+			// Text mode's own page number marker - in image mode, which page
+			// is which is obvious from the image itself (and the toolbar's
+			// page-jump box); in text mode, a long note is just a scrolling
+			// column of paragraphs with nothing else distinguishing one
+			// page's text from the next (issue #171's own follow-up report).
+			// Known immediately (just this loop's index), so unlike
+			// compactTextDiv's own content below, this needs no lazy
+			// population - it's created and filled in up front for every
+			// page, same as the thumbnail sidebar's own per-page labels.
+			pageContainer.createDiv({ cls: 'supernote-compact-text-label', text: `Page ${i + 1}` });
 			// Sibling of canvasWrap, not a child - unlike textLayerDiv (which
 			// mirrors canvasWrap's exact page-pixel dimensions to sit on top of
 			// it), this needs its own independent size: a reflowed column of
