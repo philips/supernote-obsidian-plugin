@@ -594,11 +594,21 @@ class VaultWriter {
 		return new ImageConverter().convertToImages(sn);
 	}
 
+	// A 100-page PDF conversion (or similar) can take a while, so surface
+	// completion with a Notice instead of leaving the user to guess whether
+	// anything happened - clicking it jumps straight to the new file.
+	private notifyExportComplete(file: TFile) {
+		const notice = new Notice(`Created "${file.path}" - click to open`);
+		notice.noticeEl.addEventListener('click', () => {
+			void this.app.workspace.getLeaf(false).openFile(file);
+		});
+	}
+
 	// `images` (raw rasterized page data URLs, for processors) is independent
 	// of `imgs` (vault TFiles, for the embedded image links) — a markdown-only
 	// export passes `imgs: null` but can still pass `images` so registered
 	// processors run, even though no image attachment gets saved.
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null) {
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null): Promise<TFile> {
 		let content = '';
 
 		// Generate a non-conflicting filename - it has a bit of a race but that is OK
@@ -631,7 +641,7 @@ class VaultWriter {
 			}
 		}
 
-		await this.app.vault.create(filename, content);
+		return this.app.vault.create(filename, content);
 	}
 
 	// `images` is already-rasterized page data URLs (see rasterizePages()) —
@@ -655,7 +665,8 @@ class VaultWriter {
 		// processor still needs one to work with — rasterize only when
 		// there's actually a processor to hand it to.
 		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
-		await this.writeMarkdownFile(file, sn, null, images);
+		const mdFile = await this.writeMarkdownFile(file, sn, null, images);
+		this.notifyExportComplete(mdFile);
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -664,7 +675,8 @@ class VaultWriter {
 
 		const images = await this.rasterizePages(sn);
 		const imgs = await this.writeImageFiles(file.basename, images);
-		await this.writeMarkdownFile(file, sn, imgs, images);
+		const mdFile = await this.writeMarkdownFile(file, sn, imgs, images);
+		this.notifyExportComplete(mdFile);
 	}
 
 	/**
@@ -777,7 +789,8 @@ class VaultWriter {
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
-		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+		const pdfFile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+		this.notifyExportComplete(pdfFile);
 	}
 
 	// `.spd` (Supernote Atelier) equivalents of the exports above. Unlike
@@ -794,7 +807,9 @@ class VaultWriter {
 	async attachAtelierImage(file: TFile): Promise<TFile> {
 		const dataUrl = await this.rasterizeAtelier(file);
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.png`);
-		return this.app.vault.createBinary(filename, dataUrlToBuffer(dataUrl));
+		const pngFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(dataUrl));
+		this.notifyExportComplete(pngFile);
+		return pngFile;
 	}
 
 	async exportAtelierToPDF(file: TFile) {
@@ -802,7 +817,8 @@ class VaultWriter {
 		const pdfBytes = await buildSinglePagePdf(dataUrl);
 
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
-		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+		const pdfFile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+		this.notifyExportComplete(pdfFile);
 	}
 }
 
