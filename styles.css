@@ -176,20 +176,41 @@ div.supernote-canvas-wrap canvas {
     color: var(--text-muted);
 }
 
-/* Text mode: hide the raster page, make the text layer's spans (otherwise
-   transparent, for overlaying selectable text on the image) actually
-   visible in roughly their original on-page layout. */
-.supernote-mode-text .supernote-canvas-wrap canvas {
+/* Text mode: hide the raster page (and its word-positioned, invisible
+   textLayer overlay - that one stays reserved for search-highlighting over
+   the image in image mode, see runFind()) in favor of .supernote-compact-text
+   below. */
+.supernote-mode-text .supernote-canvas-wrap {
     display: none;
 }
 
-.supernote-mode-text .textLayer {
+/* Compact text mode - see SupernoteView.ensureCompactText(). Reflowed plain
+   text in normal document flow (not positioned to match the original
+   handwriting layout, unlike .textLayer above), so selection/copy behaves
+   like any other text and a sparse page doesn't leave a huge blank gap.
+   Hidden outside text mode; sized independently of the page's own pixel
+   dimensions/aspect ratio, unlike canvasWrap/textLayer. */
+.supernote-compact-text {
+    display: none;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 42em;
+    padding: 1em 1.2em;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    color: var(--text-normal);
     background: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
 }
 
-.supernote-mode-text .textLayer span {
-    color: var(--text-normal);
+.supernote-compact-text-empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.supernote-mode-text .supernote-compact-text {
+    display: block;
 }
 
 .supernote-find-bar {
