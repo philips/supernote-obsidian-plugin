@@ -221,15 +221,37 @@ export class WorkerPool {
     // anything reachable from this code.
     //
     // First tried at 20: confirmed the mechanism works (memory climbed to
-    // 1.2GB, then dropped to 243MB once recycling kicked in), but a 1.2GB
-    // peak before the first recycle landed is still far too high - it means
-    // every worker ran nearly its whole lifetime before any of them got
-    // replaced. Lowered to recycle more often, trading a bit more
-    // Worker-recreation overhead (spinning up a fresh Worker and reloading
-    // its bundled script isn't free) for a substantially lower ceiling.
+    // 1.2GB, then dropped to 243MB once recycling kicked in). Lowered to 8
+    // to recycle more often - but the *peak* stayed exactly 1.2GB either
+    // way (only the post-recovery resting value changed, 243MB -> 361MB).
+    // That makes sense in hindsight: this threshold only controls how long
+    // a single worker gets to keep growing before its own reset, not how
+    // many workers can be simultaneously mid-growth at once - the actual
+    // peak is reached *during* a fast scroll, while every worker in the
+    // pool is independently accumulating in parallel, well before any of
+    // them individually reaches even a low per-worker threshold. Reducing
+    // the peak itself needed a different lever entirely - see maxWorkers'
+    // own default below.
     private static readonly MAX_CALLS_PER_WORKER = 8;
 
-    constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
+    // Deliberately NOT navigator.hardwareConcurrency (the previous default,
+    // and the usual choice for CPU-bound parallel work) - confirmed via
+    // real profiling on issue #154 that the peak scales with how many
+    // workers can be simultaneously mid-growth during a fast scroll (see
+    // MAX_CALLS_PER_WORKER's comment for why recycling alone doesn't touch
+    // that), so *fewer* concurrent workers directly caps it, independent of
+    // the recycle threshold. A small fixed number, not tied to core count,
+    // is deliberate: more cores would otherwise mean a *higher* ceiling on
+    // a more capable device, backwards from what actually matters here.
+    // Trade-off: bulk operations that rasterize every page at once (a full
+    // PDF/markdown-with-images export) get less parallelism and take
+    // longer - acceptable, since those are rare, deliberate, one-off
+    // actions, unlike lazy per-page loading during routine scrolling,
+    // which is both the common case and the one that actually needs to be
+    // memory-safe on a constrained device.
+    private static readonly DEFAULT_MAX_WORKERS = 2;
+
+    constructor(private maxWorkers: number = WorkerPool.DEFAULT_MAX_WORKERS) {
         this.workers = Array(maxWorkers).fill(null).map(() =>
             new Worker()
         );
@@ -345,12 +367,12 @@ export class WorkerPool {
 }
 
 // Shared for the plugin's lifetime instead of every ImageConverter owning
-// (and tearing down) its own WorkerPool. Spinning up hardwareConcurrency new
-// Web Workers is real, fixed-cost work — previously paid on *every single*
-// rasterization call regardless of outcome, so opening a note repeatedly
-// paid full multi-worker startup/teardown cost every time. Created lazily
-// (on first actual use) so plugin activation itself doesn't spin up workers
-// before any note is opened; torn down once in SupernotePlugin.onunload().
+// (and tearing down) its own WorkerPool. Spinning up new Web Workers is
+// real, fixed-cost work — previously paid on *every single* rasterization
+// call regardless of outcome, so opening a note repeatedly paid full
+// multi-worker startup/teardown cost every time. Created lazily (on first
+// actual use) so plugin activation itself doesn't spin up workers before
+// any note is opened; torn down once in SupernotePlugin.onunload().
 let sharedWorkerPool: WorkerPool | undefined;
 function getSharedWorkerPool(): WorkerPool {
     if (!sharedWorkerPool) {
