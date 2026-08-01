@@ -599,7 +599,7 @@ class VaultWriter {
 	// anything happened - clicking it jumps straight to the new file.
 	private notifyExportComplete(file: TFile) {
 		const notice = new Notice(`Created "${file.path}" - click to open`);
-		notice.noticeEl.addEventListener('click', () => {
+		notice.messageEl.addEventListener('click', () => {
 			void this.app.workspace.getLeaf(false).openFile(file);
 		});
 	}
