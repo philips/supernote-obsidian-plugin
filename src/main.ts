@@ -1853,6 +1853,15 @@ export class SupernoteView extends FileView {
 		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
 		this.updateLayerModeButtons();
 
+		const exportGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
+		const exportPageBtn = exportGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Export current page as image' } });
+		setIcon(exportPageBtn, 'download');
+		exportPageBtn.addEventListener('click', () => {
+			this.exportCurrentPageAsImage().catch((err: unknown) => {
+				new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+			});
+		});
+
 		// Mod+F (registered in onOpen) already toggles the find bar, but that
 		// hotkey has no mobile equivalent — without a button, search is
 		// unreachable on touch devices. Toolbar button covers both.
@@ -2077,6 +2086,32 @@ export class SupernoteView extends FileView {
 		void this.ensureTextLayer(state);
 		this.ensureCompactText(state);
 		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
+	}
+
+	// Saves just the page currently shown in the toolbar's page indicator
+	// (kept up to date by updateCurrentPageIndicator()'s scrollspy) as a PNG
+	// attachment — the single-page equivalent of the per-page "Save image to
+	// vault" button, for when the user only wants the page they're looking
+	// at right now rather than the whole note. See issue #169. Exposed as a
+	// command (see 'export-current-page-as-image') and a toolbar button.
+	async exportCurrentPageAsImage(): Promise<void> {
+		if (this.pageStates.length === 0) return;
+		const requested = this.pageJumpInput ? Number(this.pageJumpInput.value) : 1;
+		const clamped = Math.min(this.pageStates.length, Math.max(1, Number.isFinite(requested) ? requested : 1));
+		const state = this.pageStates[clamped - 1];
+
+		// Same race as goToPage() above — force this page "visible" so
+		// ensurePageImage() doesn't discard the load if pageObserver hasn't
+		// caught up with the current scroll position yet.
+		state.visibleInMainView = true;
+		await this.ensurePageImage(state);
+		if (!state.imageDataUrl) {
+			throw new Error(`Page ${clamped} has no rendered image to export.`);
+		}
+
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${clamped}.png`);
+		await this.app.vault.createBinary(filename, dataUrlToBuffer(state.imageDataUrl));
+		new Notice(`Saved page ${clamped} as ${filename}`);
 	}
 
 	// A clicked link region's target: same-file (jump in place via goToPage)
@@ -2883,6 +2918,21 @@ export default class SupernotePlugin extends Plugin {
 				}
 
 				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-current-page-as-image',
+			name: 'Export current page as PNG attachment',
+			checkCallback: (checking: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(SupernoteView);
+				if (!view) return false;
+				if (checking) return true;
+
+				view.exportCurrentPageAsImage().catch((err: unknown) => {
+					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+				});
+				return true;
 			},
 		});
 
