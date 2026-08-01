@@ -1,8 +1,8 @@
 import { installAtPolyfill } from 'polyfills';
 installAtPolyfill();
 
-import { IRenderableNote, IPdfPage, toImage, createPdfContext, addPdfPage } from 'supernote-typescript';
-import { encodeDataURL, Image } from 'image-js';
+import { IRenderableNote, IPdfPage, toImage, createPdfContext, addPdfPage, flattenToWhite } from 'supernote-typescript';
+import { encodeDataURL } from 'image-js';
 
 export { };
 
@@ -41,27 +41,6 @@ export type SupernoteWorkerResponse =
 // on top of whatever pdf-lib's own ctx.pdfDoc is separately retaining
 // per-page regardless of batch size.
 const PDF_ASSEMBLY_BATCH_SIZE = 8;
-
-// Drops the alpha channel before embedding a page into a PDF (see 'buildPdf'
-// below), when the source has one. toImage()'s pages are RGBA - background
-// (unwritten) pixels are alpha=0 *by design*, so the on-screen <img> can sit
-// directly over Obsidian's own theme background (see the
-// invertColorsWhenDark setting) instead of a hardcoded white rectangle.
-// Their RGB channel already holds the correct plain-white-page appearance
-// regardless of alpha (background pixels are packed as opaque white with
-// alpha stripped), so it's safe to just drop the alpha channel outright
-// rather than composite it, for a page that's being flattened onto a real
-// PDF page anyway - unlike the on-screen path, which never calls this.
-// That's worth doing: pdf-lib's own PNG embedder always fully decodes to
-// raw RGBA *and* retains a whole separate raw alpha-channel copy for any
-// page with a non-255 alpha value (real background pixels: exactly this
-// note's pages) until pdfDoc.save() compresses and releases it - confirmed
-// via real-device testing to be a meaningful share of a reported ~2GB
-// peak/20s+ freeze during PDF export. A 3-channel PNG never triggers that
-// path at all.
-function flattenIfNeeded(image: Image): Image {
-    return image.alpha ? image.convertColor('RGB') : image;
-}
 
 // Uint8Array.buffer isn't safe to transfer directly when the array is a view
 // over a larger/offset buffer (not guaranteed for pdf-lib's PDFDocument.save()
@@ -116,7 +95,17 @@ self.onmessage = async (e: MessageEvent<SupernoteWorkerMessage>) => {
                 const note: IRenderableNote = { pageWidth: data.pageWidth, pageHeight: data.pageHeight, pages: batch };
                 const images = await toImage(note);
                 for (let i = 0; i < batch.length; i++) {
-                    await addPdfPage(ctx, batch[i], flattenIfNeeded(images[i]));
+                    // flattenToWhite(), not just discarding the alpha
+                    // channel: background/unwritten pixels are packed with
+                    // their color at black (see
+                    // RattaRLEDecoder.buildPackedTranslation()) specifically
+                    // *because* nothing looks at it while alpha is
+                    // respected - a naive channel-drop revealed that black
+                    // as if it were solid ink (confirmed via a real export:
+                    // a black page background with the actual strokes
+                    // barely visible on top). Actually blending each pixel
+                    // toward white by its own alpha gives the right result.
+                    await addPdfPage(ctx, batch[i], flattenToWhite(images[i]));
                 }
                 console.debug(
                     `Supernote: PDF export (worker) — embedded page ${start + batch.length}/${data.pages.length}, heap ~${currentHeapMB()}MB`,
