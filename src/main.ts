@@ -1279,6 +1279,9 @@ export class SupernoteView extends FileView {
 		this.updateThumbSidebarOffset();
 
 		const body = container.createDiv({ cls: 'supernote-body' });
+		// Issue #179: still a sibling of pagesEl inside body, but see CSS -
+		// they now share a single CSS Grid cell (stacked, not side-by-side in
+		// a flex row) so the sidebar overlays pagesEl instead of squeezing it.
 		this.buildThumbSidebar(body, sn.pages.length, sn.pageWidth, sn.pageHeight);
 
 		this.pagesEl = body.createDiv({ cls: 'supernote-pages' });
@@ -1935,16 +1938,10 @@ export class SupernoteView extends FileView {
 		this.thumbToggleBtn?.toggleClass('is-active', this.thumbnailsVisible);
 		if (this.thumbnailsVisible) this.updateThumbSidebarOffset();
 
-		// Showing/hiding the sidebar changes how much horizontal room pagesEl
-		// actually has, but that's an internal flex redistribution within
-		// contentEl, not a change to contentEl's own box — the ResizeObserver
-		// driving auto-refit on window/pane resize never fires for it. Without
-		// this, a page already fit to the full width just sits there too wide
-		// once the sidebar eats into that space, spilling into horizontal
-		// scroll instead of shrinking to match.
-		if (this.fitWidthEnabled) {
-			this.applyFitWidth();
-		}
+		// Unlike before issue #179's fix, the sidebar now overlays pagesEl
+		// (see CSS `.supernote-thumb-sidebar`) instead of sitting alongside it
+		// in the same flex row, so toggling it never changes pagesEl's own
+		// width - no fit-width re-render needed here.
 	}
 
 	// The thumbnail sidebar is sticky below the header, not at top:0 like the
@@ -2138,9 +2135,10 @@ export class SupernoteView extends FileView {
 	}
 
 	// Scales the page so its rendered width matches however much horizontal
-	// space is actually available (pagesEl's content box, which already
-	// accounts for the thumbnail sidebar if it's open) minus the page
-	// container's own margin.
+	// space is actually available (pagesEl's content box - the thumbnail
+	// sidebar overlays pagesEl rather than sharing its flex row, so this
+	// doesn't need to account for whether it's open, see
+	// applyThumbSidebarVisibility()) minus the page container's own margin.
 	private applyFitWidth() {
 		const state = this.pageStates[0];
 		if (!state || !this.pagesEl || state.nativeWidth <= 0) return;
