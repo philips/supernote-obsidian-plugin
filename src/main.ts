@@ -2110,8 +2110,23 @@ export class SupernoteView extends FileView {
 		}
 
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${clamped}.png`);
-		await this.app.vault.createBinary(filename, dataUrlToBuffer(state.imageDataUrl));
-		new Notice(`Saved page ${clamped} as ${filename}`);
+		const savedFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(state.imageDataUrl));
+
+		// Clickable so the saved PNG is one click away instead of requiring a
+		// manual hunt through the file explorer for it.
+		const message = createFragment((frag) => {
+			frag.appendText(`Saved page ${clamped} as `);
+			frag.createEl('a', { text: filename, href: '#' });
+		});
+		const notice = new Notice(message, 8000);
+		// `messageEl` (its non-deprecated replacement) needs Obsidian 1.8.7;
+		// this plugin's minAppVersion is 1.7.2, and noticeEl works the same
+		// for this purpose since 0.9.7.
+		notice.noticeEl.addEventListener('click', (evt) => {
+			evt.preventDefault();
+			void this.app.workspace.getLeaf(true).openFile(savedFile);
+			notice.hide();
+		});
 	}
 
 	// A clicked link region's target: same-file (jump in place via goToPage)
