@@ -101,6 +101,20 @@ function yieldToMainThread(): Promise<void> {
 // pdf-lib's own document state at once.
 const PDF_ASSEMBLY_BATCH_SIZE = 8;
 
+// Chrome-only, non-standard diagnostic API - undefined on other engines, so
+// this always guards its presence rather than assuming it. This file's other
+// memory traces (logPageMemoryTrace()/logThumbnailMemoryTrace()) only track
+// this plugin's *own known* allocations (canvas backing stores, data URL
+// lengths) - they have no visibility into a dependency's own internal
+// retention (e.g. pdf-lib's ctx.pdfDoc holding every embedded page). Reading
+// the JS engine's actual heap size instead catches that too, at the cost of
+// only working in Chromium (Obsidian's own runtime, so fine for debugging
+// real reports against it).
+function currentHeapMB(): string {
+    const memory = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+    return memory ? (memory.usedJSHeapSize / 1_048_576).toFixed(0) : 'unknown';
+}
+
 // Rasterizes and assembles a PDF for `sn`, one small batch of pages at a
 // time (see PDF_ASSEMBLY_BATCH_SIZE) rather than rasterizing the whole
 // document upfront - see that constant's comment for why. addPdfPage()
@@ -108,6 +122,20 @@ const PDF_ASSEMBLY_BATCH_SIZE = 8;
 // need decoding back to bytes (a cheap base64 decode, not a re-render)
 // before handing them to the library's own createPdfContext/addPdfPage
 // assembly.
+//
+// Logged per batch (heap size) and around save() (heap size + wall time) -
+// added to track down a report of ~2.4GB peak and a 20+s freeze that
+// persisted even after this function stopped ever holding more than
+// PDF_ASSEMBLY_BATCH_SIZE pages' own encoded bytes at once. Two distinct
+// things could still explain that, and these logs are what tells them
+// apart: (1) ctx.pdfDoc's own internal per-page retention (unavoidable -
+// pdf-lib needs every embedded page's bytes present until save(), so heap
+// should climb roughly linearly batch over batch regardless of how the
+// pages were sourced), and (2) save() itself, which serializes the *entire*
+// document in one synchronous call pdf-lib gives no way to chunk or yield
+// during - if that one call is where most of the time and/or the peak
+// actually lands, no amount of batching the rasterization/embedding loop
+// above it would ever help, since none of that runs during save() at all.
 async function assemblePdfFromNote(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     const converter = new ImageConverter();
@@ -120,8 +148,18 @@ async function assemblePdfFromNote(sn: SupernoteX): Promise<Uint8Array> {
             await addPdfPage(ctx, sn.pages[pageNumbers[i] - 1], pngBytes);
             await yieldToMainThread();
         }
+        console.debug(
+            `Supernote: PDF export — embedded page ${start + batchSize}/${sn.pages.length}, heap ~${currentHeapMB()}MB`,
+        );
     }
-    return ctx.pdfDoc.save();
+    console.debug(`Supernote: PDF export — calling pdfDoc.save(), heap ~${currentHeapMB()}MB`);
+    const saveStart = performance.now();
+    const bytes = await ctx.pdfDoc.save();
+    console.debug(
+        `Supernote: PDF export — save() done in ${(performance.now() - saveStart).toFixed(0)}ms, ` +
+        `${(bytes.length / 1_048_576).toFixed(1)}MB output, heap ~${currentHeapMB()}MB`,
+    );
+    return bytes;
 }
 
 // Wraps a single already-rasterized PNG (as a data URL) in a one-page PDF,
