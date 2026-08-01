@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addPdfPage, addTextOnlyPdfPage } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addTextOnlyPdfPage, extractPageRenderData, extractPdfPageData, IRenderableNote } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -66,19 +66,66 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-// Assembles a PDF from pages already rasterized elsewhere (the `images`
-// array from ImageConverter, used for thumbnails/save-to-vault/drag-out),
-// instead of rasterizing a second time. addPdfPage() accepts pre-encoded PNG
-// bytes directly, so this just needs to decode the data URLs already sitting
-// in memory back to bytes (a cheap base64 decode, not a re-render) and hand
-// them to the library's own createPdfContext/addPdfPage assembly.
-async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<Uint8Array> {
-    const ctx = await createPdfContext();
-    for (let i = 0; i < sn.pages.length; i++) {
-        const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
-        await addPdfPage(ctx, sn.pages[i], pngBytes);
+// Hands a turn back to the browser between pages of pdf-lib assembly (see
+// assembleTextOnlyPdf() below) - pdf-lib's own embedPng()/save() etc. are
+// `async` in name, but the actual PNG decode/font-glyph-placement/
+// serialization work they do is synchronous CPU work with no real await
+// inside it, so a tight loop over 100+ pages never naturally yields to the
+// event loop and reads as the whole app locking up (no repaint, no input
+// handled) for as long as the loop runs. Confirmed on a real 100-page note's
+// PDF export (back when this ran on the main thread too - see
+// buildPdfInWorker() for why that moved into a Worker instead) that this
+// hung the main thread for ~30s. setTimeout(0) rather than
+// requestAnimationFrame so this still yields promptly even if the window
+// isn't currently focused/visible (rAF is throttled/suspended in the
+// background, and there's no reason this should stall just because the
+// user switched away while it ran).
+function yieldToMainThread(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+// Rasterizes and assembles the *entire* PDF for `sn` inside a dedicated
+// Worker (see the 'buildPdf' message in myworker.worker.ts) rather than on
+// the main thread - pdf-lib's own embedPng() is genuinely expensive, and
+// entirely inherent to it: confirmed via real-device testing (see
+// myworker.worker.ts's own doc comment on 'buildPdf' for the full trail)
+// that it still peaks ~1.7GB and takes 10+ seconds for a 100-page note even
+// after dropping each page's alpha channel, since it always fully decodes
+// every embedded PNG to raw pixels and retains that until pdfDoc.save().
+// None of that is fixable short of not using pdf-lib, but running it inside
+// a Worker at least means Obsidian's own UI thread never carries any of that
+// cost, regardless of how large it is.
+//
+// A *dedicated* Worker, not the shared pool (getSharedWorkerPool()) used for
+// on-screen rendering: this can run for many seconds, and tying up one of
+// the pool's 2 workers for that whole time would stall on-screen page/
+// thumbnail loading for just as long, since only one worker would remain to
+// serve them - a large export shouldn't compete with actually reading the
+// note. Terminated once done regardless of outcome; this is a one-shot,
+// long-running task, not something worth keeping warm for reuse.
+async function buildPdfInWorker(sn: SupernoteX): Promise<Uint8Array> {
+    const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
+    const pages = pageNumbers.map((n) => extractPdfPageData(sn, n).pages[0]);
+
+    const worker = new Worker();
+    try {
+        return await new Promise<Uint8Array>((resolve, reject) => {
+            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+                if (e.data.type === 'error') reject(new Error(e.data.error));
+                else if (e.data.type === 'pdfResult') resolve(e.data.pdfBytes);
+            };
+            worker.onerror = (error) => reject(new Error(error.message));
+            const message: SupernoteWorkerMessage = {
+                type: 'buildPdf',
+                pageWidth: sn.pageWidth,
+                pageHeight: sn.pageHeight,
+                pages,
+            };
+            worker.postMessage(message);
+        });
+    } finally {
+        worker.terminate();
     }
-    return ctx.pdfDoc.save();
 }
 
 // Wraps a single already-rasterized PNG (as a data URL) in a one-page PDF,
@@ -109,7 +156,7 @@ async function buildSinglePagePdf(pngDataUrl: string): Promise<Uint8Array> {
 // pdf-lib to decode, recompress, and serialize turned out to be genuinely
 // expensive (multiple seconds for a many-page or high-resolution note) for
 // bytes nothing ever looks at. Don't use this for anything the user actually
-// opens/exports as a PDF — see assemblePdfFromImages() for that.
+// opens/exports as a PDF — see buildPdfInWorker() for that.
 async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
     const ctx = await createPdfContext();
     for (let i = 0; i < sn.pages.length; i++) {
@@ -120,6 +167,7 @@ async function assembleTextOnlyPdf(sn: SupernoteX): Promise<Uint8Array> {
         // recognition data rather than "somewhere in this note".
         console.debug(`Supernote: text-only PDF — page ${i + 1}/${sn.pages.length}`);
         await addTextOnlyPdfPage(ctx, sn.pages[i], sn.pageWidth, sn.pageHeight);
+        await yieldToMainThread();
     }
     console.debug(`Supernote: text-only PDF — saving (${sn.pages.length} page(s))`);
     return ctx.pdfDoc.save();
@@ -140,14 +188,54 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 	return processedText;
 }
 
-// Splits pageNumbers into at most `workerCount` chunks.
-function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][] {
-    const chunkSize = Math.ceil(pageNumbers.length / workerCount);
+// Caps how many pages a single worker call ever rasterizes at once -
+// deliberately NOT `pageNumbers.length / workerCount` (this function's
+// previous behavior). That scheme sized each chunk to the *pool's* size, not
+// to what's actually safe to hold in memory at once: fine while the pool
+// defaulted to navigator.hardwareConcurrency (8-9 workers, ~12 pages per
+// chunk), but once WorkerPool.DEFAULT_MAX_WORKERS was deliberately shrunk to
+// 2 to bound the *scrolling* peak (see issue #154), a full-note export of a
+// 100+ page document started handing each of those 2 workers ~50 pages in a
+// single toImage() call - confirmed via real-device testing to peak over 2GB
+// (~1GB held per worker simultaneously decoding/encoding its own ~50 pages).
+// A small fixed cap keeps each individual worker call's own peak bounded
+// regardless of pool size or document length; the existing per-worker queue
+// (see WorkerPool.processChunk()) still processes every chunk, just more of
+// them, sequentially per worker - slower for a large bulk export, but that's
+// an acceptable trade for a rare, deliberate, one-off action (see
+// DEFAULT_MAX_WORKERS' own comment for the same reasoning).
+const MAX_PAGES_PER_CHUNK = 4;
+
+function chunkPageNumbers(pageNumbers: number[]): number[][] {
     const chunks: number[][] = [];
-    for (let i = 0; i < pageNumbers.length; i += chunkSize) {
-        chunks.push(pageNumbers.slice(i, i + chunkSize));
+    for (let i = 0; i < pageNumbers.length; i += MAX_PAGES_PER_CHUNK) {
+        chunks.push(pageNumbers.slice(i, i + MAX_PAGES_PER_CHUNK));
     }
     return chunks;
+}
+
+// Slices out only the requested pages, in the given order, into a
+// structured-clone-safe IRenderableNote - see supernote-typescript's
+// extractPageRenderData() (which this wraps to cover more than one page at
+// once) for exactly why this matters: postMessage-ing the *whole* parsed
+// SupernoteX to a Worker - which is what this replaced - clones every
+// page's raw layer data across, not just the page(s) actually requested.
+// WorkerPool round-robins across every worker it has (see processChunk()),
+// so as a user scrolls through a long document, every worker eventually
+// receives - and holds, in its own separate V8 heap, invisible to the main
+// thread's own heap snapshots/profiling - a full copy of the entire
+// document, just to render one page at a time. Confirmed via real
+// profiling on issue #154: navigator.hardwareConcurrency (8, on the
+// reporting device) separate ~100MB Worker heaps, matching a ~900MB total
+// that neither DPR capping nor zoom-aware rasterization could ever have
+// addressed, since neither touches what gets sent to a Worker in the first
+// place.
+function extractPagesRenderData(note: SupernoteX, pageNumbers: number[]): IRenderableNote {
+    return {
+        pageWidth: note.pageWidth,
+        pageHeight: note.pageHeight,
+        pages: pageNumbers.map((n) => extractPageRenderData(note, n).pages[0]),
+    };
 }
 
 export class WorkerPool {
@@ -160,7 +248,32 @@ export class WorkerPool {
     // processPages() call - see processChunk()'s comment.
     private nextWorker = 0;
 
-    constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
+    // Deliberately NOT navigator.hardwareConcurrency (the previous default,
+    // and the usual choice for CPU-bound parallel work) - confirmed via
+    // real profiling on issue #154 that a worker's own memory footprint
+    // grows with how many pages it's ever rasterized over its lifetime
+    // (likely image-js's own internal decode/encode buffers, or a WASM
+    // codec's linear memory, neither ever released mid-lifetime regardless
+    // of what this plugin does on the JS side), and that the resulting peak
+    // during a fast scroll scales with how many workers can be
+    // simultaneously mid-growth at once - so *fewer* concurrent workers
+    // directly caps it. A small fixed number, not tied to core count, is
+    // deliberate: more cores would otherwise mean a *higher* ceiling on a
+    // more capable device, backwards from what actually matters here. (A
+    // per-worker call-count recycling scheme was also tried as a
+    // complementary fix, but disabling it made no measurable difference to
+    // real-device heap usage, so it was removed rather than kept as
+    // unjustified complexity - see getSharedWorkerPool()'s idle teardown
+    // for what actually addresses the resting-footprint side of this.)
+    // Trade-off: bulk operations that rasterize every page at once (a full
+    // PDF/markdown-with-images export) get less parallelism and take
+    // longer - acceptable, since those are rare, deliberate, one-off
+    // actions, unlike lazy per-page loading during routine scrolling,
+    // which is both the common case and the one that actually needs to be
+    // memory-safe on a constrained device.
+    private static readonly DEFAULT_MAX_WORKERS = 2;
+
+    constructor(private maxWorkers: number = WorkerPool.DEFAULT_MAX_WORKERS) {
         this.workers = Array(maxWorkers).fill(null).map(() =>
             new Worker()
         );
@@ -194,6 +307,11 @@ export class WorkerPool {
         this.nextWorker++;
         const worker = this.workers[workerIndex];
 
+        // Sliced *before* ever constructing the message - see
+        // extractPagesRenderData()'s comment for why sending the whole
+        // `note` here was a real, serious memory bug (issue #154).
+        const renderableNote = extractPagesRenderData(note, pageNumbers);
+
         const send = (): Promise<string[]> => new Promise((resolve, reject) => {
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
                 if (e.data.type === 'error') {
@@ -210,9 +328,8 @@ export class WorkerPool {
 
             const message: SupernoteWorkerMessage = {
                 type: 'convert',
-                note,
-                pageNumbers,
-                scale
+                note: renderableNote,
+                scale,
             };
 
             worker.postMessage(message);
@@ -230,7 +347,7 @@ export class WorkerPool {
     async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number): Promise<string[]> {
         //console.time('Total processing time');
 
-        const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
+        const chunks = chunkPageNumbers(allPageNumbers);
 
         //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
 
@@ -252,22 +369,59 @@ export class WorkerPool {
 }
 
 // Shared for the plugin's lifetime instead of every ImageConverter owning
-// (and tearing down) its own WorkerPool. Spinning up hardwareConcurrency new
-// Web Workers is real, fixed-cost work — previously paid on *every single*
-// rasterization call regardless of outcome, so opening a note repeatedly
-// paid full multi-worker startup/teardown cost every time. Created lazily
-// (on first actual use) so plugin activation itself doesn't spin up workers
-// before any note is opened; torn down once in SupernotePlugin.onunload().
+// (and tearing down) its own WorkerPool. Spinning up new Web Workers is
+// real, fixed-cost work — previously paid on *every single* rasterization
+// call regardless of outcome, so opening a note repeatedly paid full
+// multi-worker startup/teardown cost every time. Created lazily (on first
+// actual use) so plugin activation itself doesn't spin up workers before
+// any note is opened; torn down once in SupernotePlugin.onunload().
 let sharedWorkerPool: WorkerPool | undefined;
+
+// Bounds the pool's *resting* footprint once the user has simply stopped
+// interacting with a note - DEFAULT_MAX_WORKERS above only bounds memory
+// *during* sustained scrolling (issue #154's original peak problem); left
+// alone, the 2 pooled workers just sit there afterward, still holding
+// whatever they'd accumulated. Tearing the whole pool down after a period of
+// inactivity reclaims that, at the cost of a small worker re-init the next
+// time it's needed. Confirmed via real-device testing: ~200MB reclaimed once
+// this fires.
+//
+// Only scheduled once activeWorkerCalls (below) drops back to zero, and
+// cancelled the moment a new call starts - so this can only ever fire
+// between calls, never while a rasterization is actually in flight. That
+// matters: WorkerPool.terminate() just calls Worker.terminate() outright,
+// which abandons any pending onmessage with no error - if a call's own
+// worker were torn out from under it mid-request, that call's promise would
+// never resolve or reject, hanging its caller forever.
+const WORKER_POOL_IDLE_TEARDOWN_MS = 2000;
+let workerPoolIdleTimer: number | undefined;
+let activeWorkerCalls = 0;
+
 function getSharedWorkerPool(): WorkerPool {
+    window.clearTimeout(workerPoolIdleTimer);
     if (!sharedWorkerPool) {
         sharedWorkerPool = new WorkerPool();
+        console.debug('Supernote: worker pool created');
     }
     return sharedWorkerPool;
 }
 function terminateSharedWorkerPool(): void {
+    window.clearTimeout(workerPoolIdleTimer);
+    workerPoolIdleTimer = undefined;
     sharedWorkerPool?.terminate();
     sharedWorkerPool = undefined;
+}
+// Called once a call into the shared pool settles (see ImageConverter.
+// convertToImages()) - only actually schedules the teardown if nothing
+// else is still in flight, since activeWorkerCalls is shared across every
+// concurrent caller, not just this one.
+function scheduleIdleTeardownIfIdle(): void {
+    window.clearTimeout(workerPoolIdleTimer);
+    if (activeWorkerCalls > 0) return;
+    workerPoolIdleTimer = window.setTimeout(() => {
+        console.debug(`Supernote: worker pool idle for ${WORKER_POOL_IDLE_TEARDOWN_MS}ms, tearing down`);
+        terminateSharedWorkerPool();
+    }, WORKER_POOL_IDLE_TEARDOWN_MS);
 }
 
 export class ImageConverter {
@@ -281,7 +435,13 @@ export class ImageConverter {
     // page just to fill in a ~140px preview.
     async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        return getSharedWorkerPool().processPages(note, pages, scale);
+        activeWorkerCalls++;
+        try {
+            return await getSharedWorkerPool().processPages(note, pages, scale);
+        } finally {
+            activeWorkerCalls--;
+            scheduleIdleTeardownIfIdle();
+        }
     }
 }
 
@@ -533,8 +693,7 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(noteBuffer));
 
 		if (format === 'pdf') {
-			const images = await this.rasterizePages(sn);
-			const pdfBytes = await assemblePdfFromImages(sn, images);
+			const pdfBytes = await buildPdfInWorker(sn);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
@@ -611,12 +770,10 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Rasterizes across the Worker pool in parallel (same pass the other
-		// export paths use), then assembles the PDF from those images rather
-		// than rendering a second time.
-		const images = await this.rasterizePages(sn);
-
-		const pdfBytes = await assemblePdfFromImages(sn, images);
+		// Runs entirely inside a dedicated Worker (see buildPdfInWorker()) so
+		// pdf-lib's own considerable memory/CPU cost never blocks Obsidian's
+		// UI thread, regardless of note length.
+		const pdfBytes = await buildPdfInWorker(sn);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
@@ -671,6 +828,14 @@ interface PdfJsPage {
 
 interface PdfJsDocument {
 	getPage(pageNumber: number): Promise<PdfJsPage>;
+	// Releases this document's resources in pdf.js's own internal Worker -
+	// see onLoadFile()'s call to this before replacing pdfDocPromise with a
+	// new file's document. Without it, pdf.js's worker keeps every
+	// previously-opened note's parsed PDF resident for as long as the
+	// Supernote view itself stays open, accumulating across every note
+	// switch in a session (confirmed via a real Task Manager reading on
+	// issue #154: pdf.worker.min.mjs alone was 82.4MB).
+	destroy(): Promise<void>;
 }
 
 interface PdfJsTextLayer {
@@ -747,21 +912,24 @@ type PageRenderState = {
 	// above: rasterized at THUMBNAIL_SCALE (a fraction of full page
 	// resolution, see ensureThumbnail()) rather than reusing the full-size
 	// image, since most of the time a visible thumbnail's page isn't also
-	// open in the main view. null until ensureThumbnail() loads it, and
-	// again after evictThumbnail() frees it.
+	// open in the main view. null until ensureThumbnail() loads it. Unlike
+	// the full-resolution image, this is never evicted once loaded - see
+	// ensureThumbnail()'s own comment for why that's cheap enough to be fine.
 	thumbnailDataUrl: string | null;
 	thumbnailLoadPromise: Promise<void> | null;
 	// Whether this page is currently within pageObserver's margin (main
 	// view), or its thumbnail item is within thumbObserver's margin
-	// (sidebar) - each drives its own independent load/evict cycle
-	// (ensurePageImage()/evictPageImage() for the former,
-	// ensureThumbnail()/evictThumbnail() for the latter), since the two no
-	// longer share a resolution/cost to begin with.
+	// (sidebar) - drives ensurePageImage()/evictPageImage() for the former,
+	// and just ensureThumbnail()'s load trigger for the latter (no thumbnail
+	// eviction - see that method).
 	visibleInMainView: boolean;
 	visibleInThumbnail: boolean;
 	// Debounces thumbObserver's load trigger (not eviction) - see its doc
 	// comment in buildThumbSidebar().
 	thumbLoadDebounceTimer: number | undefined;
+	// Same idea, but for pageObserver's main-view load trigger - see its doc
+	// comment in onOpen().
+	pageLoadDebounceTimer: number | undefined;
 	// Guards ensureTextLayer()'s one-time (per page) work.
 	textLayerLoaded: boolean;
 	text: string;
@@ -818,11 +986,10 @@ export class SupernoteView extends FileView {
 	// Scoped to the thumbnail sidebar's own scroll container, not contentEl -
 	// re-created per file load in buildThumbSidebar() (thumbSidebarEl itself
 	// is a fresh element each load, and root can't be changed after an
-	// IntersectionObserver is constructed). Drives ensureThumbnail()/
-	// evictThumbnail(), entirely independent of pageObserver/
-	// ensurePageImage()/evictPageImage() above - see
-	// PageRenderState.thumbnailDataUrl for why the two no longer share a
-	// load/evict cycle.
+	// IntersectionObserver is constructed). Drives ensureThumbnail(),
+	// entirely independent of pageObserver/ensurePageImage()/
+	// evictPageImage() above - see PageRenderState.thumbnailDataUrl for why
+	// the two don't share a load/evict cycle.
 	private thumbObserver: IntersectionObserver | null = null;
 
 	private layerMode: 'image' | 'text' = 'image';
@@ -983,6 +1150,26 @@ export class SupernoteView extends FileView {
 		// canvas backing store) and losing search state/highlights on
 		// scroll-past would be a worse trade for a small saving.
 		//
+		// Loading (not eviction) is debounced ~150ms, the same fix and for
+		// the same reason as thumbObserver's own debounce (see
+		// buildThumbSidebar()): a long-distance `scrollIntoView({behavior:
+		// 'smooth'})` jump - e.g. stepFind()'s search-result navigation,
+		// which can jump the full length of a 100+ page document - animates
+		// through every intermediate page in a fixed, short duration
+		// regardless of distance, so each one transitions into and back out
+		// of this 100%-margin window within a matter of milliseconds. Without
+		// debouncing, every one of those pages triggered its own full
+		// decode/evict round trip, queued behind each other on the (small,
+		// deliberately-sized-down - see WorkerPool.DEFAULT_MAX_WORKERS)
+		// shared worker pool - confirmed by testing: jumping from page 4 to
+		// page 102 via search visibly rasterized dozens of pages nobody ever
+		// actually saw, taking many seconds before the actual destination
+		// page finally loaded. A deliberate single-page jump (goToPage() -
+		// the page-jump box, thumbnail clicks, `#page=N` links) primes its
+		// destination directly instead of going through this debounce at
+		// all, so it isn't slowed down by it; stepFind() does the same (see
+		// highlightCurrentMatch()) for the same reason.
+		//
 		// Independent of thumbObserver (see buildThumbSidebar()) - each page
 		// now has its own separate full-resolution (this) and thumbnail
 		// (that one) load/evict cycle, rather than sharing one, since a
@@ -994,9 +1181,16 @@ export class SupernoteView extends FileView {
 				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
 				if (!state) continue;
 				state.visibleInMainView = entry.isIntersecting;
+				window.clearTimeout(state.pageLoadDebounceTimer);
 				if (entry.isIntersecting) {
-					void this.ensurePageImage(state);
-					void this.ensureTextLayer(state);
+					state.pageLoadDebounceTimer = window.setTimeout(() => {
+						// Re-checks rather than assuming still true - the
+						// timer firing doesn't mean nothing happened since
+						// it was scheduled.
+						if (!state.visibleInMainView) return;
+						void this.ensurePageImage(state);
+						void this.ensureTextLayer(state);
+					}, 150);
 				} else {
 					this.evictPageImage(state);
 				}
@@ -1008,6 +1202,19 @@ export class SupernoteView extends FileView {
 		const container = this.contentEl;
 		container.empty();
 
+		// Releases the *previous* file's pdf.js document, if any, in pdf.js's
+		// own internal Worker - see PdfJsDocument.destroy()'s comment for why
+		// this matters (confirmed via a real Task Manager reading on issue
+		// #154: pdf.worker.min.mjs alone was 82.4MB, apparently never
+		// released across note switches). Fire-and-forget: doesn't block
+		// this file's own loading on the previous one's teardown, and the
+		// previous promise may still be in-flight (a fast note switch) -
+		// .then() waits for whatever state it's actually in first. Silently
+		// swallows a rejection - a note that failed to build a PDF in the
+		// first place has nothing to destroy, and either way there's
+		// nothing useful to do about it here.
+		this.pdfDocPromise?.then((doc) => doc.destroy()).catch(() => { /* nothing to clean up */ });
+
 		window.clearTimeout(this.zoomDebounceTimer);
 		this.pageObserver?.disconnect();
 		this.thumbObserver?.disconnect();
@@ -1015,7 +1222,10 @@ export class SupernoteView extends FileView {
 		// timers already scheduled by earlier ones - without this, one could
 		// still fire after the file switch and redundantly load a page from
 		// a note the user has already navigated away from.
-		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
+		for (const state of this.pageStates) {
+			window.clearTimeout(state.thumbLoadDebounceTimer);
+			window.clearTimeout(state.pageLoadDebounceTimer);
+		}
 		this.pageStates = [];
 		this.zoomScale = 1;
 		this.renderedZoomScale = 1;
@@ -1113,6 +1323,7 @@ export class SupernoteView extends FileView {
 				visibleInMainView: false,
 				visibleInThumbnail: false,
 				thumbLoadDebounceTimer: undefined,
+				pageLoadDebounceTimer: undefined,
 				textLayerLoaded: false,
 				text: '',
 				spans: [],
@@ -1192,7 +1403,7 @@ export class SupernoteView extends FileView {
 		// page — see ensureTextLayer() — so delaying it only delays search
 		// readiness, not anything visible. Uses assembleTextOnlyPdf() (no
 		// page images at all — see its doc comment) rather than
-		// assemblePdfFromImages(), since this PDF is only ever handed to
+		// buildPdfInWorker(), since this PDF is only ever handed to
 		// pdf.js for getTextContent()/getViewport(), never rendered/shown.
 		this.pdfDocPromise = (async () => {
 			// Logged stage-by-stage (see issue #147): a hard native crash
@@ -1212,6 +1423,44 @@ export class SupernoteView extends FileView {
 		})();
 	}
 
+	// Best-effort memory estimate for logPageMemoryTrace() below - not used
+	// for any actual decision, just to give a sense of scale when
+	// investigating a suspected memory issue (see issue #154). Accounts for
+	// both the decoded ImageBitmap (native page resolution) and the canvas
+	// backing store, which is typically larger - up to 9x the bitmap's pixel
+	// count at capped 3x devicePixelRatio (see drawPageImage()) - since both
+	// are held in memory per loaded page. thumbnailDataUrl's own (much
+	// smaller) memory isn't included here - see ensureThumbnail()'s own
+	// tracing below instead.
+	private estimatedPageMemoryBytes(state: PageRenderState): number {
+		if (!state.imageBitmap) return 0;
+		const bitmapBytes = state.imageBitmap.width * state.imageBitmap.height * 4;
+		const canvasBytes = state.canvas.width * state.canvas.height * 4;
+		return bitmapBytes + canvasBytes;
+	}
+
+	// Traces every full-resolution load/evict with a running total across
+	// every currently-loaded page - added to make a suspected leak (issue
+	// #154: scrolling through all 100 pages of a long document still
+	// eventually crashes, even after #155/#156/#158/#159/#162's fixes)
+	// directly observable. Watch whether "currently loaded" keeps climbing
+	// over a long scroll (something isn't actually being freed) or stays
+	// roughly bounded (eviction is working and the cause is something else
+	// entirely - see #166's fix for what that turned out to be: the whole
+	// note being cloned to a Worker on every lazy load, not a JS-visible
+	// leak at all). Easiest to correlate on desktop, where DevTools' own
+	// Memory tab (or, given #166's finding, a Worker-specific heap
+	// snapshot) can be cross-checked against these numbers directly.
+	private logPageMemoryTrace(action: 'loaded' | 'evicted', pageNumber: number, pageBytes: number): void {
+		const loadedStates = this.pageStates.filter((s) => s.imageBitmap !== null);
+		const totalBytes = loadedStates.reduce((sum, s) => sum + this.estimatedPageMemoryBytes(s), 0);
+		const mb = (bytes: number) => (bytes / 1_048_576).toFixed(1);
+		console.debug(
+			`Supernote: page ${pageNumber} ${action} (~${mb(pageBytes)}MB) — ` +
+			`${loadedStates.length} page(s) currently loaded, ~${mb(totalBytes)}MB estimated total`,
+		);
+	}
+
 	// Loads this page's own full-resolution rasterized image if it hasn't
 	// been already — triggered by pageObserver as a page nears the
 	// viewport, or forced immediately by page-jump/save-image so those
@@ -1228,10 +1477,38 @@ export class SupernoteView extends FileView {
 			try {
 				if (!this.sn) return;
 				const [imageDataUrl] = await new ImageConverter().convertToImages(this.sn, [state.pageNumber]);
+				// The page can easily have scrolled back out of view while
+				// this was in flight (a worker round-trip, ~100-300ms) - on a
+				// fast scroll through a long document, most in-flight loads
+				// lose this race. Finalizing anyway would leave this page
+				// "stuck" loaded forever: eviction only re-triggers on the
+				// *next* intersection transition (see pageObserver in
+				// onOpen()), which won't happen again until the user
+				// scrolls back to this exact page. Confirmed as the actual
+				// cause of issue #154's runaway growth during a fast scroll
+				// via real profiling: "currently loaded" climbed past 30
+				// pages with zero evictions, well beyond pageObserver's
+				// rootMargin window. Resetting imageLoadPromise (not just
+				// bailing out) lets a later re-visit trigger a fresh load
+				// instead of reusing this now-settled, empty-result promise.
+				if (!state.visibleInMainView) {
+					state.imageLoadPromise = null;
+					return;
+				}
 				state.imageDataUrl = imageDataUrl;
 				const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
-				state.imageBitmap = await createImageBitmap(blob);
+				const bitmap = await createImageBitmap(blob);
+				// Re-checked again here - createImageBitmap() is itself
+				// async, another window for the same race to happen in.
+				if (!state.visibleInMainView) {
+					bitmap.close();
+					state.imageDataUrl = null;
+					state.imageLoadPromise = null;
+					return;
+				}
+				state.imageBitmap = bitmap;
 				this.drawPageImage(state, this.zoomScale);
+				this.logPageMemoryTrace('loaded', state.pageNumber, this.estimatedPageMemoryBytes(state));
 			} catch (err) {
 				console.error(`Supernote: failed to load page ${state.pageNumber}'s image:`, err);
 			}
@@ -1258,6 +1535,19 @@ export class SupernoteView extends FileView {
 	// rasterization at THUMBNAIL_SCALE - a thumbnail being visible doesn't
 	// imply the main view wants this page's full-resolution image too, and
 	// vice versa, so there's no reason for one to force-load the other.
+	//
+	// Unlike ensurePageImage(), a completed load is never evicted and is
+	// finalized unconditionally, even if the item has since scrolled back
+	// out of thumbObserver's view. A full document's worth of these (even
+	// several hundred pages) only amounts to a few MB total at
+	// THUMBNAIL_SCALE - see issue #154 - so there's no memory pressure to
+	// evict for, and keeping them around means scrolling back to an
+	// already-visited thumbnail never has to redecode or re-show a blank/
+	// broken placeholder. This also sidesteps a UI bug: an evicted <img>
+	// (src set back to '') paired with the aspect-ratio box reserved below
+	// renders as a visible "broken image" icon rather than just collapsing,
+	// since the box no longer has a legitimate reason to be empty once
+	// something has actually loaded into it.
 	private ensureThumbnail(state: PageRenderState): Promise<void> {
 		if (state.thumbnailDataUrl) return Promise.resolve();
 		if (state.thumbnailLoadPromise) return state.thumbnailLoadPromise;
@@ -1271,6 +1561,7 @@ export class SupernoteView extends FileView {
 				state.thumbnailDataUrl = dataUrl;
 				const thumbImg = this.thumbImgs[state.pageNumber - 1];
 				if (thumbImg) thumbImg.src = dataUrl;
+				this.logThumbnailMemoryTrace(state.pageNumber, dataUrl.length);
 			} catch (err) {
 				console.error(`Supernote: failed to load page ${state.pageNumber}'s thumbnail:`, err);
 			}
@@ -1278,16 +1569,23 @@ export class SupernoteView extends FileView {
 		return state.thumbnailLoadPromise;
 	}
 
-	// Frees a page's thumbnail once its sidebar item scrolls back out of
-	// thumbObserver's viewport (see buildThumbSidebar()) - independent of
-	// evictPageImage() below, since loading/evicting a thumbnail no longer
-	// has anything to do with the main view's own full-resolution state.
-	private evictThumbnail(state: PageRenderState): void {
-		if (!state.thumbnailDataUrl) return;
-		state.thumbnailDataUrl = null;
-		state.thumbnailLoadPromise = null;
-		const thumbImg = this.thumbImgs[state.pageNumber - 1];
-		if (thumbImg) thumbImg.src = '';
+	// Same trace as logPageMemoryTrace() above, but for the separate,
+	// much-cheaper thumbnail path (see THUMBNAIL_SCALE) - added alongside
+	// it so a suspected leak/residual memory issue (issue #154) can be
+	// attributed to whichever path is actually responsible, not just
+	// full-resolution main-view pages. Estimates bytes from the data URL's
+	// own string length (base64, ~4/3 of the underlying binary size) -
+	// there's no canvas backing store to account for here, unlike
+	// estimatedPageMemoryBytes(). Thumbnails are never evicted (see
+	// ensureThumbnail()), so this only ever logs a load.
+	private logThumbnailMemoryTrace(pageNumber: number, dataUrlLength: number): void {
+		const loadedCount = this.pageStates.filter((s) => s.thumbnailDataUrl !== null).length;
+		const totalChars = this.pageStates.reduce((sum, s) => sum + (s.thumbnailDataUrl?.length ?? 0), 0);
+		const kb = (chars: number) => ((chars * 0.75) / 1024).toFixed(1);
+		console.debug(
+			`Supernote: page ${pageNumber} thumbnail loaded (~${kb(dataUrlLength)}KB) — ` +
+			`${loadedCount} thumbnail(s) currently loaded, ~${kb(totalChars)}KB estimated total`,
+		);
 	}
 
 	// Draws the page's own already-decoded bitmap at the given scale — no
@@ -1346,10 +1644,13 @@ export class SupernoteView extends FileView {
 	// call speculatively: a no-op if nothing's actually loaded (most pages,
 	// most of the time - pageObserver also reports initial non-intersection
 	// for anything outside the viewport at file-open time). Entirely
-	// independent of evictThumbnail() below - this only ever touches the
-	// main view's own state, never the thumbnail sidebar's.
+	// independent of the thumbnail sidebar's own state (see
+	// ensureThumbnail()), which this never touches.
 	private evictPageImage(state: PageRenderState): void {
 		if (!state.imageBitmap) return;
+		// Captured before freeing anything below - there'd be nothing left
+		// to measure afterward.
+		const pageBytes = this.estimatedPageMemoryBytes(state);
 
 		// Releases the decoded bitmap's memory explicitly rather than
 		// waiting on GC to notice it's unreachable.
@@ -1368,6 +1669,8 @@ export class SupernoteView extends FileView {
 		// that correctly and it doesn't need to change) - only this.
 		state.canvas.width = 1;
 		state.canvas.height = 1;
+
+		this.logPageMemoryTrace('evicted', state.pageNumber, pageBytes);
 	}
 
 	// Repositions each link's clickable region to the page's current CSS
@@ -1546,34 +1849,29 @@ export class SupernoteView extends FileView {
 		// only loads whichever thumbnails are actually scrolled into view in
 		// it.
 		//
-		// No rootMargin prefetch buffer here, unlike pageObserver's '100%
-		// 0px' - confirmed by testing (issue #154): opening the sidebar at
-		// all still crashed even after this observer existed, because a
-		// percentage margin is relative to the *root's own* size, and a
-		// thumbnail item (~150-250px, image + label) is much smaller than a
-		// main-view page (often near-full-viewport). The same 100% margin
-		// that only ever brings 1-2 main-view pages into range at once fit
-		// several times that many thumbnails into an equivalent pixel
-		// margin. A thumbnail popping in slightly after it's actually
-		// scrolled to is an acceptable trade-off for a navigation aid,
-		// unlike the main reading view.
-		// Loading itself (not eviction) is also debounced ~200ms - confirmed
-		// by testing (issue #154): even bounded to "only what's visible" and
-		// with the pop/reflow fixed, scrolling the sidebar *quickly* through
-		// many pages still crashed, while scrolling slowly was fine. A fast
+		// rootMargin here originally had no prefetch buffer at all, unlike
+		// pageObserver's '100% 0px': a percentage margin resolves against
+		// the *root's own* size, and a thumbnail item (~150-250px, image +
+		// label) is much smaller than a main-view page (often
+		// near-full-viewport), so the same 100% margin that only ever
+		// brings 1-2 main-view pages into range at once used to fit several
+		// times that many thumbnails into an equivalent pixel margin - at
+		// full page resolution, that was a crash risk (issue #154). Now
+		// that thumbnails rasterize at THUMBNAIL_SCALE and are never
+		// evicted (see ensureThumbnail()), that same prefetch buffer only
+		// costs a handful of small decodes, so it's brought back to load a
+		// sidebar's worth of thumbnails ahead of/behind the visible ones,
+		// for smoother scrolling.
+		//
+		// Loading is also debounced ~200ms - confirmed by testing (issue
+		// #154): even bounded to "only what's visible" and with the
+		// pop/reflow fixed, scrolling the sidebar *quickly* through many
+		// pages still crashed, while scrolling slowly was fine. A fast
 		// scroll flings most thumbnails past the viewport well within that
-		// window, each one triggering (then almost immediately evicting) a
-		// rasterization in quick succession. Debouncing means a thumbnail
-		// that's only ever transiently intersecting during a fast scroll
-		// never triggers a load at all - only ones the user actually lingers
-		// near for a moment do. Eviction isn't debounced: freeing memory
-		// promptly has no downside. Since ensureThumbnail() below now
-		// rasterizes at a small fraction of full page resolution rather than
-		// reusing the same path as the main view (see
-		// https://github.com/philips/supernote-typescript/issues/40), this
-		// debounce mostly just avoids pointless work for a fast flyby, not a
-		// crash risk on its own - kept regardless, since there's still no
-		// reason to rasterize a thumbnail nobody actually looked at.
+		// window, each one triggering a rasterization in quick succession.
+		// Debouncing means a thumbnail that's only ever transiently
+		// intersecting during a fast scroll never triggers a load at all -
+		// only ones the user actually lingers near for a moment do.
 		this.thumbObserver = new IntersectionObserver((entries) => {
 			for (const entry of entries) {
 				const index = this.thumbItems.indexOf(entry.target as HTMLElement);
@@ -1589,11 +1887,9 @@ export class SupernoteView extends FileView {
 						// it was scheduled.
 						if (state.visibleInThumbnail) void this.ensureThumbnail(state);
 					}, 200);
-				} else {
-					this.evictThumbnail(state);
 				}
 			}
-		}, { root: thumbSidebarEl });
+		}, { root: thumbSidebarEl, rootMargin: '100% 0px' });
 
 		for (let i = 0; i < pageCount; i++) {
 			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
@@ -1998,6 +2294,13 @@ export class SupernoteView extends FileView {
 		const span = state.spans[match.spanIndex];
 		span.addClass('supernote-find-match-current');
 		state.pageContainer.scrollIntoView({ block: 'center', behavior: 'smooth' });
+		// Primes this page's image directly, exactly like goToPage() does for
+		// the same reason (see its comment) - stepping to a match can jump
+		// the length of the whole document, and shouldn't have to wait out
+		// pageObserver's own debounce (see onOpen()) on top of the smooth
+		// scroll animation itself before its destination page appears.
+		state.visibleInMainView = true;
+		void this.ensurePageImage(state);
 	}
 
 	private updateFindCount() {
@@ -2011,7 +2314,14 @@ export class SupernoteView extends FileView {
 		this.resizeObserver?.disconnect();
 		this.pageObserver?.disconnect();
 		this.thumbObserver?.disconnect();
-		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
+		for (const state of this.pageStates) {
+			window.clearTimeout(state.thumbLoadDebounceTimer);
+			window.clearTimeout(state.pageLoadDebounceTimer);
+		}
+		// See onLoadFile()'s matching call for why this matters - closing the
+		// view entirely shouldn't leave its last file's pdf.js document
+		// resident in pdf.js's own Worker either.
+		this.pdfDocPromise?.then((doc) => doc.destroy()).catch(() => { /* nothing to clean up */ });
 	}
 }
 
