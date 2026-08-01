@@ -201,12 +201,45 @@ export class WorkerPool {
     // Round-robins across every call to processChunk(), not just within one
     // processPages() call - see processChunk()'s comment.
     private nextWorker = 0;
+    // How many rasterization calls each worker (by index) has handled since
+    // it was last (re)created - see recycleWorkerIfNeeded()'s comment.
+    private callCounts: number[];
+
+    // Recycle a worker after this many calls, regardless of anything else.
+    // Confirmed via real profiling and a bisection test on issue #154: a
+    // worker's own memory footprint grows with how many pages it's ever
+    // rasterized over its lifetime (100MB+ after ~25 calls), not with
+    // anything currently held on the JS side - disabling image
+    // rasterization entirely kept total memory around 200MB even after a
+    // full scroll through a 100+ page document, while disabling the
+    // separate text-layer/pdf.js pipeline made no difference at all. Very
+    // likely image-js's own internal decode/encode buffers, or a WASM
+    // codec's linear memory, neither ever released mid-lifetime regardless
+    // of what this plugin does on the JS side. Periodically discarding and
+    // recreating the worker is the practical way to bound that when the
+    // actual growth lives inside a dependency's own native/WASM state, not
+    // anything reachable from this code.
+    private static readonly MAX_CALLS_PER_WORKER = 20;
 
     constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
         this.workers = Array(maxWorkers).fill(null).map(() =>
             new Worker()
         );
         this.queues = this.workers.map(() => Promise.resolve());
+        this.callCounts = this.workers.map(() => 0);
+    }
+
+    // Terminates and replaces the worker at this index once it's handled
+    // MAX_CALLS_PER_WORKER calls - see that constant's comment. Only called
+    // from within processChunk()'s own queue chain, after a call settles
+    // and before the next queued one runs, so there's never an in-flight
+    // request on the worker being replaced.
+    private recycleWorkerIfNeeded(workerIndex: number): void {
+        this.callCounts[workerIndex]++;
+        if (this.callCounts[workerIndex] < WorkerPool.MAX_CALLS_PER_WORKER) return;
+        this.workers[workerIndex].terminate();
+        this.workers[workerIndex] = new Worker();
+        this.callCounts[workerIndex] = 0;
     }
 
     // Picks the next worker (round-robin across every call this pool ever
@@ -234,7 +267,6 @@ export class WorkerPool {
     private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number): Promise<string[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
-        const worker = this.workers[workerIndex];
 
         // Sliced *before* ever constructing the message - see
         // extractPagesRenderData()'s comment for why sending the whole
@@ -242,6 +274,10 @@ export class WorkerPool {
         const renderableNote = extractPagesRenderData(note, pageNumbers);
 
         const send = (): Promise<string[]> => new Promise((resolve, reject) => {
+            // Looked up now, not captured at the top of processChunk() - a
+            // prior queued call on this same index may have recycled the
+            // worker (see recycleWorkerIfNeeded()) in the meantime.
+            const worker = this.workers[workerIndex];
             worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
                 if (e.data.type === 'error') {
                     reject(new Error(e.data.error));
@@ -269,7 +305,10 @@ export class WorkerPool {
         // of outcome - a failed request shouldn't leave the next one waiting
         // forever. Deliberately swallows the rejection here: `result` (what
         // this call actually returns) still carries it to its own caller.
-        this.queues[workerIndex] = result.then(() => undefined, () => undefined);
+        // Also where recycling is checked - after the call settles, before
+        // whatever's next in this worker's own queue runs.
+        this.queues[workerIndex] = result.then(() => undefined, () => undefined)
+            .then(() => this.recycleWorkerIfNeeded(workerIndex));
         return result;
     }
 
