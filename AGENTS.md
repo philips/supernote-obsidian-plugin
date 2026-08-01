@@ -23,15 +23,22 @@
   set everything up; it handles submodule init/update and both builds.
 - Tests: vitest (`npm test`), scoped to `src/**/*.test.ts` only — the
   submodule has its own separate test suite.
+- For UI/rendering changes, typecheck+lint+tests don't confirm the feature
+  actually renders correctly — `scripts/setup-obsidian-test-env` (one-time,
+  Fedora/RHEL) and `scripts/obsidian-headless` (start/stop/screenshot/click/
+  key) set up and drive a real Obsidian instance under Xvfb, so a change can
+  be screenshotted and visually confirmed even with no display attached.
 
 ### Common commands
 
 ```bash
-./scripts/build   # first-time setup: submodule + full build
-npm run dev       # esbuild watch mode
-npm run build     # tsc typecheck + production esbuild bundle (minified)
-npm run lint      # eslint .
-npm test          # vitest run
+./scripts/build                       # first-time setup: submodule + full build
+npm run dev                           # esbuild watch mode
+npm run build                         # tsc typecheck + production esbuild bundle (minified)
+npm run lint                          # eslint .
+npm test                              # vitest run
+./scripts/setup-obsidian-test-env     # one-time: set up a headless Obsidian test vault
+./scripts/obsidian-headless start     # launch it; screenshot/click/key/stop subcommands too
 ```
 
 ## Linting
