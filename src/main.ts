@@ -866,6 +866,9 @@ type PageRenderState = {
 	// Debounces thumbObserver's load trigger (not eviction) - see its doc
 	// comment in buildThumbSidebar().
 	thumbLoadDebounceTimer: number | undefined;
+	// Same idea, but for pageObserver's main-view load trigger - see its doc
+	// comment in onOpen().
+	pageLoadDebounceTimer: number | undefined;
 	// Guards ensureTextLayer()'s one-time (per page) work.
 	textLayerLoaded: boolean;
 	text: string;
@@ -1086,6 +1089,26 @@ export class SupernoteView extends FileView {
 		// canvas backing store) and losing search state/highlights on
 		// scroll-past would be a worse trade for a small saving.
 		//
+		// Loading (not eviction) is debounced ~150ms, the same fix and for
+		// the same reason as thumbObserver's own debounce (see
+		// buildThumbSidebar()): a long-distance `scrollIntoView({behavior:
+		// 'smooth'})` jump - e.g. stepFind()'s search-result navigation,
+		// which can jump the full length of a 100+ page document - animates
+		// through every intermediate page in a fixed, short duration
+		// regardless of distance, so each one transitions into and back out
+		// of this 100%-margin window within a matter of milliseconds. Without
+		// debouncing, every one of those pages triggered its own full
+		// decode/evict round trip, queued behind each other on the (small,
+		// deliberately-sized-down - see WorkerPool.DEFAULT_MAX_WORKERS)
+		// shared worker pool - confirmed by testing: jumping from page 4 to
+		// page 102 via search visibly rasterized dozens of pages nobody ever
+		// actually saw, taking many seconds before the actual destination
+		// page finally loaded. A deliberate single-page jump (goToPage() -
+		// the page-jump box, thumbnail clicks, `#page=N` links) primes its
+		// destination directly instead of going through this debounce at
+		// all, so it isn't slowed down by it; stepFind() does the same (see
+		// highlightCurrentMatch()) for the same reason.
+		//
 		// Independent of thumbObserver (see buildThumbSidebar()) - each page
 		// now has its own separate full-resolution (this) and thumbnail
 		// (that one) load/evict cycle, rather than sharing one, since a
@@ -1097,9 +1120,16 @@ export class SupernoteView extends FileView {
 				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
 				if (!state) continue;
 				state.visibleInMainView = entry.isIntersecting;
+				window.clearTimeout(state.pageLoadDebounceTimer);
 				if (entry.isIntersecting) {
-					void this.ensurePageImage(state);
-					void this.ensureTextLayer(state);
+					state.pageLoadDebounceTimer = window.setTimeout(() => {
+						// Re-checks rather than assuming still true - the
+						// timer firing doesn't mean nothing happened since
+						// it was scheduled.
+						if (!state.visibleInMainView) return;
+						void this.ensurePageImage(state);
+						void this.ensureTextLayer(state);
+					}, 150);
 				} else {
 					this.evictPageImage(state);
 				}
@@ -1131,7 +1161,10 @@ export class SupernoteView extends FileView {
 		// timers already scheduled by earlier ones - without this, one could
 		// still fire after the file switch and redundantly load a page from
 		// a note the user has already navigated away from.
-		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
+		for (const state of this.pageStates) {
+			window.clearTimeout(state.thumbLoadDebounceTimer);
+			window.clearTimeout(state.pageLoadDebounceTimer);
+		}
 		this.pageStates = [];
 		this.zoomScale = 1;
 		this.renderedZoomScale = 1;
@@ -1229,6 +1262,7 @@ export class SupernoteView extends FileView {
 				visibleInMainView: false,
 				visibleInThumbnail: false,
 				thumbLoadDebounceTimer: undefined,
+				pageLoadDebounceTimer: undefined,
 				textLayerLoaded: false,
 				text: '',
 				spans: [],
@@ -2199,6 +2233,13 @@ export class SupernoteView extends FileView {
 		const span = state.spans[match.spanIndex];
 		span.addClass('supernote-find-match-current');
 		state.pageContainer.scrollIntoView({ block: 'center', behavior: 'smooth' });
+		// Primes this page's image directly, exactly like goToPage() does for
+		// the same reason (see its comment) - stepping to a match can jump
+		// the length of the whole document, and shouldn't have to wait out
+		// pageObserver's own debounce (see onOpen()) on top of the smooth
+		// scroll animation itself before its destination page appears.
+		state.visibleInMainView = true;
+		void this.ensurePageImage(state);
 	}
 
 	private updateFindCount() {
@@ -2212,7 +2253,10 @@ export class SupernoteView extends FileView {
 		this.resizeObserver?.disconnect();
 		this.pageObserver?.disconnect();
 		this.thumbObserver?.disconnect();
-		for (const state of this.pageStates) window.clearTimeout(state.thumbLoadDebounceTimer);
+		for (const state of this.pageStates) {
+			window.clearTimeout(state.thumbLoadDebounceTimer);
+			window.clearTimeout(state.pageLoadDebounceTimer);
+		}
 		// See onLoadFile()'s matching call for why this matters - closing the
 		// view entirely shouldn't leave its last file's pdf.js document
 		// resident in pdf.js's own Worker either.
