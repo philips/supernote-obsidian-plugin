@@ -903,6 +903,14 @@ type PageRenderState = {
 	canvas: HTMLCanvasElement;
 	textLayerDiv: HTMLElement;
 	linksLayerDiv: HTMLElement;
+	// Compact/reflowed text mode's own display element - see
+	// ensureCompactText(). Independent of textLayerDiv above, which stays
+	// word-positioned (used for search-highlighting over the page image
+	// regardless of layerMode) rather than reflowed.
+	compactTextDiv: HTMLElement;
+	// Guards ensureCompactText()'s one-time (per page) work, same pattern as
+	// textLayerLoaded below.
+	compactTextLoaded: boolean;
 	// Rendered once at page-build time, in native (unscaled) page-pixel
 	// coordinates; repositioned to the current CSS pixel size on every
 	// drawPageImage() call (initial render + each zoom redraw) — see
@@ -1206,6 +1214,7 @@ export class SupernoteView extends FileView {
 						if (!state.visibleInMainView) return;
 						void this.ensurePageImage(state);
 						void this.ensureTextLayer(state);
+						this.ensureCompactText(state);
 					}, 150);
 				} else {
 					this.evictPageImage(state);
@@ -1319,6 +1328,25 @@ export class SupernoteView extends FileView {
 			if (this.settings.invertColorsWhenDark) {
 				canvas.addClass("supernote-invert-dark");
 			}
+			// Text mode's own page number marker - in image mode, which page
+			// is which is obvious from the image itself (and the toolbar's
+			// page-jump box); in text mode, a long note is just a scrolling
+			// column of paragraphs with nothing else distinguishing one
+			// page's text from the next (issue #171's own follow-up report).
+			// Known immediately (just this loop's index), so unlike
+			// compactTextDiv's own content below, this needs no lazy
+			// population - it's created and filled in up front for every
+			// page, same as the thumbnail sidebar's own per-page labels.
+			pageContainer.createDiv({ cls: 'supernote-compact-text-label', text: `Page ${i + 1}` });
+			// Sibling of canvasWrap, not a child - unlike textLayerDiv (which
+			// mirrors canvasWrap's exact page-pixel dimensions to sit on top of
+			// it), this needs its own independent size: a reflowed column of
+			// text has no reason to match the page's aspect ratio. See
+			// ensureCompactText(). Text mode hides the whole of canvasWrap
+			// (see styles.css), linksLayerDiv included - internal note links
+			// have no clickable overlay here, only in image mode; there's no
+			// natural position to anchor one to once the text is reflowed.
+			const compactTextDiv = pageContainer.createDiv({ cls: 'supernote-compact-text' });
 
 			const state: PageRenderState = {
 				pageNumber: i + 1,
@@ -1330,6 +1358,8 @@ export class SupernoteView extends FileView {
 				canvas,
 				textLayerDiv: canvasWrap.createDiv({ cls: 'textLayer' }),
 				linksLayerDiv: canvasWrap.createDiv({ cls: 'supernote-links-layer' }),
+				compactTextDiv,
+				compactTextLoaded: false,
 				linkEls: [],
 				imageBitmap: null,
 				imageDataUrl: null,
@@ -1753,6 +1783,35 @@ export class SupernoteView extends FileView {
 		}
 	}
 
+	// Populates this page's compact/reflowed text view (see setLayerMode()'s
+	// 'text' mode) straight from the note's own recognized text - already
+	// reconstructed into reading-order lines/paragraphs by
+	// supernote-typescript's parsing (the same source markdown export uses;
+	// see exportToMarkdown()) - rather than pdf.js's word-positioned text
+	// layer (buildTextLayerForState()). That positioned layer is exactly
+	// what made the old text mode's selection unreliable (issue #171):
+	// dragging a selection across many individually-absolutely-positioned
+	// spans, arranged to match the original handwriting's x/y layout rather
+	// than a linear reading order, copies inconsistently and leaves large
+	// gaps for pages with sparse handwriting. A plain string in normal
+	// document flow has neither problem.
+	//
+	// Synchronous (no pdf.js/network/worker involved) but still gated behind
+	// a per-page loaded flag and called lazily (pageObserver, goToPage,
+	// setLayerMode('text')) rather than eagerly for every page at file-load
+	// time - consistent with how ensurePageImage()/ensureTextLayer() avoid
+	// doing all of a long note's pages' worth of work upfront (see
+	// onOpen()'s pageObserver comment).
+	private ensureCompactText(state: PageRenderState): void {
+		if (state.compactTextLoaded) return;
+		state.compactTextLoaded = true;
+
+		const rawText = this.sn?.pages[state.pageNumber - 1]?.text ?? '';
+		const hasText = rawText.length > 0;
+		state.compactTextDiv.toggleClass('supernote-compact-text-empty', !hasText);
+		state.compactTextDiv.setText(hasText ? processSupernoteText(rawText, this.settings) : 'No recognized text on this page.');
+	}
+
 	private buildToolbar(container: HTMLElement, pageCount: number) {
 		this.pageJumpInput = null;
 		const toolbar = container.createDiv({ cls: 'supernote-toolbar' });
@@ -1788,7 +1847,7 @@ export class SupernoteView extends FileView {
 		const layerGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
 		this.imageModeBtn = layerGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
 		setIcon(this.imageModeBtn, 'image');
-		this.textModeBtn = layerGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text' } });
+		this.textModeBtn = layerGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text (compact)' } });
 		setIcon(this.textModeBtn, 'type');
 		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
 		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
@@ -1832,6 +1891,19 @@ export class SupernoteView extends FileView {
 		this.layerMode = mode;
 		this.pagesEl?.toggleClass('supernote-mode-text', mode === 'text');
 		this.updateLayerModeButtons();
+
+		// Unlike ensurePageImage()/ensureTextLayer(), this is cheap enough
+		// (plain strings already held in memory as part of `this.sn`, no
+		// decode/network/worker involved) to just do for every page the
+		// moment the user actually asks for text mode, rather than waiting
+		// on each page to individually scroll into view first - so the
+		// whole note reads as compact text immediately, not page-by-page as
+		// you scroll.
+		if (mode === 'text') {
+			for (const state of this.pageStates) {
+				this.ensureCompactText(state);
+			}
+		}
 	}
 
 	private updateLayerModeButtons() {
@@ -2003,6 +2075,7 @@ export class SupernoteView extends FileView {
 		state.visibleInMainView = true;
 		void this.ensurePageImage(state);
 		void this.ensureTextLayer(state);
+		this.ensureCompactText(state);
 		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
 	}
 

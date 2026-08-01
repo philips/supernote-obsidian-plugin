@@ -176,20 +176,82 @@ div.supernote-canvas-wrap canvas {
     color: var(--text-muted);
 }
 
-/* Text mode: hide the raster page, make the text layer's spans (otherwise
-   transparent, for overlaying selectable text on the image) actually
-   visible in roughly their original on-page layout. */
-.supernote-mode-text .supernote-canvas-wrap canvas {
+/* Text mode: hide the raster page (and its word-positioned, invisible
+   textLayer overlay - that one stays reserved for search-highlighting over
+   the image in image mode, see runFind()) in favor of .supernote-compact-text
+   below. */
+.supernote-mode-text .supernote-canvas-wrap {
     display: none;
 }
 
-.supernote-mode-text .textLayer {
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
+/* div.page-container above is display: inline-block, which shrink-to-fits
+   its content's width - fine in image mode, where canvasWrap always carries
+   an explicit pixel width (see drawPageImage()) for it to shrink-to-fit
+   *to*, identically on every page (same source page dimensions). Text mode
+   has no such explicit width anywhere in the chain, so that same
+   shrink-to-fit instead sized each page's box to whatever its own longest
+   line happened to need, up to .supernote-compact-text's max-width below -
+   a short page got a narrow box, a long one a wide one. Switching to
+   display: block for text mode's page-container stretches it to
+   .supernote-pages' own (flex-determined, so already page-count- and
+   content-independent) full width instead, giving the child's `width: 100%`
+   below something concrete and *uniform across every page* to resolve
+   against. */
+.supernote-mode-text .page-container {
+    display: block;
 }
 
-.supernote-mode-text .textLayer span {
+/* Compact text mode - see SupernoteView.ensureCompactText(). Reflowed plain
+   text in normal document flow (not positioned to match the original
+   handwriting layout, unlike .textLayer above), so selection/copy behaves
+   like any other text and a sparse page doesn't leave a huge blank gap.
+   Hidden outside text mode; sized independently of the page's own pixel
+   dimensions/aspect ratio, unlike canvasWrap/textLayer.
+
+   user-select: text is not the default and has to be opted into explicitly
+   - Obsidian sets `body { user-select: none; }` and only opts specific
+   elements it controls back in (its editor, markdown preview, its own PDF
+   viewer's .textLayer via `.pdf-container .textLayer`, which - being scoped
+   to .pdf-container - doesn't reach this plugin's own same-named .textLayer
+   either). Without this, the text renders exactly as intended but a drag
+   across it does nothing - confirmed via issue #171's own follow-up. */
+.supernote-compact-text {
+    display: none;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 42em;
+    padding: 1em 1.2em;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
     color: var(--text-normal);
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+}
+
+.supernote-compact-text-empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Text mode's per-page marker (see the page-build loop in onLoadFile()) -
+   same muted/small treatment as .supernote-thumb-label and
+   .supernote-page-jump-total, so a long note's worth of stacked text blocks
+   in text mode still reads as distinct pages while scrolling. */
+.supernote-compact-text-label {
+    display: none;
+    margin: 0 0 0.3em;
+    color: var(--text-muted);
+    font-size: var(--font-smaller);
+    font-weight: var(--font-semibold);
+}
+
+.supernote-mode-text .supernote-compact-text,
+.supernote-mode-text .supernote-compact-text-label {
+    display: block;
 }
 
 .supernote-find-bar {
