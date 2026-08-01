@@ -184,6 +184,23 @@ div.supernote-canvas-wrap canvas {
     display: none;
 }
 
+/* div.page-container above is display: inline-block, which shrink-to-fits
+   its content's width - fine in image mode, where canvasWrap always carries
+   an explicit pixel width (see drawPageImage()) for it to shrink-to-fit
+   *to*, identically on every page (same source page dimensions). Text mode
+   has no such explicit width anywhere in the chain, so that same
+   shrink-to-fit instead sized each page's box to whatever its own longest
+   line happened to need, up to .supernote-compact-text's max-width below -
+   a short page got a narrow box, a long one a wide one. Switching to
+   display: block for text mode's page-container stretches it to
+   .supernote-pages' own (flex-determined, so already page-count- and
+   content-independent) full width instead, giving the child's `width: 100%`
+   below something concrete and *uniform across every page* to resolve
+   against. */
+.supernote-mode-text .page-container {
+    display: block;
+}
+
 /* Compact text mode - see SupernoteView.ensureCompactText(). Reflowed plain
    text in normal document flow (not positioned to match the original
    handwriting layout, unlike .textLayer above), so selection/copy behaves
