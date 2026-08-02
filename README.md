@@ -87,8 +87,13 @@ npm install
 [Issue #183](https://github.com/philips/supernote-obsidian-plugin/issues/183) tracks pulling the note
 viewer out into a standalone `<supernote-viewer>` custom element that runs on any page, with no Obsidian
 involved - useful for previewing a `.note` file's rendering pipeline outside the plugin, or eventually for
-publishing notes as static web pages. It's not published or bundled with the plugin release yet; build it
-yourself:
+publishing notes as static web pages.
+
+**Try it live:** https://philips.github.io/supernote-web-component/ - pick a `.note` file from your device
+to view it in the browser, no install required. That page is built and hosted from
+[philips/supernote-web-component](https://github.com/philips/supernote-web-component), which clones this
+repo at deploy time; it isn't published or bundled with the plugin release itself. To build it yourself
+instead:
 
 ```
 npm run build:webcomponent   # writes dist/supernote-viewer.js (gitignored)
