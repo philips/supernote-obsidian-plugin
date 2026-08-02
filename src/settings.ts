@@ -67,6 +67,11 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     showExportButtons: boolean;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
+    /** Prefix generated markdown files with a YAML front matter block (tags,
+     *  source link, device, page count, keywords) so imported notes are
+     *  filterable via Obsidian's property search/Dataview/Bases. See
+     *  buildFrontmatter() in frontmatter.ts and issue #57. */
+    addFrontmatter: boolean;
     /** Vault folder that device sync writes into; never touches anything outside it. */
     syncFolder: string;
     /**
@@ -90,6 +95,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     showExportButtons: false,
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
+    addFrontmatter: false,
     syncFolder: 'Supernote sync',
     syncPathFiltersRaw: '',
     noteSyncState: {},
@@ -155,6 +161,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     type: 'dropdown',
                     key: 'importFormat',
                     options: IMPORT_FORMAT_LABELS,
+                },
+            },
+            {
+                name: 'Add YAML front matter to Markdown files',
+                desc: 'Prefix generated Markdown files with properties (tags, a link back to the source file, device model, page count, and keywords) so imported notes show up in Obsidian\'s property search, dataview, and bases.',
+                control: {
+                    type: 'toggle',
+                    key: 'addFrontmatter',
                 },
             },
             {
@@ -280,6 +294,17 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.importFormat)
                 .onChange(async (value) => {
                     this.plugin.settings.importFormat = value as ImportFormat;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Add YAML front matter to Markdown files')
+            .setDesc('Prefix generated Markdown files with properties (tags, a link back to the source file, device model, page count, and keywords) so imported notes show up in Obsidian\'s property search, dataview, and bases.')
+            .addToggle(text => text
+                .setValue(this.plugin.settings.addFrontmatter)
+                .onChange(async (value) => {
+                    this.plugin.settings.addFrontmatter = value;
                     await this.plugin.saveSettings();
                 })
             );

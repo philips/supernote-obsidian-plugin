@@ -14,6 +14,7 @@ import { formatSyncFailureLogEntry } from './deviceSync';
 import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
+import { buildFrontmatter } from './frontmatter';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -522,6 +523,22 @@ function collectPageKeywords(sn: SupernoteX, pageIndex: number): string[] {
 	return result;
 }
 
+// All of a note's starred keywords, deduplicated across every page (not just
+// within one) and in first-seen order — used for the frontmatter `keywords`
+// property, which describes the whole note rather than a single page.
+function collectAllKeywords(sn: SupernoteX): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (let i = 0; i < sn.pages.length; i++) {
+		for (const keyword of collectPageKeywords(sn, i)) {
+			if (seen.has(keyword)) continue;
+			seen.add(keyword);
+			result.push(keyword);
+		}
+	}
+	return result;
+}
+
 // This page's own links. See supernote-typescript's _parseLinks doc comment
 // for why sn.links' Record keys (not ILink.OBJPAGE) are the reliable way to
 // find which page a link is drawn on.
@@ -618,7 +635,18 @@ class VaultWriter {
 			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
 		}
 
-		content = this.app.fileManager.generateMarkdownLink(file, filename);
+		const sourceLink = this.app.fileManager.generateMarkdownLink(file, filename);
+
+		if (this.settings.addFrontmatter) {
+			content += buildFrontmatter({
+				sourceLink,
+				device: sn.header.APPLY_EQUIPMENT ?? '',
+				pageCount: sn.pages.length,
+				keywords: collectAllKeywords(sn),
+			});
+		}
+
+		content += sourceLink;
 		content += '\n';
 
 		for (let i = 0; i < sn.pages.length; i++) {
