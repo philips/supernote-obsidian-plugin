@@ -9,7 +9,7 @@ import { ErrorModal } from './ErrorModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
 import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
-import { parseNote, buildNotePageElements } from './render/noteRenderer';
+import { parseNote, buildNotePageElements, buildNotePagePlaceholders, fillNotePagePlaceholder, RenderedNotePage } from './render/noteRenderer';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
@@ -2181,11 +2181,23 @@ function parsePageAnchor(subpath?: string): number | null {
 // list with a minimal PDF-embed-style page-nav toolbar, not SupernoteView's
 // full zoom/find/thumbnail toolbar — so this doesn't share code with it beyond
 // ImageConverter/SupernoteX.
+// Per-page bookkeeping for SupernoteEmbed's lazy image loading (see
+// setupPageLoadObserver()) - mirrors SupernoteView's own PageRenderState/
+// pageObserver split, just without that one's zoom/text-layer/eviction
+// concerns, which this simpler, read-only embed doesn't need.
+interface EmbedPageLoadState extends RenderedNotePage {
+	loaded: boolean;
+	visible: boolean;
+	loadDebounceTimer?: number;
+}
+
 export class SupernoteEmbed extends Component {
 	private destroyed = false;
 	private pageEls: HTMLElement[] = [];
 	private pageIndicatorEl: HTMLElement | null = null;
 	private pageObserver: IntersectionObserver | null = null;
+	private pageLoadObserver: IntersectionObserver | null = null;
+	private pageLoadStates: EmbedPageLoadState[] = [];
 	private currentPage = 0;
 
 	private pagesEl: HTMLElement | null = null;
@@ -2221,6 +2233,8 @@ export class SupernoteEmbed extends Component {
 	onunload(): void {
 		this.destroyed = true;
 		this.pageObserver?.disconnect();
+		this.pageLoadObserver?.disconnect();
+		for (const state of this.pageLoadStates) window.clearTimeout(state.loadDebounceTimer);
 		this.minHeightObserver?.disconnect();
 	}
 
@@ -2230,6 +2244,10 @@ export class SupernoteEmbed extends Component {
 		this.containerEl.setCssStyles({ minHeight: '' });
 		this.pageObserver?.disconnect();
 		this.pageObserver = null;
+		this.pageLoadObserver?.disconnect();
+		this.pageLoadObserver = null;
+		for (const state of this.pageLoadStates) window.clearTimeout(state.loadDebounceTimer);
+		this.pageLoadStates = [];
 		this.minHeightObserver?.disconnect();
 		this.minHeightObserver = null;
 		this.pageEls = [];
@@ -2250,19 +2268,13 @@ export class SupernoteEmbed extends Component {
 
 		// Clamped rather than rejected: a stale anchor (note re-paginated
 		// since the link was written) should still show *a* page, not error.
+		// A single-page note with no anchor is treated the same as an
+		// explicit anchor to its (only) page: like an anchor, there's nowhere
+		// to navigate or lazily scroll to, so it should render eagerly too.
 		const singlePage = this.pageAnchor !== null
 			? Math.min(Math.max(this.pageAnchor, 1), sn.pages.length)
-			: null;
+			: (sn.pages.length === 1 ? 1 : null);
 		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
-
-		let images: string[];
-		try {
-			images = await new ImageConverter().convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
-		} catch (err) {
-			if (!this.destroyed) this.renderError(err);
-			return;
-		}
-		if (this.destroyed) return;
 
 		// A single requested page, or a single-page note, needs no page-nav
 		// toolbar — there's nowhere for it to navigate to.
@@ -2273,17 +2285,99 @@ export class SupernoteEmbed extends Component {
 
 		const pagesEl = this.containerEl.createDiv({ cls: 'supernote-embed-pages' });
 		this.pagesEl = pagesEl;
-		const pages = buildNotePageElements(images, pagesEl, {
-			startPageNumber: singlePage ?? 1,
-			invertColorsWhenDark: this.settings.invertColorsWhenDark,
-		});
-		this.pageEls = pages.map((p) => p.containerEl);
+
+		if (singlePage !== null) {
+			// A single deep-linked page (`#page=N` anchor) - render it directly,
+			// there's nothing else in this embed to lazily defer.
+			let images: string[];
+			try {
+				images = await new ImageConverter().convertToImages(sn, [singlePage]);
+			} catch (err) {
+				if (!this.destroyed) this.renderError(err);
+				return;
+			}
+			if (this.destroyed) return;
+			const pages = buildNotePageElements(images, pagesEl, {
+				startPageNumber: singlePage,
+				invertColorsWhenDark: this.settings.invertColorsWhenDark,
+			});
+			this.pageEls = pages.map((p) => p.containerEl);
+		} else {
+			// Builds every page's placeholder immediately (so the toolbar's
+			// page count, scrollbar length, and page-jump math are all correct
+			// right away) but defers actually rasterizing each page's image
+			// until it's about to scroll into view - see issue #183: rasterizing
+			// every page upfront made even the *first* page wait on the whole
+			// document finishing in the (deliberately small - see WorkerPool.
+			// DEFAULT_MAX_WORKERS) shared worker pool, the same problem
+			// SupernoteView's own pageObserver/ensurePageImage() already solves
+			// for the full view.
+			const pages = buildNotePagePlaceholders(sn.pages.length, pagesEl, {
+				pageWidth: sn.pageWidth,
+				pageHeight: sn.pageHeight,
+				invertColorsWhenDark: this.settings.invertColorsWhenDark,
+			});
+			this.pageEls = pages.map((p) => p.containerEl);
+			this.setupPageLoadObserver(sn, pages);
+		}
 
 		if (showToolbar) {
 			this.observePages();
 		}
 
 		this.setupMinHeightTracking();
+	}
+
+	// Loads each page's image lazily, only once it's about to scroll into
+	// view (rootMargin prefetches a screen ahead/behind, same as
+	// SupernoteView's pageObserver) - see render()'s comment for why this
+	// matters. Unlike SupernoteView, never evicts a loaded page's image:
+	// embeds are read-only, and a decoded page image here is a plain <img>
+	// (not a canvas backing store an ImageBitmap was drawn into), a much
+	// smaller per-page cost that isn't worth the extra complexity of
+	// reclaiming for this simpler component - see class doc comment.
+	private setupPageLoadObserver(sn: SupernoteX, pages: RenderedNotePage[]): void {
+		const states: EmbedPageLoadState[] = pages.map((p) => ({ ...p, loaded: false, visible: false }));
+		this.pageLoadStates = states;
+
+		this.pageLoadObserver = new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				const state = states.find((s) => s.containerEl === entry.target);
+				if (!state) continue;
+				state.visible = entry.isIntersecting;
+				if (!entry.isIntersecting) continue;
+
+				window.clearTimeout(state.loadDebounceTimer);
+				// Debounced the same ~150ms, and for the same reason, as
+				// SupernoteView's pageObserver: a fast programmatic scroll
+				// (scrollToPage()'s smooth scrollIntoView) transitions through
+				// several intermediate pages well within this window, and none
+				// of those should trigger a load nobody will actually see.
+				state.loadDebounceTimer = window.setTimeout(() => {
+					if (!state.visible || state.loaded) return;
+					void this.ensurePageLoaded(sn, state);
+				}, 150);
+			}
+		}, { root: this.containerEl, rootMargin: '100% 0px' });
+
+		for (const state of states) this.pageLoadObserver.observe(state.containerEl);
+	}
+
+	// Idempotent and safe to call speculatively - `loaded` is set eagerly, the
+	// same pattern (and for the same reason) as SupernoteView's
+	// ensurePageImage()/ensureTextLayer().
+	private async ensurePageLoaded(sn: SupernoteX, state: EmbedPageLoadState): Promise<void> {
+		state.loaded = true;
+		try {
+			const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [state.pageNumber]);
+			if (this.destroyed) return;
+			fillNotePagePlaceholder(state, imageDataUrl);
+		} catch (err) {
+			// Allows a retry on the next intersection - a transient
+			// rasterization failure shouldn't permanently blank this page.
+			state.loaded = false;
+			console.error(`Supernote: embed page ${state.pageNumber} failed to load:`, err);
+		}
 	}
 
 	// Obsidian's PDF embed never lets the embed shrink below one full page —

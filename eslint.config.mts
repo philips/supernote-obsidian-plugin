@@ -51,4 +51,17 @@ export default defineConfig(
 			'obsidianmd/no-nodejs-modules': 'off',
 		},
 	},
+	{
+		// src/render/ is deliberately free of any `obsidian` import - see its
+		// files' own header comments and issue #183 (pulling SupernoteView out
+		// into a standalone web component) - so it builds DOM with plain
+		// document.createElement/.style, not Obsidian's createDiv/createEl/
+		// setCssProps helpers these two rules otherwise enforce everywhere
+		// else in this plugin.
+		files: ['src/render/**/*.ts'],
+		rules: {
+			'obsidianmd/prefer-create-el': 'off',
+			'obsidianmd/no-static-styles-assignment': 'off',
+		},
+	},
 );
