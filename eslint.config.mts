@@ -13,6 +13,8 @@ export default defineConfig(
 		// unrelated projects happen to live under there.
 		'.claude',
 		'esbuild.config.mjs',
+		'esbuild.webcomponent.config.mjs',
+		'dist',
 		'version-bump.mjs',
 		'versions.json',
 		'manifest.json',
@@ -62,6 +64,23 @@ export default defineConfig(
 		rules: {
 			'obsidianmd/prefer-create-el': 'off',
 			'obsidianmd/no-static-styles-assignment': 'off',
+		},
+	},
+	{
+		// src/webcomponent/ is the standalone <supernote-viewer> custom
+		// element (issue #183) - never bundled into the Obsidian plugin
+		// itself (see esbuild.webcomponent.config.mjs, a separate entry
+		// point), so the obsidianmd rules built around Obsidian's own
+		// runtime (createDiv/createEl, requestUrl instead of fetch, no
+		// injecting <style> tags because Obsidian already loads styles.css
+		// for you) don't apply here - this file *is* the runtime, on a plain
+		// page with none of that available.
+		files: ['src/webcomponent/**/*.ts'],
+		rules: {
+			'obsidianmd/prefer-create-el': 'off',
+			'obsidianmd/no-static-styles-assignment': 'off',
+			'obsidianmd/no-forbidden-elements': 'off',
+			'no-restricted-globals': 'off',
 		},
 	},
 );

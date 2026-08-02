@@ -1,0 +1,134 @@
+// @vitest-environment happy-dom
+//
+// Exercises <supernote-viewer> against a real DOM (happy-dom) with no
+// Obsidian involved at all - exactly the testability upside issue #183
+// calls out. `rasterizePage` is swapped for a fake in every test: the real
+// implementation dispatches to a Web Worker (see imageConverter.ts), which
+// happy-dom doesn't implement, so a real note is parsed (via supernote-
+// typescript, straight off disk - the same fixtures supernote-typescript's
+// own tests and linkOverlay.test.ts use) but never actually rasterized.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import './SupernoteViewerElement';
+import type { SupernoteViewerElement as SupernoteViewerElementType } from './SupernoteViewerElement';
+
+const FIXTURES_DIR = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input');
+
+function readFixture(name: string): ArrayBuffer {
+    const buf = fs.readFileSync(path.join(FIXTURES_DIR, name));
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+}
+
+function waitForEvent<T>(target: EventTarget, type: string): Promise<CustomEvent<T>> {
+    return new Promise((resolve) => {
+        target.addEventListener(type, (e) => resolve(e as CustomEvent<T>), { once: true });
+    });
+}
+
+function createViewer(): SupernoteViewerElementType {
+    const el = document.createElement('supernote-viewer') as SupernoteViewerElementType;
+    // Fake rasterizer: real page rasterization needs a Web Worker, which
+    // happy-dom doesn't implement - see this file's header comment.
+    el.rasterizePage = vi.fn(async (_sn, pageNumber: number) => `data:image/png;base64,page${pageNumber}`);
+    return el;
+}
+
+afterEach(() => {
+    document.body.innerHTML = '';
+    vi.unstubAllGlobals();
+});
+
+describe('<supernote-viewer>', () => {
+    it('shows an informational status when no source is set', async () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        await Promise.resolve();
+
+        const status = el.shadowRoot!.querySelector('.status');
+        expect(status?.textContent).toMatch(/no supernote file loaded/i);
+        expect(status?.classList.contains('error')).toBe(false);
+    });
+
+    it('parses a note set via noteData and builds one placeholder per page', async () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+
+        const evt = await loaded;
+        expect(evt.detail.pageCount).toBe(2);
+
+        const pages = el.shadowRoot!.querySelectorAll('.page-container');
+        expect(pages).toHaveLength(2);
+        // Lazily loaded: nothing observed by IntersectionObserver in this
+        // environment (happy-dom never fires it - no real layout engine),
+        // so no page should have been rasterized just from building the
+        // viewer.
+        expect(el.rasterizePage).not.toHaveBeenCalled();
+
+        const toolbar = el.shadowRoot!.querySelector('.toolbar');
+        expect(toolbar).toBeTruthy();
+        expect(toolbar?.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
+    });
+
+    it('goToPage() forces that page to load immediately, once, idempotently', async () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+
+        el.goToPage(2);
+        // ensurePageImageLoaded() is async - let its microtasks settle.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(el.rasterizePage).toHaveBeenCalledTimes(1);
+        expect(el.rasterizePage).toHaveBeenCalledWith(expect.anything(), 2);
+
+        const page2Img = el.shadowRoot!.querySelectorAll('.page-container')[1].querySelector('img');
+        expect(page2Img?.src).toBe('data:image/png;base64,page2');
+        // The placeholder's inline sizing overrides (see
+        // buildNotePagePlaceholders()) should be cleared once real content
+        // loads in.
+        expect(page2Img?.style.width).toBe('');
+
+        // Calling again shouldn't re-trigger a rasterization of an
+        // already-loaded page.
+        el.goToPage(2);
+        await Promise.resolve();
+        expect(el.rasterizePage).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows recognized text in text mode, unrasterized', async () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('rtr.note');
+        await loaded;
+
+        const textEl = el.shadowRoot!.querySelector('.page-text');
+        expect(textEl?.textContent).toContain('Real');
+        expect(textEl?.classList.contains('empty')).toBe(false);
+        // Single-page note - #183's example content never needed a
+        // rasterized image to expose its recognized text.
+        expect(el.rasterizePage).not.toHaveBeenCalled();
+    });
+
+    it('shows an error and dispatches supernote-error when the fetch fails', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+
+        const el = createViewer();
+        const errored = waitForEvent<{ error: unknown }>(el, 'supernote-error');
+        el.setAttribute('src', 'https://example.invalid/missing.note');
+        document.body.appendChild(el);
+
+        const evt = await errored;
+        expect(evt.detail.error).toBeInstanceOf(Error);
+
+        const status = el.shadowRoot!.querySelector('.status');
+        expect(status?.classList.contains('error')).toBe(true);
+        expect(status?.textContent).toMatch(/failed to load/i);
+    });
+});

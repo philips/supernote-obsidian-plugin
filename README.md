@@ -82,6 +82,30 @@ npm run build
 npm install
 ```
 
+### `<supernote-viewer>` web component (experimental)
+
+[Issue #183](https://github.com/philips/supernote-obsidian-plugin/issues/183) tracks pulling the note
+viewer out into a standalone `<supernote-viewer>` custom element that runs on any page, with no Obsidian
+involved - useful for previewing a `.note` file's rendering pipeline outside the plugin, or eventually for
+publishing notes as static web pages. It's not published or bundled with the plugin release yet; build it
+yourself:
+
+```
+npm run build:webcomponent   # writes dist/supernote-viewer.js (gitignored)
+npx serve .                  # any static file server works - module scripts need http(s), not file://
+```
+
+Then open `/demo/` in a browser and pick a `.note` file to view it. The element itself takes either a `src`
+URL attribute or a `noteData` property (an `ArrayBuffer`/`Uint8Array`) - see
+[`src/webcomponent/SupernoteViewerElement.ts`](src/webcomponent/SupernoteViewerElement.ts) for the full API
+(events, page navigation, the recognized-text toggle).
+
+Note that this can't literally run embedded in this README on GitHub - GitHub sanitizes rendered Markdown
+and strips `<script>` tags and custom elements, so there's no way to load a live, interactive component
+directly on a GitHub-rendered page. A hosted demo (e.g. GitHub Pages) linked from here would work; that's
+left for a future pass once the component is further along (it's read-only for now - no save/export, see
+the issue for why that's a separate piece of work).
+
 - `npm i` or `yarn` to install dependencies.
 - `npm run dev` to start compilation in watch mode.
 

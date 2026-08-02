@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>supernote-viewer demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    body {
+        font: 16px/1.5 system-ui, sans-serif;
+        max-width: 50em;
+        margin: 2em auto;
+        padding: 0 1em;
+        color-scheme: light dark;
+    }
+    supernote-viewer {
+        height: 80vh;
+        margin-top: 1em;
+    }
+    #status {
+        color: #666;
+        font-size: 0.9em;
+    }
+</style>
+</head>
+<body>
+<h1>&lt;supernote-viewer&gt; demo</h1>
+<p>
+    Standalone build of the <code>&lt;supernote-viewer&gt;</code> custom element from the
+    <a href="https://github.com/philips/supernote-obsidian-plugin">supernote-obsidian-plugin</a> project
+    (<a href="https://github.com/philips/supernote-obsidian-plugin/issues/183">issue #183</a>) - runs entirely in
+    this page, with no Obsidian involved. Pick a <code>.note</code> file from your Supernote device to view it.
+</p>
+<p>
+    <strong>Build the bundle first:</strong> this page loads
+    <code>../dist/supernote-viewer.js</code>, which isn't checked into the repo -
+    run <code>npm run build:webcomponent</code> from the project root, then serve this
+    directory over http(s) (module scripts can't load from a <code>file://</code> URL) - e.g.
+    <code>npx serve .</code> from the project root, then open
+    <code>/demo/</code>.
+</p>
+<input id="file-input" type="file" accept=".note">
+<p id="status"></p>
+<supernote-viewer id="viewer"></supernote-viewer>
+
+<script type="module" src="../dist/supernote-viewer.js"></script>
+<script type="module">
+    const viewer = document.getElementById('viewer');
+    const status = document.getElementById('status');
+
+    document.getElementById('file-input').addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        status.textContent = `Reading ${file.name}…`;
+        viewer.noteData = await file.arrayBuffer();
+    });
+
+    viewer.addEventListener('supernote-load', (event) => {
+        status.textContent = `Loaded ${event.detail.pageCount} page(s).`;
+    });
+    viewer.addEventListener('supernote-error', (event) => {
+        status.textContent = `Error: ${event.detail.error?.message ?? event.detail.error}`;
+    });
+</script>
+</body>
+</html>
