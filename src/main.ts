@@ -1,13 +1,15 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addTextOnlyPdfPage, extractPageRenderData, extractPdfPageData, IRenderableNote } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, createPdfContext, addTextOnlyPdfPage, extractPdfPageData } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
 import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
 import Worker from 'myworker.worker';
+import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
+import { parseNote, buildNotePageElements, buildNotePagePlaceholders, fillNotePagePlaceholder, RenderedNotePage } from './render/noteRenderer';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
@@ -186,263 +188,6 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 		processedText = replaceTextWithCustomDictionary(processedText, settings.customDictionary);
 	}
 	return processedText;
-}
-
-// Caps how many pages a single worker call ever rasterizes at once -
-// deliberately NOT `pageNumbers.length / workerCount` (this function's
-// previous behavior). That scheme sized each chunk to the *pool's* size, not
-// to what's actually safe to hold in memory at once: fine while the pool
-// defaulted to navigator.hardwareConcurrency (8-9 workers, ~12 pages per
-// chunk), but once WorkerPool.DEFAULT_MAX_WORKERS was deliberately shrunk to
-// 2 to bound the *scrolling* peak (see issue #154), a full-note export of a
-// 100+ page document started handing each of those 2 workers ~50 pages in a
-// single toImage() call - confirmed via real-device testing to peak over 2GB
-// (~1GB held per worker simultaneously decoding/encoding its own ~50 pages).
-// A small fixed cap keeps each individual worker call's own peak bounded
-// regardless of pool size or document length; the existing per-worker queue
-// (see WorkerPool.processChunk()) still processes every chunk, just more of
-// them, sequentially per worker - slower for a large bulk export, but that's
-// an acceptable trade for a rare, deliberate, one-off action (see
-// DEFAULT_MAX_WORKERS' own comment for the same reasoning).
-const MAX_PAGES_PER_CHUNK = 4;
-
-function chunkPageNumbers(pageNumbers: number[]): number[][] {
-    const chunks: number[][] = [];
-    for (let i = 0; i < pageNumbers.length; i += MAX_PAGES_PER_CHUNK) {
-        chunks.push(pageNumbers.slice(i, i + MAX_PAGES_PER_CHUNK));
-    }
-    return chunks;
-}
-
-// Slices out only the requested pages, in the given order, into a
-// structured-clone-safe IRenderableNote - see supernote-typescript's
-// extractPageRenderData() (which this wraps to cover more than one page at
-// once) for exactly why this matters: postMessage-ing the *whole* parsed
-// SupernoteX to a Worker - which is what this replaced - clones every
-// page's raw layer data across, not just the page(s) actually requested.
-// WorkerPool round-robins across every worker it has (see processChunk()),
-// so as a user scrolls through a long document, every worker eventually
-// receives - and holds, in its own separate V8 heap, invisible to the main
-// thread's own heap snapshots/profiling - a full copy of the entire
-// document, just to render one page at a time. Confirmed via real
-// profiling on issue #154: navigator.hardwareConcurrency (8, on the
-// reporting device) separate ~100MB Worker heaps, matching a ~900MB total
-// that neither DPR capping nor zoom-aware rasterization could ever have
-// addressed, since neither touches what gets sent to a Worker in the first
-// place.
-function extractPagesRenderData(note: SupernoteX, pageNumbers: number[]): IRenderableNote {
-    return {
-        pageWidth: note.pageWidth,
-        pageHeight: note.pageHeight,
-        pages: pageNumbers.map((n) => extractPageRenderData(note, n).pages[0]),
-    };
-}
-
-export class WorkerPool {
-    private workers: Worker[];
-    // Chained onto so a new request to a given worker waits for that
-    // worker's previous request to actually resolve/reject before sending -
-    // see processChunk()'s comment for why this matters.
-    private queues: Promise<void>[];
-    // Round-robins across every call to processChunk(), not just within one
-    // processPages() call - see processChunk()'s comment.
-    private nextWorker = 0;
-
-    // Deliberately NOT navigator.hardwareConcurrency (the previous default,
-    // and the usual choice for CPU-bound parallel work) - confirmed via
-    // real profiling on issue #154 that a worker's own memory footprint
-    // grows with how many pages it's ever rasterized over its lifetime
-    // (likely image-js's own internal decode/encode buffers, or a WASM
-    // codec's linear memory, neither ever released mid-lifetime regardless
-    // of what this plugin does on the JS side), and that the resulting peak
-    // during a fast scroll scales with how many workers can be
-    // simultaneously mid-growth at once - so *fewer* concurrent workers
-    // directly caps it. A small fixed number, not tied to core count, is
-    // deliberate: more cores would otherwise mean a *higher* ceiling on a
-    // more capable device, backwards from what actually matters here. (A
-    // per-worker call-count recycling scheme was also tried as a
-    // complementary fix, but disabling it made no measurable difference to
-    // real-device heap usage, so it was removed rather than kept as
-    // unjustified complexity - see getSharedWorkerPool()'s idle teardown
-    // for what actually addresses the resting-footprint side of this.)
-    // Trade-off: bulk operations that rasterize every page at once (a full
-    // PDF/markdown-with-images export) get less parallelism and take
-    // longer - acceptable, since those are rare, deliberate, one-off
-    // actions, unlike lazy per-page loading during routine scrolling,
-    // which is both the common case and the one that actually needs to be
-    // memory-safe on a constrained device.
-    private static readonly DEFAULT_MAX_WORKERS = 2;
-
-    constructor(private maxWorkers: number = WorkerPool.DEFAULT_MAX_WORKERS) {
-        this.workers = Array(maxWorkers).fill(null).map(() =>
-            new Worker()
-        );
-        this.queues = this.workers.map(() => Promise.resolve());
-    }
-
-    // Picks the next worker (round-robin across every call this pool ever
-    // makes, not reset per processPages() call - see below) and queues onto
-    // it rather than sending immediately.
-    //
-    // This used to just take a worker directly, relying on callers to keep
-    // at most one in-flight request per worker (safe when processPages() was
-    // the only caller: a single call's chunks always spread 1:1 across
-    // distinct workers). Lazy per-page image loading (SupernoteView's
-    // ensurePageImage(), see issue #147) broke that assumption - each is its
-    // own separate processPages() call for a single page, which
-    // chunkPageNumbers() always turns into exactly one chunk, previously
-    // always dispatched to workers[0] (chunks.map's index is always 0 for a
-    // one-chunk call). Several pages loading nearly at once (a fast scroll,
-    // or the thumbnail sidebar loading every page at once) meant several
-    // concurrent requests all landing on worker 0, each overwriting the
-    // last's onmessage handler before its response arrived - silently
-    // losing that page's result (rendered blank) or misdirecting it to
-    // resolve a *different* page's promise instead (wrong image on the
-    // wrong page). Queuing per-worker (so a worker only ever has one
-    // request in flight) and round-robining across every call (so
-    // concurrent single-page requests still spread across every worker,
-    // instead of piling onto worker 0) fixes both.
-    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number): Promise<string[]> {
-        const workerIndex = this.nextWorker % this.workers.length;
-        this.nextWorker++;
-        const worker = this.workers[workerIndex];
-
-        // Sliced *before* ever constructing the message - see
-        // extractPagesRenderData()'s comment for why sending the whole
-        // `note` here was a real, serious memory bug (issue #154).
-        const renderableNote = extractPagesRenderData(note, pageNumbers);
-
-        const send = (): Promise<string[]> => new Promise((resolve, reject) => {
-            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
-                if (e.data.type === 'error') {
-                    reject(new Error(e.data.error));
-                } else if (e.data.type === 'result') {
-                    resolve(e.data.images);
-                }
-            };
-
-            worker.onerror = (error) => {
-                console.error('Worker error:', error);
-                reject(new Error(error.message));
-            };
-
-            const message: SupernoteWorkerMessage = {
-                type: 'convert',
-                note: renderableNote,
-                scale,
-            };
-
-            worker.postMessage(message);
-        });
-
-        const result = this.queues[workerIndex].then(send);
-        // Marks this worker free again once this request settles, regardless
-        // of outcome - a failed request shouldn't leave the next one waiting
-        // forever. Deliberately swallows the rejection here: `result` (what
-        // this call actually returns) still carries it to its own caller.
-        this.queues[workerIndex] = result.then(() => undefined, () => undefined);
-        return result;
-    }
-
-    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number): Promise<string[]> {
-        //console.time('Total processing time');
-
-        const chunks = chunkPageNumbers(allPageNumbers);
-
-        //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
-
-        // Process chunks concurrently - safe now regardless of how many land
-        // on the same worker, or how many separate processPages() calls are
-        // in flight at once (see processChunk()'s comment).
-        const results = await Promise.all(
-            chunks.map((chunk) => this.processChunk(note, chunk, scale))
-        );
-
-        //console.timeEnd('Total processing time');
-        return results.flat();
-    }
-
-    terminate() {
-        this.workers.forEach(worker => worker.terminate());
-        this.workers = [];
-    }
-}
-
-// Shared for the plugin's lifetime instead of every ImageConverter owning
-// (and tearing down) its own WorkerPool. Spinning up new Web Workers is
-// real, fixed-cost work — previously paid on *every single* rasterization
-// call regardless of outcome, so opening a note repeatedly paid full
-// multi-worker startup/teardown cost every time. Created lazily (on first
-// actual use) so plugin activation itself doesn't spin up workers before
-// any note is opened; torn down once in SupernotePlugin.onunload().
-let sharedWorkerPool: WorkerPool | undefined;
-
-// Bounds the pool's *resting* footprint once the user has simply stopped
-// interacting with a note - DEFAULT_MAX_WORKERS above only bounds memory
-// *during* sustained scrolling (issue #154's original peak problem); left
-// alone, the 2 pooled workers just sit there afterward, still holding
-// whatever they'd accumulated. Tearing the whole pool down after a period of
-// inactivity reclaims that, at the cost of a small worker re-init the next
-// time it's needed. Confirmed via real-device testing: ~200MB reclaimed once
-// this fires.
-//
-// Only scheduled once activeWorkerCalls (below) drops back to zero, and
-// cancelled the moment a new call starts - so this can only ever fire
-// between calls, never while a rasterization is actually in flight. That
-// matters: WorkerPool.terminate() just calls Worker.terminate() outright,
-// which abandons any pending onmessage with no error - if a call's own
-// worker were torn out from under it mid-request, that call's promise would
-// never resolve or reject, hanging its caller forever.
-const WORKER_POOL_IDLE_TEARDOWN_MS = 2000;
-let workerPoolIdleTimer: number | undefined;
-let activeWorkerCalls = 0;
-
-function getSharedWorkerPool(): WorkerPool {
-    window.clearTimeout(workerPoolIdleTimer);
-    if (!sharedWorkerPool) {
-        sharedWorkerPool = new WorkerPool();
-        console.debug('Supernote: worker pool created');
-    }
-    return sharedWorkerPool;
-}
-function terminateSharedWorkerPool(): void {
-    window.clearTimeout(workerPoolIdleTimer);
-    workerPoolIdleTimer = undefined;
-    sharedWorkerPool?.terminate();
-    sharedWorkerPool = undefined;
-}
-// Called once a call into the shared pool settles (see ImageConverter.
-// convertToImages()) - only actually schedules the teardown if nothing
-// else is still in flight, since activeWorkerCalls is shared across every
-// concurrent caller, not just this one.
-function scheduleIdleTeardownIfIdle(): void {
-    window.clearTimeout(workerPoolIdleTimer);
-    if (activeWorkerCalls > 0) return;
-    workerPoolIdleTimer = window.setTimeout(() => {
-        console.debug(`Supernote: worker pool idle for ${WORKER_POOL_IDLE_TEARDOWN_MS}ms, tearing down`);
-        terminateSharedWorkerPool();
-    }, WORKER_POOL_IDLE_TEARDOWN_MS);
-}
-
-export class ImageConverter {
-    // `scale` (default 1, full resolution): a positive integer downsample
-    // factor forwarded all the way to supernote-typescript's toImage(),
-    // which decodes directly at the reduced resolution rather than
-    // downscaling a full-resolution decode afterward - see
-    // https://github.com/philips/supernote-typescript/issues/40. Meant for
-    // SupernoteView's thumbnail sidebar (see ensureThumbnail()), which
-    // otherwise paid the same decode/memory cost as actually viewing the
-    // page just to fill in a ~140px preview.
-    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number): Promise<string[]> {
-        const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        activeWorkerCalls++;
-        try {
-            return await getSharedWorkerPool().processPages(note, pages, scale);
-        } finally {
-            activeWorkerCalls--;
-            scheduleIdleTeardownIfIdle();
-        }
-    }
 }
 
 // In-process extension point for other Obsidian plugins that want to enrich
@@ -2475,11 +2220,23 @@ function parsePageAnchor(subpath?: string): number | null {
 // list with a minimal PDF-embed-style page-nav toolbar, not SupernoteView's
 // full zoom/find/thumbnail toolbar — so this doesn't share code with it beyond
 // ImageConverter/SupernoteX.
+// Per-page bookkeeping for SupernoteEmbed's lazy image loading (see
+// setupPageLoadObserver()) - mirrors SupernoteView's own PageRenderState/
+// pageObserver split, just without that one's zoom/text-layer/eviction
+// concerns, which this simpler, read-only embed doesn't need.
+interface EmbedPageLoadState extends RenderedNotePage {
+	loaded: boolean;
+	visible: boolean;
+	loadDebounceTimer?: number;
+}
+
 export class SupernoteEmbed extends Component {
 	private destroyed = false;
 	private pageEls: HTMLElement[] = [];
 	private pageIndicatorEl: HTMLElement | null = null;
 	private pageObserver: IntersectionObserver | null = null;
+	private pageLoadObserver: IntersectionObserver | null = null;
+	private pageLoadStates: EmbedPageLoadState[] = [];
 	private currentPage = 0;
 
 	private pagesEl: HTMLElement | null = null;
@@ -2515,6 +2272,8 @@ export class SupernoteEmbed extends Component {
 	onunload(): void {
 		this.destroyed = true;
 		this.pageObserver?.disconnect();
+		this.pageLoadObserver?.disconnect();
+		for (const state of this.pageLoadStates) window.clearTimeout(state.loadDebounceTimer);
 		this.minHeightObserver?.disconnect();
 	}
 
@@ -2524,6 +2283,10 @@ export class SupernoteEmbed extends Component {
 		this.containerEl.setCssStyles({ minHeight: '' });
 		this.pageObserver?.disconnect();
 		this.pageObserver = null;
+		this.pageLoadObserver?.disconnect();
+		this.pageLoadObserver = null;
+		for (const state of this.pageLoadStates) window.clearTimeout(state.loadDebounceTimer);
+		this.pageLoadStates = [];
 		this.minHeightObserver?.disconnect();
 		this.minHeightObserver = null;
 		this.pageEls = [];
@@ -2536,7 +2299,7 @@ export class SupernoteEmbed extends Component {
 		try {
 			const note = await this.app.vault.readBinary(this.file);
 			if (this.destroyed) return;
-			sn = new SupernoteX(new Uint8Array(note));
+			sn = parseNote(note);
 		} catch (err) {
 			this.renderError(err);
 			return;
@@ -2544,19 +2307,13 @@ export class SupernoteEmbed extends Component {
 
 		// Clamped rather than rejected: a stale anchor (note re-paginated
 		// since the link was written) should still show *a* page, not error.
+		// A single-page note with no anchor is treated the same as an
+		// explicit anchor to its (only) page: like an anchor, there's nowhere
+		// to navigate or lazily scroll to, so it should render eagerly too.
 		const singlePage = this.pageAnchor !== null
 			? Math.min(Math.max(this.pageAnchor, 1), sn.pages.length)
-			: null;
+			: (sn.pages.length === 1 ? 1 : null);
 		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
-
-		let images: string[];
-		try {
-			images = await new ImageConverter().convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
-		} catch (err) {
-			if (!this.destroyed) this.renderError(err);
-			return;
-		}
-		if (this.destroyed) return;
 
 		// A single requested page, or a single-page note, needs no page-nav
 		// toolbar — there's nowhere for it to navigate to.
@@ -2567,22 +2324,99 @@ export class SupernoteEmbed extends Component {
 
 		const pagesEl = this.containerEl.createDiv({ cls: 'supernote-embed-pages' });
 		this.pagesEl = pagesEl;
-		const startPageNumber = singlePage ?? 1;
-		images.forEach((imageDataUrl, i) => {
-			const pageContainer = pagesEl.createDiv({ cls: 'page-container' });
-			pageContainer.dataset.pageNumber = String(startPageNumber + i);
-			const img = pageContainer.createEl('img', { attr: { src: imageDataUrl } });
-			if (this.settings.invertColorsWhenDark) {
-				img.addClass('supernote-invert-dark');
+
+		if (singlePage !== null) {
+			// A single deep-linked page (`#page=N` anchor) - render it directly,
+			// there's nothing else in this embed to lazily defer.
+			let images: string[];
+			try {
+				images = await new ImageConverter().convertToImages(sn, [singlePage]);
+			} catch (err) {
+				if (!this.destroyed) this.renderError(err);
+				return;
 			}
-			this.pageEls.push(pageContainer);
-		});
+			if (this.destroyed) return;
+			const pages = buildNotePageElements(images, pagesEl, {
+				startPageNumber: singlePage,
+				invertColorsWhenDark: this.settings.invertColorsWhenDark,
+			});
+			this.pageEls = pages.map((p) => p.containerEl);
+		} else {
+			// Builds every page's placeholder immediately (so the toolbar's
+			// page count, scrollbar length, and page-jump math are all correct
+			// right away) but defers actually rasterizing each page's image
+			// until it's about to scroll into view - see issue #183: rasterizing
+			// every page upfront made even the *first* page wait on the whole
+			// document finishing in the (deliberately small - see WorkerPool.
+			// DEFAULT_MAX_WORKERS) shared worker pool, the same problem
+			// SupernoteView's own pageObserver/ensurePageImage() already solves
+			// for the full view.
+			const pages = buildNotePagePlaceholders(sn.pages.length, pagesEl, {
+				pageWidth: sn.pageWidth,
+				pageHeight: sn.pageHeight,
+				invertColorsWhenDark: this.settings.invertColorsWhenDark,
+			});
+			this.pageEls = pages.map((p) => p.containerEl);
+			this.setupPageLoadObserver(sn, pages);
+		}
 
 		if (showToolbar) {
 			this.observePages();
 		}
 
 		this.setupMinHeightTracking();
+	}
+
+	// Loads each page's image lazily, only once it's about to scroll into
+	// view (rootMargin prefetches a screen ahead/behind, same as
+	// SupernoteView's pageObserver) - see render()'s comment for why this
+	// matters. Unlike SupernoteView, never evicts a loaded page's image:
+	// embeds are read-only, and a decoded page image here is a plain <img>
+	// (not a canvas backing store an ImageBitmap was drawn into), a much
+	// smaller per-page cost that isn't worth the extra complexity of
+	// reclaiming for this simpler component - see class doc comment.
+	private setupPageLoadObserver(sn: SupernoteX, pages: RenderedNotePage[]): void {
+		const states: EmbedPageLoadState[] = pages.map((p) => ({ ...p, loaded: false, visible: false }));
+		this.pageLoadStates = states;
+
+		this.pageLoadObserver = new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				const state = states.find((s) => s.containerEl === entry.target);
+				if (!state) continue;
+				state.visible = entry.isIntersecting;
+				if (!entry.isIntersecting) continue;
+
+				window.clearTimeout(state.loadDebounceTimer);
+				// Debounced the same ~150ms, and for the same reason, as
+				// SupernoteView's pageObserver: a fast programmatic scroll
+				// (scrollToPage()'s smooth scrollIntoView) transitions through
+				// several intermediate pages well within this window, and none
+				// of those should trigger a load nobody will actually see.
+				state.loadDebounceTimer = window.setTimeout(() => {
+					if (!state.visible || state.loaded) return;
+					void this.ensurePageLoaded(sn, state);
+				}, 150);
+			}
+		}, { root: this.containerEl, rootMargin: '100% 0px' });
+
+		for (const state of states) this.pageLoadObserver.observe(state.containerEl);
+	}
+
+	// Idempotent and safe to call speculatively - `loaded` is set eagerly, the
+	// same pattern (and for the same reason) as SupernoteView's
+	// ensurePageImage()/ensureTextLayer().
+	private async ensurePageLoaded(sn: SupernoteX, state: EmbedPageLoadState): Promise<void> {
+		state.loaded = true;
+		try {
+			const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [state.pageNumber]);
+			if (this.destroyed) return;
+			fillNotePagePlaceholder(state, imageDataUrl);
+		} catch (err) {
+			// Allows a retry on the next intersection - a transient
+			// rasterization failure shouldn't permanently blank this page.
+			state.loaded = false;
+			console.error(`Supernote: embed page ${state.pageNumber} failed to load:`, err);
+		}
 	}
 
 	// Obsidian's PDF embed never lets the embed shrink below one full page —
