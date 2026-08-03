@@ -2256,15 +2256,24 @@ export class SupernoteEmbed extends Component {
 		// prefers-color-scheme media feature (the right call for a page with
 		// no other context) - but Obsidian's own dark/light theme is set
 		// independently of that, and plenty of users run one dark and the
-		// other light. Its `dark` attribute lets a host that actually knows
-		// override that guess; registerEvent() (auto-cleaned-up by Component,
-		// regardless of this class's own onunload() override below) keeps it
-		// in sync if the user swaps themes without navigating away.
+		// other light (confirmed as a real bug, not a hypothetical: on a
+		// system whose OS-level scheme is dark, an embed inside Obsidian's
+		// *light* theme still got its page images inverted by the OS-level
+		// guess, since an earlier version of the component's CSS treated
+		// that guess and this attribute as independent conditions rather
+		// than this attribute overriding it - see SupernoteViewerElement's
+		// STYLE constant for the fix). Always setting an explicit "true" or
+		// "false" value below (never just adding/removing the attribute)
+		// is what makes this actually override the OS guess in *both*
+		// directions, not just toward dark. registerEvent() (auto-cleaned-up
+		// by Component, regardless of this class's own onunload() override
+		// below) keeps it in sync if the user swaps themes without
+		// navigating away.
 		this.registerEvent(this.app.workspace.on('css-change', () => this.updateDarkAttribute()));
 	}
 
 	private updateDarkAttribute(): void {
-		this.viewerEl?.toggleAttribute('dark', document.body.classList.contains('theme-dark'));
+		this.viewerEl?.setAttribute('dark', document.body.classList.contains('theme-dark') ? 'true' : 'false');
 	}
 
 	// Called by Obsidian's embed system once this component has been mounted

@@ -29,24 +29,42 @@ const STYLE = `
     --supernote-viewer-muted: #666666;
     color-scheme: light dark;
 }
+/* The dark attribute is a tri-state, not a plain boolean, and the two
+   rules below are an override, not an OR - getting this wrong (an earlier
+   version of this file did) is a real, confirmed bug: a host whose OS-level
+   color scheme happens to be dark while the host itself is actually
+   rendering light (e.g. Obsidian set to its light theme on a system whose
+   OS is set to dark - a completely ordinary, common combination, not an
+   edge case) would otherwise still get this media-query guess applied
+   underneath, on top of whatever the host explicitly asked for - inverting
+   page images and swapping colors to dark even though the surrounding page
+   is light, making handwriting strokes invisible against it.
+     - attribute absent entirely: follow the OS-level guess below
+     - attribute present, value anything other than the string false
+       (including the attribute with no value at all): force dark
+     - attribute present with value exactly false: force light, regardless
+       of what the OS guess would otherwise say
+   Obsidian's SupernoteEmbed (main.ts) always explicitly sets one of the
+   latter two - see updateDarkAttribute() - specifically so its actual
+   theme-dark/theme-light state always wins over the OS guess in both
+   directions, not just the force-dark one.
+
+   :not() has to be nested *inside* :host()'s own argument list -
+   :host([dark]:not([dark="false"])), not :host([dark]):not([dark="false"])
+   chained after it - confirmed by testing directly: the chained form
+   parses without error and CSS.supports() even reports it as a supported
+   selector, but silently never matches anything, in a bare, from-scratch
+   shadow root as well as this real component - not specific to anything
+   else going on here. */
 @media (prefers-color-scheme: dark) {
-    :host {
+    :host(:not([dark])) {
         --supernote-viewer-border: #444444;
         --supernote-viewer-bg: #1e1e1e;
         --supernote-viewer-fg: #e8e8e8;
         --supernote-viewer-muted: #a0a0a0;
     }
 }
-/* Explicit override for a host that knows its own actual dark/light state
-   directly, rather than this element guessing from the OS-level
-   prefers-color-scheme media feature - which frequently doesn't match:
-   Obsidian's own theme toggle (see main.ts's SupernoteEmbed, which sets
-   this from document.body's actual theme-dark/theme-light class) is
-   completely independent of the OS setting, and plenty of users run one
-   dark and the other light. An attribute selector's specificity beats a
-   bare :host with no attribute regardless of which was declared inside a
-   @media block, so this correctly wins over the guess above either way. */
-:host([dark]) {
+:host([dark]:not([dark="false"])) {
     --supernote-viewer-border: #444444;
     --supernote-viewer-bg: #1e1e1e;
     --supernote-viewer-fg: #e8e8e8;
@@ -147,14 +165,18 @@ button[aria-pressed="true"] {
    -> "only when the environment is dark" two-part condition the Obsidian
    plugin's own invertColorsWhenDark setting has (see main.ts's
    SupernoteEmbed) - the attribute alone is "opt in to inversion", not
-   "always invert". Two ways "dark" gets decided - see the :host([dark])
-   rule above for why both exist. */
+   "always invert". The dark attribute's override (not OR) semantics are
+   exactly the same as the :host color-variable rules above, and for the
+   same reason: without the :not([dark])/[dark="false"] guards, a
+   light-themed host on a dark-OS system would still get its page images
+   inverted underneath it, same bug as the border/background colors
+   above. */
 @media (prefers-color-scheme: dark) {
-    .pages .page-container > img.supernote-invert-dark {
+    :host(:not([dark])) .pages .page-container > img.supernote-invert-dark {
         filter: invert(1);
     }
 }
-:host([dark]) .pages .page-container > img.supernote-invert-dark {
+:host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark {
     filter: invert(1);
 }
 .status {
