@@ -78,8 +78,10 @@ npm test                              # vitest run
     download and today's-notes import modals.
   - `deviceFetch.ts` / `deviceDate.ts` — device HTTP client and date parsing,
     each with a co-located `*.test.ts`.
-  - `myworker.worker.ts` — the rasterization Web Worker (bundled via
-    `esbuild-plugin-inline-worker`).
+  - `rasterize.worker.ts` / `pdfBuild.worker.ts` — two separate Web Workers
+    (bundled via `esbuild-plugin-inline-worker`), split so the standalone
+    web component's bundle (`src/webcomponent/`) doesn't pull in pdf-lib
+    just for sharing a worker script with the plugin's PDF export feature.
 - Don't commit build artifacts (`main.js`, `node_modules/`) — `main.js` is
   gitignored and shipped only via GitHub releases.
 

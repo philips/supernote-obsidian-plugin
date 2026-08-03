@@ -72,6 +72,9 @@ I personally don't accept funding or donations for this project. However, if you
 
 - Building a custom AI/OCR companion plugin? See [`ocr-plugins.md`](ocr-plugins.md)
   for the `registerPageTextProcessor` hook and a working example.
+- Using the `<supernote-viewer>` web component in your own app? See
+  [`webcomponent-usage.md`](webcomponent-usage.md). Publishing a new version of it? See
+  [`webcomponent-publishing.md`](webcomponent-publishing.md).
 - Make sure your NodeJS is at least v16 (`node --version`).
 - Clone this repo.
 - Setup the deps
@@ -81,6 +84,36 @@ git submodule init && git submodule update
 npm run build
 npm install
 ```
+
+### `<supernote-viewer>` web component (experimental)
+
+[Issue #183](https://github.com/philips/supernote-obsidian-plugin/issues/183) tracks pulling the note
+viewer out into a standalone `<supernote-viewer>` custom element that runs on any page, with no Obsidian
+involved - useful for previewing a `.note` file's rendering pipeline outside the plugin, or eventually for
+publishing notes as static web pages.
+
+**Try it live:** https://philips.github.io/supernote-web-component/ - pick a `.note` file from your device
+to view it in the browser, no install required. That page is built and hosted from
+[philips/supernote-web-component](https://github.com/philips/supernote-web-component), which clones this
+repo at deploy time; it isn't published or bundled with the plugin release itself. To build it yourself
+instead:
+
+```
+npm run build:webcomponent   # writes dist/supernote-viewer.js (gitignored)
+npx serve .                  # any static file server works - module scripts need http(s), not file://
+```
+
+Then open `/demo/` in a browser and pick a `.note` file to view it. See
+[`webcomponent-usage.md`](webcomponent-usage.md) for the full API (attributes, properties, events,
+styling, framework notes) and [`webcomponent-publishing.md`](webcomponent-publishing.md) for how to
+actually ship a version of this for others to depend on - nothing is published with a stable URL/version
+yet, so don't point production code at the live demo above.
+
+Note that this can't literally run embedded in this README on GitHub - GitHub sanitizes rendered Markdown
+and strips `<script>` tags and custom elements, so there's no way to load a live, interactive component
+directly on a GitHub-rendered page. A hosted demo (e.g. GitHub Pages) linked from here would work; that's
+left for a future pass once the component is further along (it's read-only for now - no save/export, see
+the issue for why that's a separate piece of work).
 
 - `npm i` or `yarn` to install dependencies.
 - `npm run dev` to start compilation in watch mode.

@@ -88,6 +88,32 @@ export function buildNotePagePlaceholders(
         const pageContainer = document.createElement('div');
         pageContainer.className = 'page-container';
         pageContainer.dataset.pageNumber = String(startPageNumber + i);
+        // Also load-bearing, not just the img's own width:100% below - see
+        // that one's comment for the full trick, but the short version:
+        // page-container has no CSS width of its own (see noteRenderer's
+        // caller-side stylesheets), so under a flex container using
+        // `align-items: center` rather than the stretch default (both
+        // SupernoteViewerElement's .pages and SupernoteView's own page list
+        // do this, to keep pages narrower than the viewport actually
+        // centered instead of stretched), a flex item with no explicit
+        // width sizes to its own content's width - and the still-src-less
+        // img's "100%" below has nothing definite to resolve against in
+        // that case, collapsing to ~0 regardless of its aspect-ratio.
+        // Confirmed via real, direct testing: without this, every
+        // not-yet-loaded placeholder measured ~22px tall (a bare <img>'s
+        // default fallback size) instead of its real page height, which
+        // silently made the *entire* scrollable page list far shorter than
+        // it should've been for any pages beyond however many happened to
+        // have already loaded - manifesting as "scrolling quickly jumps
+        // straight to the last page number" (a real user-reported bug):
+        // the scrollable range was measured against those collapsed
+        // heights, so a normal-sized scroll gesture could reach what was
+        // then the *current* (still growing) scroll-max long before
+        // reaching the note's real end. Cleared again in
+        // fillNotePagePlaceholder() once a real image loads, for the same
+        // reason the img's own overrides are - reverting to natural,
+        // possibly-narrower-than-container, centered sizing.
+        pageContainer.style.width = '100%';
 
         const img = document.createElement('img');
         // `width: 100%` is the load-bearing half of this trick, not just
@@ -115,6 +141,7 @@ export function buildNotePagePlaceholders(
 // would be: by its own real intrinsic dimensions, capped by the container
 // via ordinary CSS.
 export function fillNotePagePlaceholder(page: RenderedNotePage, imageDataUrl: string): void {
+    page.containerEl.style.width = '';
     page.imageEl.style.width = '';
     page.imageEl.style.aspectRatio = '';
     page.imageEl.src = imageDataUrl;

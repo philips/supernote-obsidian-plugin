@@ -6,10 +6,14 @@ import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
-import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
-import Worker from 'myworker.worker';
+import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
+import PdfBuildWorker from 'pdfBuild.worker';
 import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
-import { parseNote, buildNotePageElements, buildNotePagePlaceholders, fillNotePagePlaceholder, RenderedNotePage } from './render/noteRenderer';
+// Side-effect import: registers <supernote-viewer> (customElements.define)
+// - see SupernoteEmbed below, which is now a thin wrapper around it rather
+// than its own separate rendering implementation.
+import './webcomponent/SupernoteViewerElement';
+import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
@@ -87,13 +91,13 @@ function yieldToMainThread(): Promise<void> {
 }
 
 // Rasterizes and assembles the *entire* PDF for `sn` inside a dedicated
-// Worker (see the 'buildPdf' message in myworker.worker.ts) rather than on
-// the main thread - pdf-lib's own embedPng() is genuinely expensive, and
-// entirely inherent to it: confirmed via real-device testing (see
-// myworker.worker.ts's own doc comment on 'buildPdf' for the full trail)
-// that it still peaks ~1.7GB and takes 10+ seconds for a 100-page note even
-// after dropping each page's alpha channel, since it always fully decodes
-// every embedded PNG to raw pixels and retains that until pdfDoc.save().
+// Worker (see pdfBuild.worker.ts) rather than on the main thread - pdf-lib's
+// own embedPng() is genuinely expensive, and entirely inherent to it:
+// confirmed via real-device testing (see pdfBuild.worker.ts's own doc
+// comment for the full trail) that it still peaks ~1.7GB and takes 10+
+// seconds for a 100-page note even after dropping each page's alpha
+// channel, since it always fully decodes every embedded PNG to raw pixels
+// and retains that until pdfDoc.save().
 // None of that is fixable short of not using pdf-lib, but running it inside
 // a Worker at least means Obsidian's own UI thread never carries any of that
 // cost, regardless of how large it is.
@@ -109,15 +113,15 @@ async function buildPdfInWorker(sn: SupernoteX): Promise<Uint8Array> {
     const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
     const pages = pageNumbers.map((n) => extractPdfPageData(sn, n).pages[0]);
 
-    const worker = new Worker();
+    const worker = new PdfBuildWorker();
     try {
         return await new Promise<Uint8Array>((resolve, reject) => {
-            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+            worker.onmessage = (e: MessageEvent<PdfBuildWorkerResponse>) => {
                 if (e.data.type === 'error') reject(new Error(e.data.error));
                 else if (e.data.type === 'pdfResult') resolve(e.data.pdfBytes);
             };
             worker.onerror = (error) => reject(new Error(error.message));
-            const message: SupernoteWorkerMessage = {
+            const message: PdfBuildWorkerMessage = {
                 type: 'buildPdf',
                 pageWidth: sn.pageWidth,
                 pageHeight: sn.pageHeight,
@@ -2216,33 +2220,22 @@ function parsePageAnchor(subpath?: string): number | null {
 // undocumented app.embedRegistry API (see registration in SupernotePlugin.onload
 // — there's no public API for embedding a custom, non-markdown file type; core's
 // own image/PDF/canvas embeds are wired up through this same internal registry).
-// Deliberately much simpler than SupernoteView: a scrollable, read-only page
-// list with a minimal PDF-embed-style page-nav toolbar, not SupernoteView's
-// full zoom/find/thumbnail toolbar — so this doesn't share code with it beyond
-// ImageConverter/SupernoteX.
-// Per-page bookkeeping for SupernoteEmbed's lazy image loading (see
-// setupPageLoadObserver()) - mirrors SupernoteView's own PageRenderState/
-// pageObserver split, just without that one's zoom/text-layer/eviction
-// concerns, which this simpler, read-only embed doesn't need.
-interface EmbedPageLoadState extends RenderedNotePage {
-	loaded: boolean;
-	visible: boolean;
-	loadDebounceTimer?: number;
-}
-
+//
+// A thin adapter around <supernote-viewer> (src/webcomponent/), not its own
+// rendering implementation - Obsidian's renderer is a real Chromium/WebView
+// browsing context, so the same standalone custom element built for issue
+// #183 runs here unmodified. This class's whole job is bridging Obsidian
+// specifics the component itself has no way to know about: reading the
+// file's bytes from the vault, the plugin's invertColorsWhenDark setting,
+// and the "always show at least one full page" min-height sizing Obsidian's
+// own PDF embed has (see applyMinHeight()) - everything else (lazy loading,
+// the page-nav toolbar, the recognized-text toggle) now lives in the
+// component, shared with every other consumer of it.
 export class SupernoteEmbed extends Component {
-	private destroyed = false;
-	private pageEls: HTMLElement[] = [];
-	private pageIndicatorEl: HTMLElement | null = null;
-	private pageObserver: IntersectionObserver | null = null;
-	private pageLoadObserver: IntersectionObserver | null = null;
-	private pageLoadStates: EmbedPageLoadState[] = [];
-	private currentPage = 0;
-
-	private pagesEl: HTMLElement | null = null;
-	private toolbarEl: HTMLElement | null = null;
-	// note page height / width — used to keep min-height (see setupMinHeightTracking)
-	// matched to one full page's rendered height at whatever width the embed
+	private viewerEl: SupernoteViewerElement | null = null;
+	// note page height / width, from the component's own supernote-load
+	// event - used to keep min-height (see setupMinHeightTracking) matched
+	// to one full page's rendered height at whatever width the embed
 	// currently has, the same "always show at least one whole page" behavior
 	// Obsidian's own PDF embed has.
 	private pageAspectRatio: number | null = null;
@@ -2259,6 +2252,28 @@ export class SupernoteEmbed extends Component {
 		private pageAnchor: number | null,
 	) {
 		super();
+		// <supernote-viewer>'s own light/dark defaults come from the OS-level
+		// prefers-color-scheme media feature (the right call for a page with
+		// no other context) - but Obsidian's own dark/light theme is set
+		// independently of that, and plenty of users run one dark and the
+		// other light (confirmed as a real bug, not a hypothetical: on a
+		// system whose OS-level scheme is dark, an embed inside Obsidian's
+		// *light* theme still got its page images inverted by the OS-level
+		// guess, since an earlier version of the component's CSS treated
+		// that guess and this attribute as independent conditions rather
+		// than this attribute overriding it - see SupernoteViewerElement's
+		// STYLE constant for the fix). Always setting an explicit "true" or
+		// "false" value below (never just adding/removing the attribute)
+		// is what makes this actually override the OS guess in *both*
+		// directions, not just toward dark. registerEvent() (auto-cleaned-up
+		// by Component, regardless of this class's own onunload() override
+		// below) keeps it in sync if the user swaps themes without
+		// navigating away.
+		this.registerEvent(this.app.workspace.on('css-change', () => this.updateDarkAttribute()));
+	}
+
+	private updateDarkAttribute(): void {
+		this.viewerEl?.setAttribute('dark', document.body.classList.contains('theme-dark') ? 'true' : 'false');
 	}
 
 	// Called by Obsidian's embed system once this component has been mounted
@@ -2270,10 +2285,6 @@ export class SupernoteEmbed extends Component {
 	}
 
 	onunload(): void {
-		this.destroyed = true;
-		this.pageObserver?.disconnect();
-		this.pageLoadObserver?.disconnect();
-		for (const state of this.pageLoadStates) window.clearTimeout(state.loadDebounceTimer);
 		this.minHeightObserver?.disconnect();
 	}
 
@@ -2281,142 +2292,50 @@ export class SupernoteEmbed extends Component {
 		this.containerEl.empty();
 		this.containerEl.addClass('supernote-embed');
 		this.containerEl.setCssStyles({ minHeight: '' });
-		this.pageObserver?.disconnect();
-		this.pageObserver = null;
-		this.pageLoadObserver?.disconnect();
-		this.pageLoadObserver = null;
-		for (const state of this.pageLoadStates) window.clearTimeout(state.loadDebounceTimer);
-		this.pageLoadStates = [];
 		this.minHeightObserver?.disconnect();
 		this.minHeightObserver = null;
-		this.pageEls = [];
-		this.currentPage = 0;
-		this.toolbarEl = null;
 		this.pageAspectRatio = null;
 		this.lastMinHeightWidth = -1;
 
-		let sn: SupernoteX;
+		let bytes: ArrayBuffer;
 		try {
-			const note = await this.app.vault.readBinary(this.file);
-			if (this.destroyed) return;
-			sn = parseNote(note);
+			bytes = await this.app.vault.readBinary(this.file);
 		} catch (err) {
 			this.renderError(err);
 			return;
 		}
 
-		// Clamped rather than rejected: a stale anchor (note re-paginated
-		// since the link was written) should still show *a* page, not error.
-		// A single-page note with no anchor is treated the same as an
-		// explicit anchor to its (only) page: like an anchor, there's nowhere
-		// to navigate or lazily scroll to, so it should render eagerly too.
-		const singlePage = this.pageAnchor !== null
-			? Math.min(Math.max(this.pageAnchor, 1), sn.pages.length)
-			: (sn.pages.length === 1 ? 1 : null);
-		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
-
-		// A single requested page, or a single-page note, needs no page-nav
-		// toolbar — there's nowhere for it to navigate to.
-		const showToolbar = singlePage === null && sn.pages.length > 1;
-		if (showToolbar) {
-			this.buildToolbar(sn.pages.length);
+		const viewer = this.containerEl.createEl('supernote-viewer');
+		// The outer .supernote-embed container (see styles.css) already
+		// supplies a bordered, resizable frame - `bare` drops the component's
+		// own default chrome so the two don't visually double up.
+		viewer.setAttribute('bare', '');
+		if (this.pageAnchor !== null) {
+			viewer.setAttribute('single-page', '');
+			viewer.setAttribute('page', String(this.pageAnchor));
 		}
-
-		const pagesEl = this.containerEl.createDiv({ cls: 'supernote-embed-pages' });
-		this.pagesEl = pagesEl;
-
-		if (singlePage !== null) {
-			// A single deep-linked page (`#page=N` anchor) - render it directly,
-			// there's nothing else in this embed to lazily defer.
-			let images: string[];
-			try {
-				images = await new ImageConverter().convertToImages(sn, [singlePage]);
-			} catch (err) {
-				if (!this.destroyed) this.renderError(err);
-				return;
-			}
-			if (this.destroyed) return;
-			const pages = buildNotePageElements(images, pagesEl, {
-				startPageNumber: singlePage,
-				invertColorsWhenDark: this.settings.invertColorsWhenDark,
-			});
-			this.pageEls = pages.map((p) => p.containerEl);
-		} else {
-			// Builds every page's placeholder immediately (so the toolbar's
-			// page count, scrollbar length, and page-jump math are all correct
-			// right away) but defers actually rasterizing each page's image
-			// until it's about to scroll into view - see issue #183: rasterizing
-			// every page upfront made even the *first* page wait on the whole
-			// document finishing in the (deliberately small - see WorkerPool.
-			// DEFAULT_MAX_WORKERS) shared worker pool, the same problem
-			// SupernoteView's own pageObserver/ensurePageImage() already solves
-			// for the full view.
-			const pages = buildNotePagePlaceholders(sn.pages.length, pagesEl, {
-				pageWidth: sn.pageWidth,
-				pageHeight: sn.pageHeight,
-				invertColorsWhenDark: this.settings.invertColorsWhenDark,
-			});
-			this.pageEls = pages.map((p) => p.containerEl);
-			this.setupPageLoadObserver(sn, pages);
+		if (this.settings.invertColorsWhenDark) {
+			viewer.setAttribute('invert-dark', '');
 		}
+		this.viewerEl = viewer;
+		this.updateDarkAttribute();
 
-		if (showToolbar) {
-			this.observePages();
-		}
+		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageWidth: number; pageHeight: number }>) => {
+			this.pageAspectRatio = e.detail.pageHeight / e.detail.pageWidth;
+			this.setupMinHeightTracking();
+		}) as EventListener);
+		viewer.addEventListener('supernote-error', ((e: CustomEvent<{ error: unknown; pageNumber?: number }>) => {
+			// A single page failing to rasterize (pageNumber set) just
+			// leaves that one page blank and retries later - only a
+			// whole-note failure (fetch/parse, no pageNumber) should blow
+			// away the embed with an error message.
+			if (e.detail.pageNumber === undefined) this.renderError(e.detail.error);
+		}) as EventListener);
 
-		this.setupMinHeightTracking();
-	}
-
-	// Loads each page's image lazily, only once it's about to scroll into
-	// view (rootMargin prefetches a screen ahead/behind, same as
-	// SupernoteView's pageObserver) - see render()'s comment for why this
-	// matters. Unlike SupernoteView, never evicts a loaded page's image:
-	// embeds are read-only, and a decoded page image here is a plain <img>
-	// (not a canvas backing store an ImageBitmap was drawn into), a much
-	// smaller per-page cost that isn't worth the extra complexity of
-	// reclaiming for this simpler component - see class doc comment.
-	private setupPageLoadObserver(sn: SupernoteX, pages: RenderedNotePage[]): void {
-		const states: EmbedPageLoadState[] = pages.map((p) => ({ ...p, loaded: false, visible: false }));
-		this.pageLoadStates = states;
-
-		this.pageLoadObserver = new IntersectionObserver((entries) => {
-			for (const entry of entries) {
-				const state = states.find((s) => s.containerEl === entry.target);
-				if (!state) continue;
-				state.visible = entry.isIntersecting;
-				if (!entry.isIntersecting) continue;
-
-				window.clearTimeout(state.loadDebounceTimer);
-				// Debounced the same ~150ms, and for the same reason, as
-				// SupernoteView's pageObserver: a fast programmatic scroll
-				// (scrollToPage()'s smooth scrollIntoView) transitions through
-				// several intermediate pages well within this window, and none
-				// of those should trigger a load nobody will actually see.
-				state.loadDebounceTimer = window.setTimeout(() => {
-					if (!state.visible || state.loaded) return;
-					void this.ensurePageLoaded(sn, state);
-				}, 150);
-			}
-		}, { root: this.containerEl, rootMargin: '100% 0px' });
-
-		for (const state of states) this.pageLoadObserver.observe(state.containerEl);
-	}
-
-	// Idempotent and safe to call speculatively - `loaded` is set eagerly, the
-	// same pattern (and for the same reason) as SupernoteView's
-	// ensurePageImage()/ensureTextLayer().
-	private async ensurePageLoaded(sn: SupernoteX, state: EmbedPageLoadState): Promise<void> {
-		state.loaded = true;
-		try {
-			const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [state.pageNumber]);
-			if (this.destroyed) return;
-			fillNotePagePlaceholder(state, imageDataUrl);
-		} catch (err) {
-			// Allows a retry on the next intersection - a transient
-			// rasterization failure shouldn't permanently blank this page.
-			state.loaded = false;
-			console.error(`Supernote: embed page ${state.pageNumber} failed to load:`, err);
-		}
+		// createEl() above already appended (and thus connected) it - matters
+		// for its own queueRender() (see SupernoteViewerElement.ts), which
+		// this kicks off via the fetch-free "bytes already in hand" path.
+		viewer.noteData = bytes;
 	}
 
 	// Obsidian's PDF embed never lets the embed shrink below one full page —
@@ -2426,63 +2345,26 @@ export class SupernoteEmbed extends Component {
 	// own page aspect ratio, so it's recomputed whenever the embed is resized
 	// (window resize, pane split/unsplit, sidebar toggle), not just once.
 	private setupMinHeightTracking(): void {
-		if (!this.pagesEl) return;
+		if (!this.viewerEl) return;
 		this.minHeightObserver = new ResizeObserver((entries) => {
 			const width = entries[0]?.contentRect.width;
 			if (width) this.applyMinHeight(width);
 		});
-		this.minHeightObserver.observe(this.pagesEl);
+		this.minHeightObserver.observe(this.viewerEl);
 	}
 
-	// `width` is pagesEl's content-box width (ResizeObserver's contentRect
-	// already excludes its own padding), i.e. exactly the width a page image
-	// renders at inside it — no separate padding math needed for that part.
+	// Approximates rather than exactly matches a page's own toolbar/padding
+	// chrome (which now lives inside the component's shadow root, not
+	// something this wrapper measures) - close enough for "always show
+	// roughly one full page," and simpler than reaching into the shadow DOM
+	// to measure it precisely.
 	private applyMinHeight(width: number): void {
-		if (this.pageAspectRatio === null || !this.pagesEl) return;
+		if (this.pageAspectRatio === null) return;
 		if (Math.abs(width - this.lastMinHeightWidth) < 1) return;
 		this.lastMinHeightWidth = width;
 
-		const toolbarHeight = this.toolbarEl?.offsetHeight ?? 0;
-		const pagesStyle = getComputedStyle(this.pagesEl);
-		const pagesPaddingY = parseFloat(pagesStyle.paddingTop) + parseFloat(pagesStyle.paddingBottom);
 		const pageHeight = width * this.pageAspectRatio;
-		this.containerEl.setCssStyles({ minHeight: `${Math.ceil(toolbarHeight + pagesPaddingY + pageHeight)}px` });
-	}
-
-	private buildToolbar(pageCount: number): void {
-		const toolbar = this.containerEl.createDiv({ cls: 'supernote-embed-toolbar' });
-		this.toolbarEl = toolbar;
-
-		const prevBtn = toolbar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Previous page' } });
-		setIcon(prevBtn, 'chevron-up');
-		prevBtn.addEventListener('click', () => this.scrollToPage(this.currentPage - 1));
-
-		this.pageIndicatorEl = toolbar.createSpan({ cls: 'supernote-embed-page-indicator', text: `1 / ${pageCount}` });
-
-		const nextBtn = toolbar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Next page' } });
-		setIcon(nextBtn, 'chevron-down');
-		nextBtn.addEventListener('click', () => this.scrollToPage(this.currentPage + 1));
-	}
-
-	private scrollToPage(index: number): void {
-		const clamped = Math.min(Math.max(index, 0), this.pageEls.length - 1);
-		this.pageEls[clamped]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-	}
-
-	// Keeps the toolbar's page indicator in sync with whatever page is
-	// actually scrolled into view, the same pattern SupernoteView itself uses
-	// for its own (much larger) page-jump indicator.
-	private observePages(): void {
-		this.pageObserver = new IntersectionObserver((entries) => {
-			for (const entry of entries) {
-				if (!entry.isIntersecting) continue;
-				const idx = this.pageEls.indexOf(entry.target as HTMLElement);
-				if (idx === -1) continue;
-				this.currentPage = idx;
-				this.pageIndicatorEl?.setText(`${idx + 1} / ${this.pageEls.length}`);
-			}
-		}, { root: this.containerEl, threshold: 0.5 });
-		this.pageEls.forEach((el) => this.pageObserver?.observe(el));
+		this.containerEl.setCssStyles({ minHeight: `${Math.ceil(pageHeight)}px` });
 	}
 
 	private renderError(err: unknown): void {

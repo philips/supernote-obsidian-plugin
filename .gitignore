@@ -10,6 +10,10 @@
 # They should be uploaded to GitHub releases instead.
 main.js
 
+# Standalone <supernote-viewer> web component build output (see
+# esbuild.webcomponent.config.mjs) - same reasoning as main.js above.
+dist
+
 # Exclude sourcemaps
 *.map
 

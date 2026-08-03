@@ -350,53 +350,60 @@ div.supernote-canvas-wrap canvas {
     font-size: var(--font-smaller);
 }
 
-.supernote-embed {
-    display: flex;
+/* `.internal-embed.supernote-embed`, not just `.supernote-embed` alone -
+   *and* `!important` on `display` specifically - both needed to actually
+   win against Obsidian's own core CSS, confirmed via a real headless-
+   Obsidian inspection (issue #183/PR #185's SupernoteEmbed rewrite):
+   without this, `display: flex` silently never took effect,
+   `<supernote-viewer>` never actually became a flex item, so it rendered at
+   full (all-pages) content height instead of being clipped/scrollable at
+   this container's fixed height - and since nothing inside the component's
+   shadow root ever needed to scroll internally as a result,
+   scrollIntoView() calls (the toolbar's page-nav buttons) fell through to
+   scroll the *note itself* instead.
+
+   Two separate core rules were fighting this, at two different
+   specificities, so a plain specificity bump wasn't a safe enough fix on
+   its own:
+   - `.internal-embed:not(.image-embed) { display: block; }` (specificity
+     ties with a plain `.supernote-embed` alone; two classes beats it).
+   - Live Preview's own content-reset, `.markdown-source-view.mod-cm6
+     .cm-content > * { display: block; margin: 0 !important; }` - three
+     classes, beating even the two-class fix above; only applies in Live
+     Preview, not Reading view, which is exactly why this wasn't caught in
+     the standalone web component's own testing (no Obsidian, no Live
+     Preview). Matching *that* selector's exact specificity would work today
+     but is fragile against Obsidian ever changing it - `!important` on just
+     this one property is the narrower, more robust fix, not a general
+     escape hatch used elsewhere in this stylesheet. */
+.internal-embed.supernote-embed {
+    display: flex !important;
     flex-direction: column;
     height: 800px;
     min-height: 200px;
     resize: vertical;
-    overflow-y: auto;
-    overflow-x: auto;
+    /* Just `hidden`, not `auto`: the actual scrolling now happens inside
+       <supernote-viewer>'s own shadow root (see below) - scrolling here too
+       would just mean two nested scrollbars for the same content. */
+    overflow: hidden;
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-s);
 }
 
-.supernote-embed-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5em;
-    padding: 0.3em 0.6em;
-    background: var(--background-primary);
-    border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.supernote-embed-page-indicator {
-    min-width: 4em;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: var(--font-smaller);
-}
-
-.supernote-embed-pages {
-    display: flex;
-    flex-direction: column;
-    gap: 1em;
-    padding: 1em;
-}
-
-.supernote-embed .page-container {
+/* SupernoteEmbed (main.ts) renders a <supernote-viewer> (src/webcomponent/)
+   as this container's only child, with its own `bare` attribute set so its
+   internal chrome doesn't double up with the border above - this is the
+   classic flexbox "let a flex item actually shrink/scroll within a fixed-
+   height parent" fix (a flex item's default min-height:auto otherwise wins
+   over the resize-driven height here). Everything else about how a note
+   renders (toolbar, page list, recognized-text toggle) lives inside that
+   element's shadow root, out of this stylesheet's reach entirely - see
+   src/webcomponent/SupernoteViewerElement.ts's own STYLE constant.
+*/
+.supernote-embed supernote-viewer {
     display: block;
-    margin: 0;
-}
-
-.supernote-embed img {
-    display: block;
-    max-width: 100%;
+    flex: 1;
+    min-height: 0;
 }
 
 .supernote-embed-error {
