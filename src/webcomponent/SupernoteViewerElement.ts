@@ -12,12 +12,24 @@
 import { SupernoteX } from 'supernote-typescript';
 import { ImageConverter } from '../render/imageConverter';
 import { RenderedNotePage, buildNotePagePlaceholders, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
+import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
 
 interface ViewerPageState extends RenderedNotePage {
     textEl: HTMLElement;
+    wordEntries: WordOverlayEntry[];
     loaded: boolean;
     visible: boolean;
     loadDebounceTimer?: number;
+}
+
+interface FindMatch {
+    pageIndex: number;
+    entry: WordOverlayEntry;
+}
+
+interface PageSearchEntry {
+    lower: string;
+    entryAt: (offset: number) => WordOverlayEntry | undefined;
 }
 
 const STYLE = `
@@ -125,6 +137,33 @@ button[aria-pressed="true"] {
     color: var(--supernote-viewer-muted);
     font-size: 0.9em;
 }
+.find-bar {
+    display: none;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4em 0.6em;
+    background: var(--supernote-viewer-bg);
+    border-bottom: 1px solid var(--supernote-viewer-border);
+}
+.find-bar.open {
+    display: flex;
+}
+.find-bar input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--supernote-viewer-border);
+    border-radius: 4px;
+    padding: 0.2em 0.5em;
+}
+.find-count {
+    min-width: 5em;
+    color: var(--supernote-viewer-muted);
+    font-size: 0.9em;
+    white-space: nowrap;
+}
 .pages {
     flex: 1;
     overflow: auto;
@@ -136,11 +175,33 @@ button[aria-pressed="true"] {
     box-sizing: border-box;
 }
 .pages .page-container {
+    position: relative;
     max-width: 100%;
 }
 .pages .page-container > img {
     display: block;
     max-width: 100%;
+}
+/* Invisible-by-default per-word overlay (see src/render/wordOverlay.ts) -
+   positioned absolutely over the page image/placeholder using the same
+   container this rule's own position: relative above establishes. Text
+   itself is never shown (color: transparent) - this exists purely so
+   find-in-note has something to search and a box to highlight, not to
+   render a visible/selectable text layer (that's what "recognized text"
+   mode, toggled by the Aa button, already does). */
+.word-overlay-span {
+    position: absolute;
+    color: transparent;
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.word-overlay-span.word-overlay-match {
+    background: rgba(255, 214, 0, 0.45);
+}
+.word-overlay-span.word-overlay-match-current {
+    background: rgba(255, 128, 0, 0.7);
 }
 .pages.mode-text .page-container > img {
     display: none;
@@ -210,6 +271,7 @@ export class SupernoteViewerElement extends HTMLElement {
     private pageIndicatorEl: HTMLElement | null = null;
     private modeToggleBtn: HTMLButtonElement | null = null;
     private pageLoadObserver: IntersectionObserver | null = null;
+    private resizeObserver: ResizeObserver | null = null;
     private pageStates: ViewerPageState[] = [];
     private currentPage = 0;
     private pageIndicatorScrollScheduled = false;
@@ -218,6 +280,13 @@ export class SupernoteViewerElement extends HTMLElement {
     private renderQueued = false;
     private renderToken = 0;
     private _noteData: ArrayBuffer | Uint8Array | null = null;
+    private findBarEl: HTMLElement | null = null;
+    private findInputEl: HTMLInputElement | null = null;
+    private findCountEl: HTMLElement | null = null;
+    private findToggleBtn: HTMLButtonElement | null = null;
+    private pageSearchIndex: PageSearchEntry[] = [];
+    private findMatches: FindMatch[] = [];
+    private findMatchIndex = -1;
 
     constructor() {
         super();
@@ -251,6 +320,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
     disconnectedCallback(): void {
         this.pageLoadObserver?.disconnect();
+        this.resizeObserver?.disconnect();
         for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
     }
 
@@ -392,6 +462,8 @@ export class SupernoteViewerElement extends HTMLElement {
     private teardownForRerender(): void {
         this.pageLoadObserver?.disconnect();
         this.pageLoadObserver = null;
+        this.resizeObserver?.disconnect();
+        this.resizeObserver = null;
         for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
         this.pageStates = [];
         this.pagesEl = null;
@@ -402,6 +474,13 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageIndicatorScrollScheduled = false;
         this.mode = 'image';
         this.sn = null;
+        this.findBarEl = null;
+        this.findInputEl = null;
+        this.findCountEl = null;
+        this.findToggleBtn = null;
+        this.pageSearchIndex = [];
+        this.findMatches = [];
+        this.findMatchIndex = -1;
         this.rootEl.innerHTML = '';
     }
 
@@ -419,7 +498,12 @@ export class SupernoteViewerElement extends HTMLElement {
         }
 
         const pageCount = sn.pages.length;
-        if (pageCount > 1) this.buildToolbar(pageCount);
+        // The toolbar itself (mode toggle + find) is worth having even for
+        // a single-page document - only the prev/next-page arrows and page
+        // indicator inside it are conditioned on pageCount > 1 (see
+        // buildToolbar()), since there's nowhere else to navigate to.
+        this.buildToolbar(pageCount);
+        this.buildFindBar();
 
         const pagesEl = document.createElement('div');
         pagesEl.className = 'pages';
@@ -435,9 +519,14 @@ export class SupernoteViewerElement extends HTMLElement {
 
         const states = this.wrapPageStates(sn, placeholders);
         this.pageStates = states;
+        this.pageSearchIndex = states.map((state) => {
+            const { text, entryAt } = buildWordSearchText(state.wordEntries);
+            return { lower: text.toLowerCase(), entryAt };
+        });
 
         this.setupPageLoadObserver(sn, states);
         if (pageCount > 1) this.setupPageIndicatorTracking();
+        this.setupWordOverlayResizing(sn, states);
     }
 
     // A single deep-linked page (the `page` attribute, clamped, defaulting
@@ -468,6 +557,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
         const [state] = this.wrapPageStates(sn, placeholders);
         this.pageStates = [state];
+        this.setupWordOverlayResizing(sn, this.pageStates);
         void this.ensurePageImageLoaded(sn, state);
     }
 
@@ -476,14 +566,22 @@ export class SupernoteViewerElement extends HTMLElement {
     // single-page (one page, eager) construction paths above.
     private wrapPageStates(sn: SupernoteX, placeholders: RenderedNotePage[]): ViewerPageState[] {
         return placeholders.map((page) => {
-            const rawText = sn.pages[page.pageNumber - 1]?.text ?? '';
+            const notePage = sn.pages[page.pageNumber - 1];
+            const rawText = notePage?.text ?? '';
             const textEl = document.createElement('div');
             textEl.className = 'page-text';
             textEl.classList.toggle('empty', rawText.length === 0);
             textEl.textContent = rawText.length > 0 ? rawText : 'No recognized text on this page.';
             page.containerEl.appendChild(textEl);
 
-            return { ...page, textEl, loaded: false, visible: false };
+            // Built unconditionally (even in single-page mode, which has no
+            // find UI to consume it) - cheap, keeps "this page's word
+            // overlay is built and correctly positioned" a plain invariant
+            // rather than something a caller needs to check the render mode
+            // to reason about.
+            const wordEntries = notePage ? buildWordOverlay(notePage, page.containerEl, page.pageNumber) : [];
+
+            return { ...page, textEl, wordEntries, loaded: false, visible: false };
         });
     }
 
@@ -564,6 +662,30 @@ export class SupernoteViewerElement extends HTMLElement {
         if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${current + 1} / ${this.pageStates.length}`;
     }
 
+    // Keeps every page's word-overlay spans (see src/render/wordOverlay.ts)
+    // aligned with that page's *currently rendered* CSS size - a
+    // ResizeObserver, not a one-time measurement at build time, since a
+    // page's rendered size can change after these spans are first
+    // positioned (a window resize, a host layout change, or the
+    // placeholder's forced 100% width giving way to the real image's
+    // natural size once it loads). Guarded for environments without
+    // ResizeObserver (none known among real browsers this targets, but
+    // costs nothing to check).
+    private setupWordOverlayResizing(sn: SupernoteX, states: ViewerPageState[]): void {
+        if (typeof ResizeObserver === 'undefined') return;
+        const { pageWidth, pageHeight } = sn;
+        this.resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                const state = states.find((s) => s.containerEl === entry.target);
+                if (!state) continue;
+                const { width, height } = entry.contentRect;
+                if (width <= 0 || height <= 0) continue;
+                repositionWordOverlay(state.wordEntries, width, height, pageWidth, pageHeight);
+            }
+        });
+        for (const state of states) this.resizeObserver.observe(state.containerEl);
+    }
+
     // Idempotent and safe to call speculatively - `loaded` is set eagerly so
     // a slow rasterization can't be triggered twice for the same page.
     private async ensurePageImageLoaded(sn: SupernoteX, state: ViewerPageState): Promise<void> {
@@ -585,28 +707,33 @@ export class SupernoteViewerElement extends HTMLElement {
         toolbar.className = 'toolbar';
         toolbar.setAttribute('part', 'toolbar');
 
-        const prevBtn = document.createElement('button');
-        prevBtn.type = 'button';
-        prevBtn.setAttribute('part', 'button');
-        prevBtn.setAttribute('aria-label', 'Previous page');
-        prevBtn.textContent = '↑';
-        prevBtn.addEventListener('click', () => this.goToPage(this.currentPage));
-        toolbar.appendChild(prevBtn);
+        // Nothing to navigate to with only one page - the mode toggle and
+        // find button below are still worth having regardless of page
+        // count, so only these three are conditioned on pageCount > 1.
+        if (pageCount > 1) {
+            const prevBtn = document.createElement('button');
+            prevBtn.type = 'button';
+            prevBtn.setAttribute('part', 'button');
+            prevBtn.setAttribute('aria-label', 'Previous page');
+            prevBtn.textContent = '↑';
+            prevBtn.addEventListener('click', () => this.goToPage(this.currentPage));
+            toolbar.appendChild(prevBtn);
 
-        const indicator = document.createElement('span');
-        indicator.className = 'page-indicator';
-        indicator.setAttribute('part', 'page-indicator');
-        indicator.textContent = `1 / ${pageCount}`;
-        toolbar.appendChild(indicator);
-        this.pageIndicatorEl = indicator;
+            const indicator = document.createElement('span');
+            indicator.className = 'page-indicator';
+            indicator.setAttribute('part', 'page-indicator');
+            indicator.textContent = `1 / ${pageCount}`;
+            toolbar.appendChild(indicator);
+            this.pageIndicatorEl = indicator;
 
-        const nextBtn = document.createElement('button');
-        nextBtn.type = 'button';
-        nextBtn.setAttribute('part', 'button');
-        nextBtn.setAttribute('aria-label', 'Next page');
-        nextBtn.textContent = '↓';
-        nextBtn.addEventListener('click', () => this.goToPage(this.currentPage + 2));
-        toolbar.appendChild(nextBtn);
+            const nextBtn = document.createElement('button');
+            nextBtn.type = 'button';
+            nextBtn.setAttribute('part', 'button');
+            nextBtn.setAttribute('aria-label', 'Next page');
+            nextBtn.textContent = '↓';
+            nextBtn.addEventListener('click', () => this.goToPage(this.currentPage + 2));
+            toolbar.appendChild(nextBtn);
+        }
 
         const modeBtn = document.createElement('button');
         modeBtn.type = 'button';
@@ -618,8 +745,190 @@ export class SupernoteViewerElement extends HTMLElement {
         toolbar.appendChild(modeBtn);
         this.modeToggleBtn = modeBtn;
 
+        const findBtn = document.createElement('button');
+        findBtn.type = 'button';
+        findBtn.setAttribute('part', 'button');
+        findBtn.setAttribute('aria-label', 'Find in note');
+        findBtn.setAttribute('aria-pressed', 'false');
+        findBtn.textContent = 'Find';
+        findBtn.addEventListener('click', () => this.toggleFindBar());
+        toolbar.appendChild(findBtn);
+        this.findToggleBtn = findBtn;
+
         this.rootEl.appendChild(toolbar);
         this.toolbarEl = toolbar;
+    }
+
+    // Builds the (initially hidden - see the .find-bar/.open CSS rule) find
+    // UI: a text input searching every page's recognized words (via
+    // pageSearchIndex, built in buildViewer()) directly against the
+    // invisible word-overlay spans built in wrapPageStates() - no PDF/pdf.js
+    // involved at all, unlike SupernoteView's own find-in-note in main.ts.
+    private buildFindBar(): void {
+        const bar = document.createElement('div');
+        bar.className = 'find-bar';
+        bar.setAttribute('part', 'find-bar');
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.setAttribute('part', 'find-input');
+        input.placeholder = 'Find in note…';
+        input.addEventListener('input', () => this.runFind(input.value));
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.stepFind(e.shiftKey ? -1 : 1);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                this.closeFindBar();
+            }
+        });
+        bar.appendChild(input);
+        this.findInputEl = input;
+
+        const prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.setAttribute('part', 'button');
+        prevBtn.setAttribute('aria-label', 'Previous match');
+        prevBtn.textContent = '‹';
+        prevBtn.addEventListener('click', () => this.stepFind(-1));
+        bar.appendChild(prevBtn);
+
+        const nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.setAttribute('part', 'button');
+        nextBtn.setAttribute('aria-label', 'Next match');
+        nextBtn.textContent = '›';
+        nextBtn.addEventListener('click', () => this.stepFind(1));
+        bar.appendChild(nextBtn);
+
+        const count = document.createElement('span');
+        count.className = 'find-count';
+        count.setAttribute('part', 'find-count');
+        bar.appendChild(count);
+        this.findCountEl = count;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.setAttribute('part', 'button');
+        closeBtn.setAttribute('aria-label', 'Close find bar');
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', () => this.closeFindBar());
+        bar.appendChild(closeBtn);
+
+        this.rootEl.appendChild(bar);
+        this.findBarEl = bar;
+    }
+
+    private toggleFindBar(): void {
+        if (this.findBarEl?.classList.contains('open')) this.closeFindBar();
+        else this.openFindBar();
+    }
+
+    private openFindBar(): void {
+        this.findBarEl?.classList.add('open');
+        this.findToggleBtn?.setAttribute('aria-pressed', 'true');
+        this.findInputEl?.focus();
+        this.findInputEl?.select();
+    }
+
+    private closeFindBar(): void {
+        this.findBarEl?.classList.remove('open');
+        this.findToggleBtn?.setAttribute('aria-pressed', 'false');
+        this.clearFindHighlights();
+        this.findMatches = [];
+        this.findMatchIndex = -1;
+        if (this.findInputEl) this.findInputEl.value = '';
+        if (this.findCountEl) this.findCountEl.textContent = '';
+    }
+
+    // Rebuilds findMatches from scratch against every page's search text -
+    // simple linear re-scan on every keystroke rather than incremental
+    // matching, which is plenty fast for the amount of recognized text a
+    // handwritten note actually has (a few thousand characters per page at
+    // most) and much simpler than maintaining incremental state.
+    private runFind(query: string): void {
+        this.clearFindHighlights();
+        this.findMatches = [];
+        this.findMatchIndex = -1;
+
+        const q = query.trim().toLowerCase();
+        if (q.length > 0) {
+            for (let pageIndex = 0; pageIndex < this.pageSearchIndex.length; pageIndex++) {
+                const { lower, entryAt } = this.pageSearchIndex[pageIndex];
+                let from = 0;
+                for (;;) {
+                    const idx = lower.indexOf(q, from);
+                    if (idx === -1) break;
+                    from = idx + q.length;
+                    const entry = entryAt(idx);
+                    // Only a genuinely highlightable word (one with a
+                    // bounding box, i.e. a real overlay span - see
+                    // wordOverlay.ts) counts as a match: a hit that landed
+                    // on a boxless whitespace/punctuation entry has nothing
+                    // to point to on screen.
+                    if (entry?.el) this.findMatches.push({ pageIndex, entry });
+                }
+            }
+            for (const match of this.findMatches) match.entry.el!.classList.add('word-overlay-match');
+        }
+
+        if (this.findMatches.length > 0) this.stepFind(1);
+        else this.updateFindCount();
+    }
+
+    // Moves the current match by `delta` (wrapping in both directions) and
+    // scrolls it into view. Called both by the prev/next buttons (delta
+    // ±1) and by runFind() itself (delta +1 from the initial index of -1,
+    // landing on the first match) - reusing the same wrap-around math
+    // rather than special-casing "select the first match".
+    private stepFind(delta: number): void {
+        if (this.findMatches.length === 0) return;
+
+        this.findMatches[this.findMatchIndex]?.entry.el?.classList.remove('word-overlay-match-current');
+
+        const n = this.findMatches.length;
+        this.findMatchIndex = ((this.findMatchIndex + delta) % n + n) % n;
+
+        const match = this.findMatches[this.findMatchIndex];
+        match.entry.el?.classList.add('word-overlay-match-current');
+        this.updateFindCount();
+        this.scrollToMatch(match);
+    }
+
+    private scrollToMatch(match: FindMatch): void {
+        if (!this.sn || !this.pagesEl) return;
+        const state = this.pageStates[match.pageIndex];
+        const el = match.entry.el;
+        if (!state || !el) return;
+        if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
+
+        // Centers the match within the visible viewport rather than just
+        // bringing its page's top edge into view (goToPage()'s own
+        // behavior, too coarse for a match partway down a tall page) - same
+        // getBoundingClientRect()-delta + .pages.scrollTo() approach
+        // goToPage() uses and for the same reason: scrollIntoView() would
+        // cascade to any scrollable ancestor this element is embedded in
+        // (e.g. Obsidian's own note editor, for SupernoteEmbed).
+        const pagesRect = this.pagesEl.getBoundingClientRect();
+        const targetRect = el.getBoundingClientRect();
+        const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top) - pagesRect.height / 2 + targetRect.height / 2;
+        this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+    }
+
+    private clearFindHighlights(): void {
+        for (const match of this.findMatches) {
+            match.entry.el?.classList.remove('word-overlay-match', 'word-overlay-match-current');
+        }
+    }
+
+    private updateFindCount(): void {
+        if (!this.findCountEl) return;
+        if (this.findMatches.length === 0) {
+            this.findCountEl.textContent = this.findInputEl?.value.trim() ? 'No results' : '';
+        } else {
+            this.findCountEl.textContent = `${this.findMatchIndex + 1} / ${this.findMatches.length}`;
+        }
     }
 
     private toggleMode(): void {

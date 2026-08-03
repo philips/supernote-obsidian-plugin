@@ -258,6 +258,158 @@ describe('<supernote-viewer>', () => {
         expect(img?.classList.contains('supernote-invert-dark')).toBe(false);
     });
 
+    it('builds an invisible word-overlay span per boxed recognized word', async () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('rtr.note');
+        await loaded;
+
+        const spans = el.shadowRoot!.querySelectorAll('.word-overlay-span');
+        expect(spans.length).toBeGreaterThan(0);
+        expect(Array.from(spans).some((s) => s.textContent === 'Real')).toBe(true);
+    });
+
+    it('shows the toolbar and find bar even for a single-page note, but no page nav', async () => {
+        // The mode toggle and find button are useful regardless of page
+        // count - only the prev/next-page arrows and page indicator are
+        // conditioned on there being more than one page to navigate
+        // between (see buildToolbar()).
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('rtr.note'); // 1 page
+        await loaded;
+
+        expect(el.shadowRoot!.querySelector('.toolbar')).toBeTruthy();
+        expect(el.shadowRoot!.querySelector('.find-bar')).toBeTruthy();
+        expect(el.shadowRoot!.querySelector('button[aria-label="Find in note"]')).toBeTruthy();
+        expect(el.shadowRoot!.querySelector('button[aria-label="Previous page"]')).toBeNull();
+        expect(el.shadowRoot!.querySelector('.page-indicator')).toBeNull();
+    });
+
+    describe('find in note', () => {
+        async function createLoadedViewer() {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('rtr.note');
+            await loaded;
+            return el;
+        }
+
+        it('opening the find bar focuses the input and marks the toggle pressed', async () => {
+            const el = await createLoadedViewer();
+            const findBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!;
+            const bar = el.shadowRoot!.querySelector('.find-bar')!;
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+
+            expect(bar.classList.contains('open')).toBe(false);
+
+            findBtn.click();
+
+            expect(bar.classList.contains('open')).toBe(true);
+            expect(findBtn.getAttribute('aria-pressed')).toBe('true');
+            expect(el.shadowRoot!.activeElement).toBe(input);
+        });
+
+        it('a query with one real match highlights exactly it and reports "1 / 1"', async () => {
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+
+            input.value = 'real';
+            input.dispatchEvent(new Event('input'));
+
+            const current = el.shadowRoot!.querySelectorAll('.word-overlay-match-current');
+            expect(current).toHaveLength(1);
+            expect(current[0].textContent).toBe('Real');
+            expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('1 / 1');
+        });
+
+        it('cycles through every match with next/prev, wrapping in both directions', async () => {
+            // This fixture's recognized text contains "paragraph" 4 times
+            // (confirmed directly against the real fixture, not asserted
+            // blindly) - a good real case for wraparound cycling, since it
+            // spans multiple separate recognitionElements/lines.
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+            const nextBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Next match"]')!;
+            const prevBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Previous match"]')!;
+            const countEl = el.shadowRoot!.querySelector('.find-count')!;
+
+            input.value = 'paragraph';
+            input.dispatchEvent(new Event('input'));
+
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match')).toHaveLength(4);
+            expect(countEl.textContent).toBe('1 / 4');
+
+            nextBtn.click();
+            expect(countEl.textContent).toBe('2 / 4');
+            nextBtn.click();
+            nextBtn.click();
+            expect(countEl.textContent).toBe('4 / 4');
+            nextBtn.click(); // wraps forward past the last match
+            expect(countEl.textContent).toBe('1 / 4');
+            prevBtn.click(); // wraps backward past the first match
+            expect(countEl.textContent).toBe('4 / 4');
+
+            // Exactly one match is ever "current" at a time.
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match-current')).toHaveLength(1);
+        });
+
+        it('reports no results for a query with no match, without throwing', async () => {
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+
+            input.value = 'zzzznotfound';
+            input.dispatchEvent(new Event('input'));
+
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match')).toHaveLength(0);
+            expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('No results');
+        });
+
+        it('closing the find bar clears highlights, the query, and the count', async () => {
+            const el = await createLoadedViewer();
+            const findBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!;
+            findBtn.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+            input.value = 'paragraph';
+            input.dispatchEvent(new Event('input'));
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match').length).toBeGreaterThan(0);
+
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Close find bar"]')!.click();
+
+            expect(el.shadowRoot!.querySelector('.find-bar')!.classList.contains('open')).toBe(false);
+            expect(findBtn.getAttribute('aria-pressed')).toBe('false');
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match')).toHaveLength(0);
+            expect(input.value).toBe('');
+            expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('');
+        });
+
+        it('Escape in the find input closes the bar; Enter/Shift+Enter step next/prev', async () => {
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+            const countEl = el.shadowRoot!.querySelector('.find-count')!;
+
+            input.value = 'paragraph';
+            input.dispatchEvent(new Event('input'));
+            expect(countEl.textContent).toBe('1 / 4');
+
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            expect(countEl.textContent).toBe('2 / 4');
+
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+            expect(countEl.textContent).toBe('1 / 4');
+
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            expect(el.shadowRoot!.querySelector('.find-bar')!.classList.contains('open')).toBe(false);
+        });
+    });
+
     it('shows an error and dispatches supernote-error when the fetch fails', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
 
