@@ -371,7 +371,55 @@ describe('<supernote-viewer>', () => {
             expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('No results');
         });
 
-        it('closing the find bar clears highlights, the query, and the count', async () => {
+        it('highlights matches with <mark> in recognized-text mode too', async () => {
+            // Image-mode's word-overlay spans have nothing sensible to
+            // overlay in text mode (the image is hidden entirely, and the
+            // reflowed text bears no relation to the handwriting's x/y
+            // layout) - text mode instead wraps the matched range of the
+            // page's own recognized text in a <mark>, using the offsets
+            // computed in runFind().
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle recognized text view"]')!.click();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+
+            input.value = 'real';
+            input.dispatchEvent(new Event('input'));
+
+            const marks = el.shadowRoot!.querySelectorAll('.page-text mark');
+            expect(marks).toHaveLength(1);
+            expect(marks[0].textContent).toBe('Real');
+            expect(marks[0].classList.contains('find-match-current')).toBe(true);
+            expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('1 / 1');
+        });
+
+        it('cycling matches in text mode moves the find-match-current mark, not just the count', async () => {
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle recognized text view"]')!.click();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+            const nextBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Next match"]')!;
+
+            input.value = 'paragraph';
+            input.dispatchEvent(new Event('input'));
+            expect(el.shadowRoot!.querySelectorAll('.page-text mark.find-match')).toHaveLength(4);
+            const firstCurrent = el.shadowRoot!.querySelector('.find-match-current')!;
+
+            nextBtn.click();
+
+            const marksAfter = el.shadowRoot!.querySelectorAll('.page-text mark.find-match-current');
+            expect(marksAfter).toHaveLength(1);
+            expect(marksAfter[0]).not.toBe(firstCurrent);
+        });
+
+        it('the text-mode page-text still reads correctly with no active search', async () => {
+            const el = await createLoadedViewer();
+            const textEl = el.shadowRoot!.querySelector('.page-text')!;
+            expect(textEl.textContent).toContain('Real');
+            expect(textEl.querySelector('mark')).toBeNull();
+        });
+
+        it('closing the find bar clears highlights (both modes\' kinds), the query, and the count', async () => {
             const el = await createLoadedViewer();
             const findBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!;
             findBtn.click();
@@ -379,8 +427,10 @@ describe('<supernote-viewer>', () => {
             input.value = 'paragraph';
             input.dispatchEvent(new Event('input'));
             expect(el.shadowRoot!.querySelectorAll('.word-overlay-match').length).toBeGreaterThan(0);
+            expect(el.shadowRoot!.querySelectorAll('.page-text mark').length).toBeGreaterThan(0);
 
             el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Close find bar"]')!.click();
+            expect(el.shadowRoot!.querySelectorAll('.page-text mark')).toHaveLength(0);
 
             expect(el.shadowRoot!.querySelector('.find-bar')!.classList.contains('open')).toBe(false);
             expect(findBtn.getAttribute('aria-pressed')).toBe('false');

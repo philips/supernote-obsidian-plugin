@@ -16,6 +16,11 @@ import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWord
 
 interface ViewerPageState extends RenderedNotePage {
     textEl: HTMLElement;
+    // Stashed alongside textEl (rather than re-reading sn.pages each time)
+    // so renderPageTextHighlights() can rebuild textEl's content - wrapping
+    // the current match range in a <mark> - from the same string every
+    // time, without needing the original SupernoteX instance around.
+    rawText: string;
     wordEntries: WordOverlayEntry[];
     loaded: boolean;
     visible: boolean;
@@ -24,6 +29,18 @@ interface ViewerPageState extends RenderedNotePage {
 
 interface FindMatch {
     pageIndex: number;
+    // Offsets into that page's search text (see buildWordSearchText) - and,
+    // since that text is character-identical to page.text (confirmed by a
+    // dedicated wordOverlay.test.ts test), also directly usable as offsets
+    // into rawText above for highlighting matches in recognized-text mode,
+    // where there's no image/overlay-span geometry to point to at all.
+    start: number;
+    end: number;
+    // The overlay span for the word the match started in - used for
+    // image-mode highlighting/scrolling. Always non-null (see runFind()):
+    // a match whose start landed on a boxless word is discarded rather than
+    // kept with a null entry, since text mode's <mark> highlighting still
+    // needs a real word to point to for image-mode's own highlight.
     entry: WordOverlayEntry;
 }
 
@@ -203,6 +220,18 @@ button[aria-pressed="true"] {
 .word-overlay-span.word-overlay-match-current {
     background: rgba(255, 128, 0, 0.7);
 }
+/* Recognized-text mode hides the image entirely (see the img rule just
+   below), which collapses .page-container to the text block's own height -
+   nothing like the image's native aspect ratio the word-overlay spans
+   above are positioned against. Left visible, a match's highlighted span
+   would render as a stray colored box floating at whatever nonsensical
+   position that mismatched scaling produces. Text-mode matches are
+   highlighted a different way entirely (see the <mark> rules below, and
+   renderPageTextHighlights() in SupernoteViewerElement.ts), so the
+   image-mode spans have nothing useful to do here regardless. */
+.pages.mode-text .word-overlay-span {
+    display: none;
+}
 .pages.mode-text .page-container > img {
     display: none;
 }
@@ -221,6 +250,20 @@ button[aria-pressed="true"] {
 .pages .page-container > .page-text.empty {
     color: var(--supernote-viewer-muted);
     font-style: italic;
+}
+/* Recognized-text mode's own match highlighting (see
+   renderPageTextHighlights()) - same colors as the image-mode
+   word-overlay-match/-current classes above, for one consistent look
+   regardless of which mode find-in-note is used in. color: inherit
+   overrides <mark>'s default black text, which would be unreadable
+   against this element's own dark-mode text color. */
+.page-text mark.find-match {
+    background: rgba(255, 214, 0, 0.45);
+    color: inherit;
+}
+.page-text mark.find-match-current {
+    background: rgba(255, 128, 0, 0.7);
+    color: inherit;
 }
 /* Only actually inverted in dark mode, mirroring the "invert-dark" attribute
    -> "only when the environment is dark" two-part condition the Obsidian
@@ -581,7 +624,7 @@ export class SupernoteViewerElement extends HTMLElement {
             // to reason about.
             const wordEntries = notePage ? buildWordOverlay(notePage, page.containerEl, page.pageNumber) : [];
 
-            return { ...page, textEl, wordEntries, loaded: false, visible: false };
+            return { ...page, textEl, rawText, wordEntries, loaded: false, visible: false };
         });
     }
 
@@ -838,6 +881,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.clearFindHighlights();
         this.findMatches = [];
         this.findMatchIndex = -1;
+        this.renderPageTextHighlights(); // clears every page's <mark>s too
         if (this.findInputEl) this.findInputEl.value = '';
         if (this.findCountEl) this.findCountEl.textContent = '';
     }
@@ -860,21 +904,28 @@ export class SupernoteViewerElement extends HTMLElement {
                 for (;;) {
                     const idx = lower.indexOf(q, from);
                     if (idx === -1) break;
-                    from = idx + q.length;
+                    const end = idx + q.length;
+                    from = end;
                     const entry = entryAt(idx);
                     // Only a genuinely highlightable word (one with a
                     // bounding box, i.e. a real overlay span - see
                     // wordOverlay.ts) counts as a match: a hit that landed
                     // on a boxless whitespace/punctuation entry has nothing
-                    // to point to on screen.
-                    if (entry?.el) this.findMatches.push({ pageIndex, entry });
+                    // for image mode to point to on screen (recognized-text
+                    // mode's <mark> highlighting only needs the offsets,
+                    // but keeping one rule for what counts as a match, in
+                    // both modes, is simpler than two).
+                    if (entry?.el) this.findMatches.push({ pageIndex, start: idx, end, entry });
                 }
             }
             for (const match of this.findMatches) match.entry.el!.classList.add('word-overlay-match');
         }
 
         if (this.findMatches.length > 0) this.stepFind(1);
-        else this.updateFindCount();
+        else {
+            this.updateFindCount();
+            this.renderPageTextHighlights();
+        }
     }
 
     // Moves the current match by `delta` (wrapping in both directions) and
@@ -893,23 +944,89 @@ export class SupernoteViewerElement extends HTMLElement {
         const match = this.findMatches[this.findMatchIndex];
         match.entry.el?.classList.add('word-overlay-match-current');
         this.updateFindCount();
+        this.renderPageTextHighlights();
         this.scrollToMatch(match);
+    }
+
+    // Recognized-text mode shows page.text reflowed as plain paragraphs -
+    // nothing like the handwriting's original x/y layout the image-mode
+    // word-overlay spans are positioned against (and worse, that mode
+    // hides the image entirely, collapsing the container to the text
+    // block's own height - see the .word-overlay-span display:none rule
+    // in mode-text - so those spans have nothing sensible to overlay even
+    // if shown). Matches there are instead highlighted by wrapping the
+    // matched range of each page's stored rawText in a <mark>, using the
+    // same start/end offsets computed in runFind() - safe to reuse
+    // directly because buildWordSearchText()'s reconstruction is
+    // character-identical to page.text (see wordOverlay.test.ts).
+    // Rebuilds every page's text unconditionally on every find action
+    // (not just the affected page) - simple, and cheap at the amount of
+    // recognized text one note actually has (see runFind()'s own
+    // comment).
+    private renderPageTextHighlights(): void {
+        const matchesByPage = new Map<number, FindMatch[]>();
+        for (const match of this.findMatches) {
+            const forPage = matchesByPage.get(match.pageIndex) ?? [];
+            forPage.push(match);
+            matchesByPage.set(match.pageIndex, forPage);
+        }
+
+        for (let pageIndex = 0; pageIndex < this.pageStates.length; pageIndex++) {
+            const state = this.pageStates[pageIndex];
+            const matches = matchesByPage.get(pageIndex) ?? [];
+            const textEl = state.textEl;
+            textEl.textContent = '';
+
+            if (state.rawText.length === 0) {
+                textEl.textContent = 'No recognized text on this page.';
+                continue;
+            }
+            if (matches.length === 0) {
+                textEl.textContent = state.rawText;
+                continue;
+            }
+
+            let cursor = 0;
+            for (const match of matches) {
+                if (match.start > cursor) textEl.appendChild(document.createTextNode(state.rawText.slice(cursor, match.start)));
+                const mark = document.createElement('mark');
+                mark.className = match === this.findMatches[this.findMatchIndex] ? 'find-match find-match-current' : 'find-match';
+                mark.textContent = state.rawText.slice(match.start, match.end);
+                textEl.appendChild(mark);
+                cursor = match.end;
+            }
+            if (cursor < state.rawText.length) textEl.appendChild(document.createTextNode(state.rawText.slice(cursor)));
+        }
     }
 
     private scrollToMatch(match: FindMatch): void {
         if (!this.sn || !this.pagesEl) return;
         const state = this.pageStates[match.pageIndex];
-        const el = match.entry.el;
-        if (!state || !el) return;
-        if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
+        if (!state) return;
 
-        // Centers the match within the visible viewport rather than just
-        // bringing its page's top edge into view (goToPage()'s own
-        // behavior, too coarse for a match partway down a tall page) - same
-        // getBoundingClientRect()-delta + .pages.scrollTo() approach
-        // goToPage() uses and for the same reason: scrollIntoView() would
-        // cascade to any scrollable ancestor this element is embedded in
-        // (e.g. Obsidian's own note editor, for SupernoteEmbed).
+        // Recognized-text mode has no image/overlay-span geometry to
+        // scroll to (see renderPageTextHighlights()) - the current <mark>
+        // it just built is the only thing with a real on-screen position.
+        if (this.mode === 'text') {
+            const mark = state.textEl.querySelector('.find-match-current');
+            if (mark) this.scrollElementIntoPagesView(mark);
+            return;
+        }
+
+        const el = match.entry.el;
+        if (!el) return;
+        if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
+        this.scrollElementIntoPagesView(el);
+    }
+
+    // Centers `el` within the visible .pages viewport rather than just
+    // bringing its page's top edge into view (goToPage()'s own behavior,
+    // too coarse for a match partway down a tall page) - .pages.scrollTo()
+    // with a manually computed offset, never scrollIntoView(), which would
+    // cascade to any scrollable ancestor this element is embedded in (e.g.
+    // Obsidian's own note editor, for SupernoteEmbed).
+    private scrollElementIntoPagesView(el: Element): void {
+        if (!this.pagesEl) return;
         const pagesRect = this.pagesEl.getBoundingClientRect();
         const targetRect = el.getBoundingClientRect();
         const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top) - pagesRect.height / 2 + targetRect.height / 2;
