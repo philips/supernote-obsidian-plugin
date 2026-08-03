@@ -10,6 +10,11 @@ implementation this doc describes.
 1.0 yet, and the attribute/property/event names below can still change. Pin an exact version once it's
 published (see [`webcomponent-publishing.md`](webcomponent-publishing.md)) rather than tracking `main`.
 
+That said, this isn't just a demo artifact: the plugin's own `![[file.note]]` embed (`SupernoteEmbed` in
+`src/main.ts`) is a thin wrapper around this exact element - Obsidian's renderer is a real Chromium/WebView
+browsing context, so the same standalone component runs there unmodified. The `single-page`/`invert-dark`/
+`bare` attributes below exist specifically because that embed needed them.
+
 ## Getting it into your page
 
 Nothing is published anywhere yet (see the publishing doc). Until then, build it yourself and self-host the
@@ -66,11 +71,16 @@ System Access API handle) rather than a fetchable URL, use the `noteData` proper
 | Name | Type | Notes |
 |---|---|---|
 | `src` | attribute, string (URL) | Fetched via `fetch()` - the response needs CORS headers if it's cross-origin. Ignored if `noteData` is also set. |
-| `page` | attribute, number (1-indexed) | Jumps to this page once the note has loaded. Re-setting it after load jumps again. |
+| `page` | attribute, number (1-indexed) | Normally: jumps to this page once the note has loaded (re-setting it after load jumps again). In `single-page` mode: selects *which* page to build instead (see below) - there's no separate page list to jump within. |
+| `single-page` | boolean attribute | Renders only the page selected by `page` (default 1, clamped to the note's actual range) - no toolbar, no other pages built or loaded at all. For "this page only" use cases (a deep link to one page, a thumbnail-style preview) rather than a scrollable multi-page viewer. |
+| `invert-dark` | boolean attribute | Tags every page image so it's colour-inverted (`filter: invert(1)`) when the environment is actually in dark mode (`prefers-color-scheme: dark`) - the attribute alone doesn't force inversion, matching the two-part "setting + actual theme" condition the Obsidian plugin's own equivalent setting uses. Useful for handwriting scanned on a white background that would otherwise look like a bright rectangle in an otherwise-dark page. |
+| `bare` | boolean attribute | Drops this element's own border/background/rounded corners - pure CSS, takes effect immediately, no rebuild. For embedding inside a host page/component that already provides its own frame around it (this is what Obsidian's `SupernoteEmbed` sets, since its container already has a border). |
 | `.noteData` | property, `ArrayBuffer \| Uint8Array \| null` | Set the file's bytes directly. JS-only - there's no string form of this, so it can't be set as an HTML attribute (see the framework note below). |
 
-Setting `src`/`page`/`noteData` after the element is already showing a note tears down and rebuilds the
-whole thing from scratch (a fresh fetch if using `src`) - there's no in-place diffing.
+Setting `src`/`page`/`noteData`/`single-page`/`invert-dark` after the element is already showing a note
+tears down and rebuilds the whole thing from scratch (a fresh fetch if using `src`) - there's no in-place
+diffing. `bare` is the one exception: it's applied via a plain CSS attribute selector internally, so
+toggling it live just restyles the existing content, no rebuild.
 
 ### Methods
 
@@ -85,7 +95,7 @@ than the element itself).
 
 | Event | `detail` | Fires |
 |---|---|---|
-| `supernote-load` | `{ pageCount: number }` | Once a note has been fetched and parsed successfully. |
+| `supernote-load` | `{ pageCount: number, pageWidth: number, pageHeight: number }` | Once a note has been fetched and parsed successfully. `pageWidth`/`pageHeight` are the note's native page dimensions (pixels) - handy if a host wants to replicate its own "keep at least one full page visible" sizing without reaching into the component's internals, which is exactly what Obsidian's `SupernoteEmbed` wrapper does with them. |
 | `supernote-error` | `{ error: unknown, pageNumber?: number }` | On a fetch/parse failure (no `pageNumber`), or when a specific page fails to rasterize (`pageNumber` set - that one page just stays blank, and will retry the next time it's asked to load). |
 
 ```js

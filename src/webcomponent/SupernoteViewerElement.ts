@@ -50,6 +50,17 @@ const STYLE = `
     font: 14px/1.4 system-ui, sans-serif;
     box-sizing: border-box;
 }
+/* For embedding inside a host page that already provides its own frame
+   (border/background/scroll) around this element - e.g. Obsidian's
+   SupernoteEmbed, which wraps this in its own bordered/resizable
+   .supernote-embed container - so this element's own chrome doesn't double
+   up with the host's. Purely a CSS attribute selector: no JS involved, so
+   toggling it live needs no re-render. */
+:host([bare]) .root {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
 .toolbar {
     position: sticky;
     top: 0;
@@ -117,6 +128,16 @@ button[aria-pressed="true"] {
     color: var(--supernote-viewer-muted);
     font-style: italic;
 }
+/* Only actually inverted in dark mode, mirroring the "invert-dark" attribute
+   -> "only when the environment is dark" two-part condition the Obsidian
+   plugin's own invertColorsWhenDark setting has (see main.ts's
+   SupernoteEmbed) - the attribute alone is "opt in to inversion", not
+   "always invert". */
+@media (prefers-color-scheme: dark) {
+    .pages .page-container > img.supernote-invert-dark {
+        filter: invert(1);
+    }
+}
 .status {
     margin: auto;
     padding: 1em;
@@ -130,7 +151,7 @@ button[aria-pressed="true"] {
 
 export class SupernoteViewerElement extends HTMLElement {
     static get observedAttributes(): string[] {
-        return ['src', 'page'];
+        return ['src', 'page', 'single-page', 'invert-dark'];
     }
 
     // Overridable so tests can substitute a fake rasterizer - the real
@@ -195,11 +216,22 @@ export class SupernoteViewerElement extends HTMLElement {
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
         if (oldValue === newValue) return;
-        if (name === 'src') {
+        if (name === 'src' || name === 'single-page' || name === 'invert-dark') {
+            // All three are consumed at build time (which page(s) to build,
+            // and whether to tag their images for dark-mode inversion), so
+            // there's no cheaper path than a full rebuild when they change.
             this.queueRender();
-        } else if (name === 'page') {
-            const n = Number(newValue);
-            if (Number.isFinite(n)) this.goToPage(n);
+            return;
+        }
+        if (name === 'page') {
+            if (this.hasAttribute('single-page')) {
+                // Selects *which* page single-page mode builds, not a jump
+                // within an already-built page list - needs a full rebuild.
+                this.queueRender();
+            } else {
+                const n = Number(newValue);
+                if (Number.isFinite(n)) this.goToPage(n);
+            }
         }
     }
 
@@ -265,7 +297,14 @@ export class SupernoteViewerElement extends HTMLElement {
 
         this.sn = sn;
         this.buildViewer(sn);
-        this.dispatchEvent(new CustomEvent('supernote-load', { detail: { pageCount: sn.pages.length } }));
+        this.dispatchEvent(new CustomEvent('supernote-load', {
+            detail: { pageCount: sn.pages.length, pageWidth: sn.pageWidth, pageHeight: sn.pageHeight },
+        }));
+
+        // Single-page mode already built exactly the requested page directly
+        // (see buildSinglePageViewer()) - there's no separate page list to
+        // jump within.
+        if (this.hasAttribute('single-page')) return;
 
         const pageAttr = this.getAttribute('page');
         const pageNumber = pageAttr !== null ? Number(pageAttr) : NaN;
@@ -310,6 +349,13 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     private buildViewer(sn: SupernoteX): void {
+        const invertColorsWhenDark = this.hasAttribute('invert-dark');
+
+        if (this.hasAttribute('single-page')) {
+            this.buildSinglePageViewer(sn, invertColorsWhenDark);
+            return;
+        }
+
         const pageCount = sn.pages.length;
         if (pageCount > 1) this.buildToolbar(pageCount);
 
@@ -322,9 +368,52 @@ export class SupernoteViewerElement extends HTMLElement {
         const placeholders = buildNotePagePlaceholders(pageCount, pagesEl, {
             pageWidth: sn.pageWidth,
             pageHeight: sn.pageHeight,
+            invertColorsWhenDark,
         });
 
-        const states: ViewerPageState[] = placeholders.map((page) => {
+        const states = this.wrapPageStates(sn, placeholders);
+        this.pageStates = states;
+
+        this.setupPageLoadObserver(sn, states);
+        if (pageCount > 1) this.setupPageIndicatorObserver(states);
+    }
+
+    // A single deep-linked page (the `page` attribute, clamped, defaulting
+    // to 1) with no toolbar/navigation and no lazy loading - there's nothing
+    // else in this mode to navigate to or defer loading for. Rendered
+    // eagerly for the same reason. Mirrors what SupernoteEmbed's own
+    // pageAnchor path in main.ts did before it became a thin wrapper around
+    // this element.
+    private buildSinglePageViewer(sn: SupernoteX, invertColorsWhenDark: boolean): void {
+        const pageAttr = this.getAttribute('page');
+        const requested = pageAttr !== null ? Number(pageAttr) : 1;
+        const pageNumber = Number.isFinite(requested)
+            ? Math.min(Math.max(Math.round(requested), 1), sn.pages.length)
+            : 1;
+
+        const pagesEl = document.createElement('div');
+        pagesEl.className = 'pages';
+        pagesEl.setAttribute('part', 'pages');
+        this.rootEl.appendChild(pagesEl);
+        this.pagesEl = pagesEl;
+
+        const placeholders = buildNotePagePlaceholders(1, pagesEl, {
+            startPageNumber: pageNumber,
+            pageWidth: sn.pageWidth,
+            pageHeight: sn.pageHeight,
+            invertColorsWhenDark,
+        });
+
+        const [state] = this.wrapPageStates(sn, placeholders);
+        this.pageStates = [state];
+        void this.ensurePageImageLoaded(sn, state);
+    }
+
+    // Builds each placeholder's recognized-text sibling and the rest of its
+    // ViewerPageState - shared by the normal (all-pages, lazy) and
+    // single-page (one page, eager) construction paths above.
+    private wrapPageStates(sn: SupernoteX, placeholders: RenderedNotePage[]): ViewerPageState[] {
+        return placeholders.map((page) => {
             const rawText = sn.pages[page.pageNumber - 1]?.text ?? '';
             const textEl = document.createElement('div');
             textEl.className = 'page-text';
@@ -334,10 +423,6 @@ export class SupernoteViewerElement extends HTMLElement {
 
             return { ...page, textEl, loaded: false, visible: false };
         });
-        this.pageStates = states;
-
-        this.setupPageLoadObserver(sn, states);
-        if (pageCount > 1) this.setupPageIndicatorObserver(states);
     }
 
     // Loads each page's image lazily, only once it's about to scroll into
@@ -463,4 +548,16 @@ export class SupernoteViewerElement extends HTMLElement {
 
 if (!customElements.get('supernote-viewer')) {
     customElements.define('supernote-viewer', SupernoteViewerElement);
+}
+
+// Standard TypeScript/DOM convention for registering a custom element's real
+// type: without this, document.createElement('supernote-viewer') (and
+// Obsidian's own createEl(), which has the same
+// `K extends keyof HTMLElementTagNameMap` signature) can only type the
+// result as the generic HTMLElement, forcing every caller to `as` it back to
+// SupernoteViewerElement themselves.
+declare global {
+    interface HTMLElementTagNameMap {
+        'supernote-viewer': SupernoteViewerElement;
+    }
 }

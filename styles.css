@@ -356,47 +356,28 @@ div.supernote-canvas-wrap canvas {
     height: 800px;
     min-height: 200px;
     resize: vertical;
-    overflow-y: auto;
-    overflow-x: auto;
+    /* Just `hidden`, not `auto`: the actual scrolling now happens inside
+       <supernote-viewer>'s own shadow root (see below) - scrolling here too
+       would just mean two nested scrollbars for the same content. */
+    overflow: hidden;
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-s);
 }
 
-.supernote-embed-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5em;
-    padding: 0.3em 0.6em;
-    background: var(--background-primary);
-    border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.supernote-embed-page-indicator {
-    min-width: 4em;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: var(--font-smaller);
-}
-
-.supernote-embed-pages {
-    display: flex;
-    flex-direction: column;
-    gap: 1em;
-    padding: 1em;
-}
-
-.supernote-embed .page-container {
+/* SupernoteEmbed (main.ts) renders a <supernote-viewer> (src/webcomponent/)
+   as this container's only child, with its own `bare` attribute set so its
+   internal chrome doesn't double up with the border above - this is the
+   classic flexbox "let a flex item actually shrink/scroll within a fixed-
+   height parent" fix (a flex item's default min-height:auto otherwise wins
+   over the resize-driven height here). Everything else about how a note
+   renders (toolbar, page list, recognized-text toggle) lives inside that
+   element's shadow root, out of this stylesheet's reach entirely - see
+   src/webcomponent/SupernoteViewerElement.ts's own STYLE constant.
+*/
+.supernote-embed supernote-viewer {
     display: block;
-    margin: 0;
-}
-
-.supernote-embed img {
-    display: block;
-    max-width: 100%;
+    flex: 1;
+    min-height: 0;
 }
 
 .supernote-embed-error {

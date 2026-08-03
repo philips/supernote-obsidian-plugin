@@ -10,8 +10,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+// Also registers the HTMLElementTagNameMap augmentation, so
+// document.createElement('supernote-viewer') below is properly typed with
+// no cast needed.
 import './SupernoteViewerElement';
-import type { SupernoteViewerElement as SupernoteViewerElementType } from './SupernoteViewerElement';
 
 const FIXTURES_DIR = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input');
 
@@ -26,8 +28,8 @@ function waitForEvent<T>(target: EventTarget, type: string): Promise<CustomEvent
     });
 }
 
-function createViewer(): SupernoteViewerElementType {
-    const el = document.createElement('supernote-viewer') as SupernoteViewerElementType;
+function createViewer() {
+    const el = document.createElement('supernote-viewer');
     // Fake rasterizer: real page rasterization needs a Web Worker, which
     // happy-dom doesn't implement - see this file's header comment.
     el.rasterizePage = vi.fn(async (_sn, pageNumber: number) => `data:image/png;base64,page${pageNumber}`);
@@ -114,6 +116,67 @@ describe('<supernote-viewer>', () => {
         // Single-page note - #183's example content never needed a
         // rasterized image to expose its recognized text.
         expect(el.rasterizePage).not.toHaveBeenCalled();
+    });
+
+    it('single-page mode renders only the requested page, eagerly, with no toolbar', async () => {
+        const el = createViewer();
+        el.setAttribute('single-page', '');
+        el.setAttribute('page', '2');
+        document.body.appendChild(el);
+        const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+        // ensurePageImageLoaded() is fired eagerly (no goToPage()/observer
+        // needed) - give its microtasks a moment to settle.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(el.shadowRoot!.querySelector('.toolbar')).toBeNull();
+
+        const pages = el.shadowRoot!.querySelectorAll('.page-container');
+        expect(pages).toHaveLength(1);
+        expect(pages[0].getAttribute('data-page-number')).toBe('2');
+        expect(el.rasterizePage).toHaveBeenCalledTimes(1);
+        expect(el.rasterizePage).toHaveBeenCalledWith(expect.anything(), 2);
+        expect(pages[0].querySelector('img')?.src).toBe('data:image/png;base64,page2');
+    });
+
+    it('single-page mode clamps an out-of-range page to the last page', async () => {
+        const el = createViewer();
+        el.setAttribute('single-page', '');
+        el.setAttribute('page', '99');
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+        await loaded;
+
+        expect(el.shadowRoot!.querySelector('.page-container')?.getAttribute('data-page-number')).toBe('2');
+    });
+
+    it('invert-dark tags page images with the invert class at build time', async () => {
+        const el = createViewer();
+        el.setAttribute('invert-dark', '');
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+
+        const images = el.shadowRoot!.querySelectorAll('.page-container img');
+        expect(images).toHaveLength(2);
+        for (const img of images) {
+            expect(img.classList.contains('supernote-invert-dark')).toBe(true);
+        }
+    });
+
+    it('omits the invert class without invert-dark', async () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+
+        const img = el.shadowRoot!.querySelector('.page-container img');
+        expect(img?.classList.contains('supernote-invert-dark')).toBe(false);
     });
 
     it('shows an error and dispatches supernote-error when the fetch fails', async () => {
