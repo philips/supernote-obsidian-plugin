@@ -350,8 +350,34 @@ div.supernote-canvas-wrap canvas {
     font-size: var(--font-smaller);
 }
 
-.supernote-embed {
-    display: flex;
+/* `.internal-embed.supernote-embed`, not just `.supernote-embed` alone -
+   *and* `!important` on `display` specifically - both needed to actually
+   win against Obsidian's own core CSS, confirmed via a real headless-
+   Obsidian inspection (issue #183/PR #185's SupernoteEmbed rewrite):
+   without this, `display: flex` silently never took effect,
+   `<supernote-viewer>` never actually became a flex item, so it rendered at
+   full (all-pages) content height instead of being clipped/scrollable at
+   this container's fixed height - and since nothing inside the component's
+   shadow root ever needed to scroll internally as a result,
+   scrollIntoView() calls (the toolbar's page-nav buttons) fell through to
+   scroll the *note itself* instead.
+
+   Two separate core rules were fighting this, at two different
+   specificities, so a plain specificity bump wasn't a safe enough fix on
+   its own:
+   - `.internal-embed:not(.image-embed) { display: block; }` (specificity
+     ties with a plain `.supernote-embed` alone; two classes beats it).
+   - Live Preview's own content-reset, `.markdown-source-view.mod-cm6
+     .cm-content > * { display: block; margin: 0 !important; }` - three
+     classes, beating even the two-class fix above; only applies in Live
+     Preview, not Reading view, which is exactly why this wasn't caught in
+     the standalone web component's own testing (no Obsidian, no Live
+     Preview). Matching *that* selector's exact specificity would work today
+     but is fragile against Obsidian ever changing it - `!important` on just
+     this one property is the narrower, more robust fix, not a general
+     escape hatch used elsewhere in this stylesheet. */
+.internal-embed.supernote-embed {
+    display: flex !important;
     flex-direction: column;
     height: 800px;
     min-height: 200px;
