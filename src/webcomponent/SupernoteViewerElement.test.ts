@@ -63,6 +63,10 @@ describe('<supernote-viewer>', () => {
 
         const pages = el.shadowRoot!.querySelectorAll('.page-container');
         expect(pages).toHaveLength(2);
+        // The "Loading…" status shown while the fetch/parse was in flight
+        // must be gone once real content replaces it - it previously stuck
+        // around forever as a permanent header alongside the real content.
+        expect(el.shadowRoot!.querySelector('.status')).toBeNull();
         // Lazily loaded: nothing observed by IntersectionObserver in this
         // environment (happy-dom never fires it - no real layout engine),
         // so no page should have been rasterized just from building the

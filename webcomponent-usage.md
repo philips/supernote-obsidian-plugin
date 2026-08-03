@@ -73,14 +73,15 @@ System Access API handle) rather than a fetchable URL, use the `noteData` proper
 | `src` | attribute, string (URL) | Fetched via `fetch()` - the response needs CORS headers if it's cross-origin. Ignored if `noteData` is also set. |
 | `page` | attribute, number (1-indexed) | Normally: jumps to this page once the note has loaded (re-setting it after load jumps again). In `single-page` mode: selects *which* page to build instead (see below) - there's no separate page list to jump within. |
 | `single-page` | boolean attribute | Renders only the page selected by `page` (default 1, clamped to the note's actual range) - no toolbar, no other pages built or loaded at all. For "this page only" use cases (a deep link to one page, a thumbnail-style preview) rather than a scrollable multi-page viewer. |
-| `invert-dark` | boolean attribute | Tags every page image so it's colour-inverted (`filter: invert(1)`) when the environment is actually in dark mode (`prefers-color-scheme: dark`) - the attribute alone doesn't force inversion, matching the two-part "setting + actual theme" condition the Obsidian plugin's own equivalent setting uses. Useful for handwriting scanned on a white background that would otherwise look like a bright rectangle in an otherwise-dark page. |
+| `invert-dark` | boolean attribute | Tags every page image so it's colour-inverted (`filter: invert(1)`) whenever this element is actually in dark mode (see `dark` below) - the attribute alone doesn't force inversion, matching the two-part "setting + actual theme" condition the Obsidian plugin's own equivalent setting uses. Useful for handwriting scanned on a white background that would otherwise look like a bright rectangle in an otherwise-dark page. |
+| `dark` | boolean attribute | Explicitly declares this element as being in a dark environment right now, overriding its own default guess (the OS-level `prefers-color-scheme: dark` media feature). Affects both its own default colours (border/background/text) and `invert-dark`'s filter. Only needed if your page's actual dark/light state doesn't reliably track the OS setting - which is exactly why Obsidian's `SupernoteEmbed` sets it directly from Obsidian's own theme rather than relying on the OS guess, since the two are set independently and frequently don't match. Pure CSS attribute selector - no rebuild needed to toggle it. |
 | `bare` | boolean attribute | Drops this element's own border/background/rounded corners - pure CSS, takes effect immediately, no rebuild. For embedding inside a host page/component that already provides its own frame around it (this is what Obsidian's `SupernoteEmbed` sets, since its container already has a border). |
 | `.noteData` | property, `ArrayBuffer \| Uint8Array \| null` | Set the file's bytes directly. JS-only - there's no string form of this, so it can't be set as an HTML attribute (see the framework note below). |
 
 Setting `src`/`page`/`noteData`/`single-page`/`invert-dark` after the element is already showing a note
 tears down and rebuilds the whole thing from scratch (a fresh fetch if using `src`) - there's no in-place
-diffing. `bare` is the one exception: it's applied via a plain CSS attribute selector internally, so
-toggling it live just restyles the existing content, no rebuild.
+diffing. `dark` and `bare` are the exception: both are applied via plain CSS attribute selectors
+internally, so toggling either live just restyles the existing content, no rebuild.
 
 ### Methods
 

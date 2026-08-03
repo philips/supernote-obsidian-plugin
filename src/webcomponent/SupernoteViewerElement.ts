@@ -37,6 +37,21 @@ const STYLE = `
         --supernote-viewer-muted: #a0a0a0;
     }
 }
+/* Explicit override for a host that knows its own actual dark/light state
+   directly, rather than this element guessing from the OS-level
+   prefers-color-scheme media feature - which frequently doesn't match:
+   Obsidian's own theme toggle (see main.ts's SupernoteEmbed, which sets
+   this from document.body's actual theme-dark/theme-light class) is
+   completely independent of the OS setting, and plenty of users run one
+   dark and the other light. An attribute selector's specificity beats a
+   bare :host with no attribute regardless of which was declared inside a
+   @media block, so this correctly wins over the guess above either way. */
+:host([dark]) {
+    --supernote-viewer-border: #444444;
+    --supernote-viewer-bg: #1e1e1e;
+    --supernote-viewer-fg: #e8e8e8;
+    --supernote-viewer-muted: #a0a0a0;
+}
 .root {
     display: flex;
     flex-direction: column;
@@ -132,11 +147,15 @@ button[aria-pressed="true"] {
    -> "only when the environment is dark" two-part condition the Obsidian
    plugin's own invertColorsWhenDark setting has (see main.ts's
    SupernoteEmbed) - the attribute alone is "opt in to inversion", not
-   "always invert". */
+   "always invert". Two ways "dark" gets decided - see the :host([dark])
+   rule above for why both exist. */
 @media (prefers-color-scheme: dark) {
     .pages .page-container > img.supernote-invert-dark {
         filter: invert(1);
     }
+}
+:host([dark]) .pages .page-container > img.supernote-invert-dark {
+    filter: invert(1);
 }
 .status {
     margin: auto;
@@ -349,6 +368,11 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     private buildViewer(sn: SupernoteX): void {
+        // Clears the "Loading…" status showStatus() left in rootEl - without
+        // this, real content just gets appended alongside it instead of
+        // replacing it, leaving that message stuck visible indefinitely.
+        this.rootEl.innerHTML = '';
+
         const invertColorsWhenDark = this.hasAttribute('invert-dark');
 
         if (this.hasAttribute('single-page')) {

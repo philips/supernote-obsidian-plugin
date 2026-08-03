@@ -2252,6 +2252,19 @@ export class SupernoteEmbed extends Component {
 		private pageAnchor: number | null,
 	) {
 		super();
+		// <supernote-viewer>'s own light/dark defaults come from the OS-level
+		// prefers-color-scheme media feature (the right call for a page with
+		// no other context) - but Obsidian's own dark/light theme is set
+		// independently of that, and plenty of users run one dark and the
+		// other light. Its `dark` attribute lets a host that actually knows
+		// override that guess; registerEvent() (auto-cleaned-up by Component,
+		// regardless of this class's own onunload() override below) keeps it
+		// in sync if the user swaps themes without navigating away.
+		this.registerEvent(this.app.workspace.on('css-change', () => this.updateDarkAttribute()));
+	}
+
+	private updateDarkAttribute(): void {
+		this.viewerEl?.toggleAttribute('dark', document.body.classList.contains('theme-dark'));
 	}
 
 	// Called by Obsidian's embed system once this component has been mounted
@@ -2295,6 +2308,8 @@ export class SupernoteEmbed extends Component {
 		if (this.settings.invertColorsWhenDark) {
 			viewer.setAttribute('invert-dark', '');
 		}
+		this.viewerEl = viewer;
+		this.updateDarkAttribute();
 
 		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageWidth: number; pageHeight: number }>) => {
 			this.pageAspectRatio = e.detail.pageHeight / e.detail.pageWidth;
@@ -2308,7 +2323,6 @@ export class SupernoteEmbed extends Component {
 			if (e.detail.pageNumber === undefined) this.renderError(e.detail.error);
 		}) as EventListener);
 
-		this.viewerEl = viewer;
 		// createEl() above already appended (and thus connected) it - matters
 		// for its own queueRender() (see SupernoteViewerElement.ts), which
 		// this kicks off via the fetch-free "bytes already in hand" path.
