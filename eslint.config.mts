@@ -67,6 +67,24 @@ export default defineConfig(
 		},
 	},
 	{
+		// vitest.config.ts/eslint.config.mts run directly under Node (loaded
+		// by vitest's/eslint's own CLI, never bundled into the plugin), so
+		// they get real CommonJS globals like `__dirname` even though
+		// they're written with `import` syntax - Vite's own config loader
+		// transpiles config files like this one to CJS before running them.
+		// obsidianmd/no-nodejs-modules doesn't apply for the same
+		// never-bundled reason as the `**/*.test.ts` override above.
+		files: ['vitest.config.ts', 'eslint.config.mts'],
+		languageOptions: {
+			globals: {
+				...globals.node,
+			},
+		},
+		rules: {
+			'obsidianmd/no-nodejs-modules': 'off',
+		},
+	},
+	{
 		// src/webcomponent/ is the standalone <supernote-viewer> custom
 		// element (issue #183) - never bundled into the Obsidian plugin
 		// itself (see esbuild.webcomponent.config.mjs, a separate entry
