@@ -6,8 +6,8 @@ import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
-import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
-import Worker from 'myworker.worker';
+import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
+import PdfBuildWorker from 'pdfBuild.worker';
 import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
 // Side-effect import: registers <supernote-viewer> (customElements.define)
 // - see SupernoteEmbed below, which is now a thin wrapper around it rather
@@ -91,13 +91,13 @@ function yieldToMainThread(): Promise<void> {
 }
 
 // Rasterizes and assembles the *entire* PDF for `sn` inside a dedicated
-// Worker (see the 'buildPdf' message in myworker.worker.ts) rather than on
-// the main thread - pdf-lib's own embedPng() is genuinely expensive, and
-// entirely inherent to it: confirmed via real-device testing (see
-// myworker.worker.ts's own doc comment on 'buildPdf' for the full trail)
-// that it still peaks ~1.7GB and takes 10+ seconds for a 100-page note even
-// after dropping each page's alpha channel, since it always fully decodes
-// every embedded PNG to raw pixels and retains that until pdfDoc.save().
+// Worker (see pdfBuild.worker.ts) rather than on the main thread - pdf-lib's
+// own embedPng() is genuinely expensive, and entirely inherent to it:
+// confirmed via real-device testing (see pdfBuild.worker.ts's own doc
+// comment for the full trail) that it still peaks ~1.7GB and takes 10+
+// seconds for a 100-page note even after dropping each page's alpha
+// channel, since it always fully decodes every embedded PNG to raw pixels
+// and retains that until pdfDoc.save().
 // None of that is fixable short of not using pdf-lib, but running it inside
 // a Worker at least means Obsidian's own UI thread never carries any of that
 // cost, regardless of how large it is.
@@ -113,15 +113,15 @@ async function buildPdfInWorker(sn: SupernoteX): Promise<Uint8Array> {
     const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
     const pages = pageNumbers.map((n) => extractPdfPageData(sn, n).pages[0]);
 
-    const worker = new Worker();
+    const worker = new PdfBuildWorker();
     try {
         return await new Promise<Uint8Array>((resolve, reject) => {
-            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+            worker.onmessage = (e: MessageEvent<PdfBuildWorkerResponse>) => {
                 if (e.data.type === 'error') reject(new Error(e.data.error));
                 else if (e.data.type === 'pdfResult') resolve(e.data.pdfBytes);
             };
             worker.onerror = (error) => reject(new Error(error.message));
-            const message: SupernoteWorkerMessage = {
+            const message: PdfBuildWorkerMessage = {
                 type: 'buildPdf',
                 pageWidth: sn.pageWidth,
                 pageHeight: sn.pageHeight,

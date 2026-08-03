@@ -1,6 +1,7 @@
 # Development setup
 
-`src/main.ts` and `src/myworker.worker.ts` import from `supernote-typescript`. It's
+`src/main.ts`, `src/rasterize.worker.ts`, and `src/pdfBuild.worker.ts` import from
+`supernote-typescript`. It's
 intentionally **not** an npm dependency in `package.json` — it's developed alongside
 this plugin as a git submodule at `supernote-typescript/` (see `.gitmodules`), so
 edits to the library and the plugin can happen together without publishing to npm

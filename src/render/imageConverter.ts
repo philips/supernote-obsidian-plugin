@@ -5,8 +5,8 @@
 // are the Obsidian-side callers; this module itself only ever touches
 // standard Worker/DOM globals and supernote-typescript.
 import { SupernoteX, IRenderableNote, extractPageRenderData } from 'supernote-typescript';
-import { SupernoteWorkerMessage, SupernoteWorkerResponse } from '../myworker.worker';
-import Worker from 'myworker.worker';
+import { RasterizeWorkerMessage, RasterizeWorkerResponse } from '../rasterize.worker';
+import Worker from 'rasterize.worker';
 
 // Caps how many pages a single worker call ever rasterizes at once -
 // deliberately NOT `pageNumbers.length / workerCount` (this function's
@@ -133,7 +133,7 @@ export class WorkerPool {
         const renderableNote = extractPagesRenderData(note, pageNumbers);
 
         const send = (): Promise<string[]> => new Promise((resolve, reject) => {
-            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
+            worker.onmessage = (e: MessageEvent<RasterizeWorkerResponse>) => {
                 if (e.data.type === 'error') {
                     reject(new Error(e.data.error));
                 } else if (e.data.type === 'result') {
@@ -146,7 +146,7 @@ export class WorkerPool {
                 reject(new Error(error.message));
             };
 
-            const message: SupernoteWorkerMessage = {
+            const message: RasterizeWorkerMessage = {
                 type: 'convert',
                 note: renderableNote,
                 scale,

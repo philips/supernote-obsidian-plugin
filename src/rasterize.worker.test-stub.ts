@@ -1,5 +1,5 @@
-// Stand-in for the real src/myworker.worker.ts, used only by vitest's
-// `resolve.alias` for the bare `myworker.worker` import specifier (see
+// Stand-in for the real src/rasterize.worker.ts, used only by vitest's
+// `resolve.alias` for the bare `rasterize.worker` import specifier (see
 // vitest.config.ts). Production builds (tsc, esbuild) resolve that same
 // specifier via tsconfig.json's baseUrl straight to the real file - this
 // stub only exists because the real one assumes it's executing inside an

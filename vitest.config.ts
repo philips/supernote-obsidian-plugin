@@ -10,10 +10,11 @@ export default defineConfig({
             // symlink.
             'supernote-typescript': path.resolve(__dirname, 'supernote-typescript/lib'),
             // tsc/esbuild both resolve this bare specifier via tsconfig.json's
-            // baseUrl straight to the real src/myworker.worker.ts - Vite (which
-            // vitest uses) doesn't read baseUrl, and the real file assumes an
-            // actual Worker global scope anyway (see myworker.worker.test-stub.ts).
-            'myworker.worker': path.resolve(__dirname, 'src/myworker.worker.test-stub.ts'),
+            // baseUrl straight to the real src/rasterize.worker.ts - Vite
+            // (which vitest uses) doesn't read baseUrl, and the real file
+            // assumes an actual Worker global scope anyway (see
+            // rasterize.worker.test-stub.ts).
+            'rasterize.worker': path.resolve(__dirname, 'src/rasterize.worker.test-stub.ts'),
         },
     },
     test: {
