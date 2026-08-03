@@ -157,6 +157,31 @@ describe('<supernote-viewer>', () => {
         expect(el.rasterizePage).toHaveBeenCalledTimes(1);
     });
 
+    it('goToPage() scrolls only its own .pages, never scrollIntoView()', async () => {
+        // scrollIntoView() cascades up through *every* scrollable ancestor,
+        // not just this component's own .pages - a real, reported bug when
+        // embedded inside another scrollable page (Obsidian's own note
+        // editor, for SupernoteEmbed): clicking a page-nav button also
+        // scrolled the *host* page, dragging the toolbar (and the button
+        // just clicked) off screen along with it. goToPage() must only ever
+        // call .pages.scrollTo(), which - unlike scrollIntoView() - never
+        // touches anything outside the element it's called on.
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+
+        const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+        const scrollToSpy = vi.spyOn(pagesEl, 'scrollTo');
+        const scrollIntoViewSpy = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+
+        el.goToPage(2);
+
+        expect(scrollToSpy).toHaveBeenCalledTimes(1);
+        expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    });
+
     it('shows recognized text in text mode, unrasterized', async () => {
         const el = createViewer();
         document.body.appendChild(el);

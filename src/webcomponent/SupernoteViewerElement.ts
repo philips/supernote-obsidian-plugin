@@ -280,10 +280,28 @@ export class SupernoteViewerElement extends HTMLElement {
     // lazy-load observer for a deliberate jump" pattern SupernoteView's own
     // goToPage() uses (see main.ts).
     goToPage(pageNumber: number): void {
-        if (this.pageStates.length === 0 || !this.sn) return;
+        if (this.pageStates.length === 0 || !this.sn || !this.pagesEl) return;
         const clamped = Math.min(Math.max(Math.round(pageNumber), 1), this.pageStates.length);
         const state = this.pageStates[clamped - 1];
-        state.containerEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        // Deliberately NOT state.containerEl.scrollIntoView(): that method
+        // cascades up through *every* scrollable ancestor, not just this
+        // component's own .pages, so it also scrolled a host page this
+        // element is embedded inside (e.g. Obsidian's own note editor, for
+        // SupernoteEmbed) to bring this element as close to the top of
+        // *that* outer viewport as possible too - confirmed as a real,
+        // reported annoyance: clicking the toolbar's "next page" button
+        // scrolled the whole host note, dragging the toolbar (and the very
+        // button just clicked) out of view along with it. Computing the
+        // target's position relative to .pages via getBoundingClientRect()
+        // and scrolling .pages directly only ever touches this component's
+        // own internal scroll position, regardless of what it's embedded
+        // inside - getBoundingClientRect() rather than offsetTop since the
+        // latter's offsetParent resolution isn't reliable across a shadow
+        // root boundary.
+        const pagesRect = this.pagesEl.getBoundingClientRect();
+        const targetRect = state.containerEl.getBoundingClientRect();
+        const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top);
+        this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
         if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
     }
 
