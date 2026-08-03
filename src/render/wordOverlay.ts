@@ -50,13 +50,18 @@ export interface WordOverlayEntry {
 const RECOGNITION_COORDINATE_SCALE = 11.9;
 
 // Some recognition environments produce mojibake-looking labels that are
-// actually correctly-decoded UTF-8 misinterpreted as Latin-1 somewhere
-// upstream in the recognition pipeline - this round-trip through escape/
-// decodeURIComponent recovers the original text. Mirrors
-// supernote-typescript's own drawRecognitionText() exactly, so a word's
-// text reads identically here and in a PDF export.
+// actually correctly-encoded UTF-8 bytes misinterpreted as Latin-1
+// somewhere upstream in the recognition pipeline - each character's code
+// unit is really a raw byte 0-255, so re-decoding those bytes as UTF-8
+// recovers the original text. supernote-typescript's own
+// drawRecognitionText() does the same fix via the deprecated escape()/
+// decodeURIComponent() round-trip; TextDecoder is the modern equivalent
+// (confirmed byte-for-byte identical output against every real fixture
+// with non-ASCII recognized text this project has, including Turkish
+// diacritics) without the deprecation warning.
 function decodeRecognitionLabel(label: string): string {
-    return decodeURIComponent(escape(label));
+    const bytes = Uint8Array.from(label, (char) => char.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(bytes);
 }
 
 // Builds one absolutely-positioned, invisible <span> per recognized word
