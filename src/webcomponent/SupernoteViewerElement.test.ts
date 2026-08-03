@@ -75,54 +75,56 @@ describe('<supernote-viewer>', () => {
 
         const toolbar = el.shadowRoot!.querySelector('.toolbar');
         expect(toolbar).toBeTruthy();
-        expect(toolbar?.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
+        // Not asserting the indicator's exact text here - see the dedicated
+        // test below for that. happy-dom has no real layout engine (every
+        // element's getBoundingClientRect() is a zero rect by default - see
+        // updateCurrentPageIndicator()), so the indicator's real value at
+        // this exact point depends on stubbed geometry, not anything this
+        // test sets up.
     });
 
-    it('ignores the page-indicator observer\'s unreliable initial batch', async () => {
-        // happy-dom's real IntersectionObserver never fires at all (see this
-        // file's header comment), so the actual browser race this guards
-        // against - the initial batch reporting some page other than the
-        // true first one, before a many-page placeholder list's layout has
-        // settled (confirmed via real user testing on a 102-page note) -
-        // isn't reproducible here. What *is* testable without a real
-        // browser: that the component's own fix (ignore that first batch,
-        // only trust later ones) is actually wired up, by controlling the
-        // observer directly instead of a real one.
-        class FakeIntersectionObserver {
-            static instances: FakeIntersectionObserver[] = [];
-            constructor(public callback: IntersectionObserverCallback) {
-                FakeIntersectionObserver.instances.push(this);
-            }
-            observe(): void { /* not needed - callback is invoked directly below */ }
-            unobserve(): void { /* not needed */ }
-            disconnect(): void { /* not needed */ }
-            takeRecords(): IntersectionObserverEntry[] { return []; }
-        }
-        FakeIntersectionObserver.instances = [];
-        vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
-
+    it('recomputes the current page from real geometry on scroll, not a batch of observer entries', async () => {
+        // The page indicator used to be driven by an IntersectionObserver,
+        // which caused two related but distinct bugs on real, many-page
+        // notes (confirmed via real user testing on a 102-page note):
+        //   - the observer's very first callback isn't guaranteed to
+        //     reflect settled layout, so it could report an arbitrary page
+        //     (not page 1) as the initial current page.
+        //   - scrolling *quickly* could report the very last page
+        //     mid-scroll, since a fast scroll can cross several pages'
+        //     intersection thresholds within the same batched callback, and
+        //     "the last entry in that batch" has no guaranteed relationship
+        //     to "the page actually on screen".
+        // Fixed by switching to a scroll listener that recomputes from real
+        // getBoundingClientRect() geometry every time (see
+        // updateCurrentPageIndicator()) - which forces a fresh, synchronous
+        // layout read, so there's no batching/staleness to race against.
+        // happy-dom has no real layout engine, so this stubs each page's
+        // geometry directly to exercise that same threshold-scanning logic
+        // deterministically instead.
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
         el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
         await loaded;
 
-        // buildViewer() sets up the load observer first, then the indicator
-        // observer (see setupPageLoadObserver()/setupPageIndicatorObserver()).
-        const indicatorObserver = FakeIntersectionObserver.instances[1];
-        const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];
-        const fire = (target: Element) => indicatorObserver.callback(
-            [{ isIntersecting: true, target } as IntersectionObserverEntry],
-            indicatorObserver as unknown as IntersectionObserver,
-        );
+        const pagesEl = el.shadowRoot!.querySelector('.pages')!;
+        const [page1, page2] = Array.from(el.shadowRoot!.querySelectorAll('.page-container'));
+        vi.spyOn(pagesEl, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
 
-        // First (simulated-unreliable) batch reporting page 2 - must be
-        // ignored, leaving buildToolbar()'s correct "1 / 2" default alone.
-        fire(page2);
+        // Page 1 sitting right at the top, page 2 not yet scrolled into view.
+        vi.spyOn(page1, 'getBoundingClientRect').mockReturnValue({ top: -5 } as DOMRect);
+        vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: 895 } as DOMRect);
+        pagesEl.dispatchEvent(new Event('scroll'));
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
         expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
 
-        // A second, later batch is real and must be trusted.
-        fire(page2);
+        // Now page 2 is the one at the top instead (a real fast scroll
+        // jumping straight past page 1, not an intermediate observer batch).
+        vi.spyOn(page1, 'getBoundingClientRect').mockReturnValue({ top: -905 } as DOMRect);
+        vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: -5 } as DOMRect);
+        pagesEl.dispatchEvent(new Event('scroll'));
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
         expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('2 / 2');
     });
 

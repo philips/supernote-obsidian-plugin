@@ -209,10 +209,10 @@ export class SupernoteViewerElement extends HTMLElement {
     private toolbarEl: HTMLElement | null = null;
     private pageIndicatorEl: HTMLElement | null = null;
     private modeToggleBtn: HTMLButtonElement | null = null;
-    private pageObserver: IntersectionObserver | null = null;
     private pageLoadObserver: IntersectionObserver | null = null;
     private pageStates: ViewerPageState[] = [];
     private currentPage = 0;
+    private pageIndicatorScrollScheduled = false;
     private mode: 'image' | 'text' = 'image';
     private sn: SupernoteX | null = null;
     private renderQueued = false;
@@ -250,7 +250,6 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     disconnectedCallback(): void {
-        this.pageObserver?.disconnect();
         this.pageLoadObserver?.disconnect();
         for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
     }
@@ -373,8 +372,6 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     private teardownForRerender(): void {
-        this.pageObserver?.disconnect();
-        this.pageObserver = null;
         this.pageLoadObserver?.disconnect();
         this.pageLoadObserver = null;
         for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
@@ -384,6 +381,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageIndicatorEl = null;
         this.modeToggleBtn = null;
         this.currentPage = 0;
+        this.pageIndicatorScrollScheduled = false;
         this.mode = 'image';
         this.sn = null;
         this.rootEl.innerHTML = '';
@@ -421,7 +419,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageStates = states;
 
         this.setupPageLoadObserver(sn, states);
-        if (pageCount > 1) this.setupPageIndicatorObserver(states);
+        if (pageCount > 1) this.setupPageIndicatorTracking();
     }
 
     // A single deep-linked page (the `page` attribute, clamped, defaulting
@@ -495,37 +493,57 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     // Keeps the toolbar's page indicator in sync with whatever page is
-    // actually scrolled into view.
-    private setupPageIndicatorObserver(states: ViewerPageState[]): void {
-        // Calling .observe() on every page below fires one combined initial
-        // callback reporting each element's *current* intersection state -
-        // but for a freshly built, many-page placeholder list (each sized
-        // via CSS aspect-ratio; see buildNotePagePlaceholders()), layout
-        // isn't guaranteed to have actually settled by the time that first
-        // callback fires, so it can report some other page as intersecting
-        // instead of the true first one. Confirmed via real user testing on
-        // a 102-page note: the indicator initially read "63 / 102",
-        // correcting itself to "1 / 102" only once a real, layout-settled
-        // scroll-driven update arrived. A freshly built pages list is always
-        // scrolled to the very top, so page 1 is unconditionally correct at
-        // that point regardless (already set by buildToolbar()) - skip that
-        // first, unreliable batch entirely rather than trusting it.
-        let firstBatch = true;
-        this.pageObserver = new IntersectionObserver((entries) => {
-            if (firstBatch) {
-                firstBatch = false;
-                return;
-            }
-            for (const entry of entries) {
-                if (!entry.isIntersecting) continue;
-                const idx = states.findIndex((s) => s.containerEl === entry.target);
-                if (idx === -1) continue;
-                this.currentPage = idx;
-                if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${idx + 1} / ${states.length}`;
-            }
-        }, { root: this.pagesEl, threshold: 0.5 });
+    // actually scrolled into view. Deliberately a scroll listener that
+    // recomputes from real, current getBoundingClientRect() geometry - see
+    // updateCurrentPageIndicator() - rather than an IntersectionObserver,
+    // after two related but distinct IntersectionObserver bugs surfaced via
+    // real user testing on a 102-page note:
+    //   - the observer's very first callback (fired once per .observe()
+    //     call, reporting each target's *current* intersection state)
+    //     isn't guaranteed to reflect settled layout for a freshly built,
+    //     many-page placeholder list - it initially read "63 / 102",
+    //     correcting itself only once a real, later, layout-settled update
+    //     arrived.
+    //   - scrolling *quickly* could report "102 / 102" (the very last
+    //     page) mid-scroll, nowhere near the actual visible page - a fast
+    //     scroll can cross several pages' 50% thresholds within the same
+    //     batched callback, and "the last entry in that batch wins" has no
+    //     guaranteed relationship to "the page actually on screen".
+    // getBoundingClientRect() forces a fresh synchronous layout read every
+    // time, so there's no equivalent staleness risk to patch around -
+    // this is the same pattern (and for the same reason) SupernoteView's
+    // own updateCurrentPageIndicator() in main.ts already uses.
+    private setupPageIndicatorTracking(): void {
+        if (!this.pagesEl) return;
+        this.pagesEl.addEventListener('scroll', () => {
+            if (this.pageIndicatorScrollScheduled) return;
+            this.pageIndicatorScrollScheduled = true;
+            window.requestAnimationFrame(() => {
+                this.pageIndicatorScrollScheduled = false;
+                this.updateCurrentPageIndicator();
+            });
+        }, { passive: true });
+        // Sets the correct initial value immediately - synchronous, so
+        // there's no window where a stale/default value could be shown
+        // before real state is confirmed.
+        this.updateCurrentPageIndicator();
+    }
 
-        for (const state of states) this.pageObserver.observe(state.containerEl);
+    private updateCurrentPageIndicator(): void {
+        if (!this.pagesEl || this.pageStates.length === 0) return;
+        const threshold = this.pagesEl.getBoundingClientRect().top + 1;
+
+        let current = 0;
+        for (let i = 0; i < this.pageStates.length; i++) {
+            if (this.pageStates[i].containerEl.getBoundingClientRect().top <= threshold) {
+                current = i;
+            } else {
+                break;
+            }
+        }
+
+        this.currentPage = current;
+        if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${current + 1} / ${this.pageStates.length}`;
     }
 
     // Idempotent and safe to call speculatively - `loaded` is set eagerly so

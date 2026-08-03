@@ -51,6 +51,19 @@ describe('buildNotePagePlaceholders', () => {
             expect(page.imageEl.src).toBe('');
             expect(page.imageEl.style.aspectRatio).toBe('1404 / 1872');
             expect(page.imageEl.style.width).toBe('100%');
+            // Also load-bearing (not just the img's own width:100% above) -
+            // under a flex container using align-items: center rather than
+            // the stretch default (both SupernoteViewerElement's .pages and
+            // SupernoteView's own page list do this), a flex item with no
+            // explicit width of its own sizes to its content's width, which
+            // for a still-src-less img gives the aspect-ratio trick nothing
+            // definite to resolve against - collapsing the whole placeholder
+            // to ~0 height regardless of aspect-ratio. Confirmed via real
+            // browser testing (a real user-reported bug: scrolling quickly
+            // through a long note could jump straight to the last page,
+            // since the scrollable range was measured against these
+            // collapsed heights instead of the note's real total height).
+            expect(page.containerEl.style.width).toBe('100%');
         }
     });
 });
@@ -65,5 +78,6 @@ describe('fillNotePagePlaceholder', () => {
         expect(page.imageEl.src).toBe('data:image/png;base64,ccc');
         expect(page.imageEl.style.width).toBe('');
         expect(page.imageEl.style.aspectRatio).toBe('');
+        expect(page.containerEl.style.width).toBe('');
     });
 });
