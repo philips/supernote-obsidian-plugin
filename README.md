@@ -72,6 +72,9 @@ I personally don't accept funding or donations for this project. However, if you
 
 - Building a custom AI/OCR companion plugin? See [`ocr-plugins.md`](ocr-plugins.md)
   for the `registerPageTextProcessor` hook and a working example.
+- Using the `<supernote-viewer>` web component in your own app? See
+  [`webcomponent-usage.md`](webcomponent-usage.md). Publishing a new version of it? See
+  [`webcomponent-publishing.md`](webcomponent-publishing.md).
 - Make sure your NodeJS is at least v16 (`node --version`).
 - Clone this repo.
 - Setup the deps
@@ -100,10 +103,11 @@ npm run build:webcomponent   # writes dist/supernote-viewer.js (gitignored)
 npx serve .                  # any static file server works - module scripts need http(s), not file://
 ```
 
-Then open `/demo/` in a browser and pick a `.note` file to view it. The element itself takes either a `src`
-URL attribute or a `noteData` property (an `ArrayBuffer`/`Uint8Array`) - see
-[`src/webcomponent/SupernoteViewerElement.ts`](src/webcomponent/SupernoteViewerElement.ts) for the full API
-(events, page navigation, the recognized-text toggle).
+Then open `/demo/` in a browser and pick a `.note` file to view it. See
+[`webcomponent-usage.md`](webcomponent-usage.md) for the full API (attributes, properties, events,
+styling, framework notes) and [`webcomponent-publishing.md`](webcomponent-publishing.md) for how to
+actually ship a version of this for others to depend on - nothing is published with a stable URL/version
+yet, so don't point production code at the live demo above.
 
 Note that this can't literally run embedded in this README on GitHub - GitHub sanitizes rendered Markdown
 and strips `<script>` tags and custom elements, so there's no way to load a live, interactive component
