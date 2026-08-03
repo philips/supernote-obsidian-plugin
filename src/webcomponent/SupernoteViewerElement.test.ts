@@ -78,6 +78,54 @@ describe('<supernote-viewer>', () => {
         expect(toolbar?.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
     });
 
+    it('ignores the page-indicator observer\'s unreliable initial batch', async () => {
+        // happy-dom's real IntersectionObserver never fires at all (see this
+        // file's header comment), so the actual browser race this guards
+        // against - the initial batch reporting some page other than the
+        // true first one, before a many-page placeholder list's layout has
+        // settled (confirmed via real user testing on a 102-page note) -
+        // isn't reproducible here. What *is* testable without a real
+        // browser: that the component's own fix (ignore that first batch,
+        // only trust later ones) is actually wired up, by controlling the
+        // observer directly instead of a real one.
+        class FakeIntersectionObserver {
+            static instances: FakeIntersectionObserver[] = [];
+            constructor(public callback: IntersectionObserverCallback) {
+                FakeIntersectionObserver.instances.push(this);
+            }
+            observe(): void { /* not needed - callback is invoked directly below */ }
+            unobserve(): void { /* not needed */ }
+            disconnect(): void { /* not needed */ }
+            takeRecords(): IntersectionObserverEntry[] { return []; }
+        }
+        FakeIntersectionObserver.instances = [];
+        vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+        await loaded;
+
+        // buildViewer() sets up the load observer first, then the indicator
+        // observer (see setupPageLoadObserver()/setupPageIndicatorObserver()).
+        const indicatorObserver = FakeIntersectionObserver.instances[1];
+        const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];
+        const fire = (target: Element) => indicatorObserver.callback(
+            [{ isIntersecting: true, target } as IntersectionObserverEntry],
+            indicatorObserver as unknown as IntersectionObserver,
+        );
+
+        // First (simulated-unreliable) batch reporting page 2 - must be
+        // ignored, leaving buildToolbar()'s correct "1 / 2" default alone.
+        fire(page2);
+        expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
+
+        // A second, later batch is real and must be trusted.
+        fire(page2);
+        expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('2 / 2');
+    });
+
     it('goToPage() forces that page to load immediately, once, idempotently', async () => {
         const el = createViewer();
         document.body.appendChild(el);

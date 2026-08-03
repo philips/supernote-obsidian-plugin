@@ -495,10 +495,27 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     // Keeps the toolbar's page indicator in sync with whatever page is
-    // actually scrolled into view - same pattern as SupernoteEmbed's
-    // observePages() in main.ts.
+    // actually scrolled into view.
     private setupPageIndicatorObserver(states: ViewerPageState[]): void {
+        // Calling .observe() on every page below fires one combined initial
+        // callback reporting each element's *current* intersection state -
+        // but for a freshly built, many-page placeholder list (each sized
+        // via CSS aspect-ratio; see buildNotePagePlaceholders()), layout
+        // isn't guaranteed to have actually settled by the time that first
+        // callback fires, so it can report some other page as intersecting
+        // instead of the true first one. Confirmed via real user testing on
+        // a 102-page note: the indicator initially read "63 / 102",
+        // correcting itself to "1 / 102" only once a real, layout-settled
+        // scroll-driven update arrived. A freshly built pages list is always
+        // scrolled to the very top, so page 1 is unconditionally correct at
+        // that point regardless (already set by buildToolbar()) - skip that
+        // first, unreliable batch entirely rather than trusting it.
+        let firstBatch = true;
         this.pageObserver = new IntersectionObserver((entries) => {
+            if (firstBatch) {
+                firstBatch = false;
+                return;
+            }
             for (const entry of entries) {
                 if (!entry.isIntersecting) continue;
                 const idx = states.findIndex((s) => s.containerEl === entry.target);
