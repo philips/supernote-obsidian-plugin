@@ -40,14 +40,31 @@ export interface WordOverlayEntry {
     nativeHeight: number;
 }
 
-// Empirically-verified constant used by Supernote's own recognition format:
-// recognized word bounding boxes are stored in raster-pixel units divided by
-// this factor. Mirrors supernote-typescript/src/pdf.ts's own copy of the
-// same constant (used there to embed these same words as invisible PDF
-// text) - duplicated rather than imported since supernote-typescript
-// doesn't currently export it as a standalone helper. If it's ever wrong,
-// fix both copies.
-const RECOGNITION_COORDINATE_SCALE = 11.9;
+// Recognized word bounding boxes are stored in raster-pixel units divided by
+// a scale factor - NOT a universal constant, confirmed via real device
+// files: 11.9 (this constant's own long-standing value, and
+// supernote-typescript/src/pdf.ts's identical copy - see that constant's
+// own comment) only holds for notes from Manta-family devices
+// (SupernoteX's own `header.APPLY_EQUIPMENT === 'N5'` check, pageWidth
+// 1920) - real-world testing against an A5X-family note (pageWidth 1404,
+// the *default* for every device other than Manta) found recognized-word
+// highlights landing up to a full page-height below the actual pen
+// strokes (issue #204's second checkbox), the error compounding with
+// distance down the page in exactly the way a wrong *multiplicative*
+// factor would, not a fixed offset.
+//
+// Cropping the actual rendered page image at the position each formula
+// predicts (not just eyeballing) confirmed the fix directly: 11.9 is
+// exactly right for a 1920px-wide page and only that page width -
+// scaling it down by the same ratio the actual page is narrower than
+// 1920 lines every word up tightly again on a 1404-wide (A5X) page.
+// I.e. the true constant is a *reference page width*, not a scale
+// factor: recognition coordinates are defined against a fixed
+// 1920/11.9 ≈ 161.34-unit-wide canvas, and need dividing by whatever
+// fraction of 1920px this particular note's own page actually is.
+function recognitionCoordinateScale(pageWidth: number): number {
+    return (pageWidth * 11.9) / 1920;
+}
 
 // Some recognition environments produce mojibake-looking labels that are
 // actually correctly-encoded UTF-8 bytes misinterpreted as Latin-1
@@ -87,9 +104,15 @@ function decodeRecognitionLabel(label: string): string {
 // buildWordSearchText), so silently skipping them here would make that
 // reconstruction lose spacing information a caller has no other way to
 // recover.
-export function buildWordOverlay(page: IPage, container: HTMLElement, pageNumber: number): WordOverlayEntry[] {
+export function buildWordOverlay(
+    page: IPage,
+    container: HTMLElement,
+    pageNumber: number,
+    pageWidth: number,
+): WordOverlayEntry[] {
     const entries: WordOverlayEntry[] = [];
     const textElements = page.recognitionElements.filter((element) => element.type === 'Text');
+    const scale = recognitionCoordinateScale(pageWidth);
 
     for (let elementIndex = 0; elementIndex < textElements.length; elementIndex++) {
         for (const word of textElements[elementIndex].words) {
@@ -112,10 +135,10 @@ export function buildWordOverlay(page: IPage, container: HTMLElement, pageNumber
                 pageNumber,
                 label,
                 el: span,
-                nativeX: box.x * RECOGNITION_COORDINATE_SCALE,
-                nativeY: box.y * RECOGNITION_COORDINATE_SCALE,
-                nativeWidth: box.width * RECOGNITION_COORDINATE_SCALE,
-                nativeHeight: box.height * RECOGNITION_COORDINATE_SCALE,
+                nativeX: box.x * scale,
+                nativeY: box.y * scale,
+                nativeWidth: box.width * scale,
+                nativeHeight: box.height * scale,
             });
         }
 
