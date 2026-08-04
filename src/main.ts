@@ -650,24 +650,6 @@ export class SupernoteView extends FileView {
 			});
 		}
 
-		// Unconditional (not gated by showExportButtons, unlike the buttons
-		// above) - matches this feature's previous toolbar-button placement,
-		// which was likewise always shown regardless of that setting. Built
-		// as a plain button here rather than restored as an icon in some
-		// toolbar of this wrapper's own: the icon-based toolbar row it used
-		// to live in belongs entirely to <supernote-viewer> now, and adding
-		// export UI there would cross the "no save/export UI" v1 boundary
-		// that component's own header comment deliberately draws.
-		const exportPageBtn = container.createEl("p").createEl("button", {
-			text: "Export current page as image",
-			cls: "mod-cta",
-		});
-		exportPageBtn.addEventListener("click", () => {
-			this.exportCurrentPageAsImage().catch((err: unknown) => {
-				new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
-			});
-		});
-
 		const bytes = await this.app.vault.readBinary(file);
 
 		const viewer = container.createEl('supernote-viewer');
@@ -684,6 +666,28 @@ export class SupernoteView extends FileView {
 		}
 		this.viewerEl = viewer;
 		this.updateDarkAttribute();
+
+		// A real toolbar button, not a standalone element outside the
+		// component (an earlier version of this wrapper did that - a real,
+		// reported regression, since it no longer sat with the rest of the
+		// page-nav/mode/find controls the way it did in SupernoteView's own
+		// pre-web-component toolbar). <supernote-viewer> has no portable
+		// equivalent for this - it writes to an Obsidian vault - so it
+		// exposes a "toolbar-extra" slot instead of building export UI
+		// itself (see buildToolbar()'s own comment on that slot, and its
+		// header comment's "no save/export UI" v1 boundary). A plain
+		// light-DOM child of `viewer`, unaffected by the component
+		// rebuilding its own shadow-root toolbar on every note load - no
+		// re-adding needed beyond this one call per onLoadFile().
+		const exportPageBtn = viewer.createEl('button', {
+			text: 'Export',
+			attr: { type: 'button', slot: 'toolbar-extra', 'aria-label': 'Export current page as image' },
+		});
+		exportPageBtn.addEventListener('click', () => {
+			this.exportCurrentPageAsImage().catch((err: unknown) => {
+				new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+			});
+		});
 
 		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageIds: string[] }>) => {
 			this.pageIds = e.detail.pageIds;

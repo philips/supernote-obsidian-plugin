@@ -83,6 +83,32 @@ describe('<supernote-viewer>', () => {
         // test sets up.
     });
 
+    it('projects a light-DOM child slotted as toolbar-extra into the toolbar', async () => {
+        // Lets a host add its own controls (e.g. SupernoteView's "export
+        // current page as image" button in main.ts, which writes to an
+        // Obsidian vault - nothing this portable component can do itself)
+        // without needing an imperative "addToolbarButton()" API - see
+        // buildToolbar()'s own comment on this slot for the full
+        // rationale. Added *before* noteData is set, matching how a real
+        // host builds it (append once, right after creating the element),
+        // to confirm the slotted content survives the element's own
+        // subsequent build/render rather than only working if added after.
+        const el = createViewer();
+        const btn = document.createElement('button');
+        btn.slot = 'toolbar-extra';
+        btn.textContent = 'Export';
+        el.appendChild(btn);
+        document.body.appendChild(el);
+
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+
+        const slot = el.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="toolbar-extra"]');
+        expect(slot).toBeTruthy();
+        expect(slot!.assignedElements()).toEqual([btn]);
+    });
+
     it('includes each page\'s own PAGEID in the supernote-load event, for a host resolving a same-named link-click', async () => {
         // A host embedding this component (e.g. SupernoteEmbed in main.ts)
         // knows its own file's name, which this component deliberately

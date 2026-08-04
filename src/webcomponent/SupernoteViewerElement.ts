@@ -147,6 +147,32 @@ button {
     padding: 0.2em 0.6em;
     cursor: pointer;
 }
+/* Lets each slotted node lay out as its own independent toolbar flex item
+   (same "display: contents on the wrapper" trick .supernote-toolbar-group
+   uses in main.ts's own styles.css, for the same reason: without it, the
+   <slot> element itself - not each of its assigned nodes - is the flex
+   item, so multiple host-provided buttons would wrap/space as one block
+   instead of individually). See the toolbar-extra slot below and its own
+   comment for what this is for. */
+.toolbar slot {
+    display: contents;
+}
+/* Styles a host's own <button slot="toolbar-extra"> to match this
+   toolbar's built-in buttons - light DOM content projected through a slot
+   doesn't inherit this shadow root's plain button rule above on its own;
+   ::slotted() is the mechanism for reaching in from here. Only matches
+   top-level slotted nodes, which is exactly the shape a host is expected
+   to provide - see buildToolbar()'s own comment on the "toolbar-extra"
+   slot for the full contract. */
+::slotted(button) {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--supernote-viewer-border);
+    border-radius: 4px;
+    padding: 0.2em 0.6em;
+    cursor: pointer;
+}
 button[aria-pressed="true"] {
     background: var(--supernote-viewer-muted);
     opacity: 0.3;
@@ -1333,6 +1359,26 @@ export class SupernoteViewerElement extends HTMLElement {
         findBtn.addEventListener('click', () => this.toggleFindBar());
         toolbar.appendChild(findBtn);
         this.findToggleBtn = findBtn;
+
+        // Lets a host add its own controls to this toolbar - e.g.
+        // SupernoteView's "export current page as image" button in
+        // main.ts, which has no portable equivalent here (it writes to an
+        // Obsidian vault) but still deserves a real toolbar button rather
+        // than being relegated to a standalone element outside the
+        // component (a real, reported regression when this component
+        // first replaced SupernoteView's own toolbar - see issue #183's
+        // SupernoteView-swap phase). A named <slot>, not a public
+        // "addToolbarButton()" method: slotted (light DOM) content is
+        // unaffected by this element being torn down and rebuilt on every
+        // note load (see teardownForRerender()/buildViewer()) - the host
+        // adds its <button slot="toolbar-extra"> once, as an ordinary
+        // child of <supernote-viewer> itself, and the browser keeps
+        // re-projecting it into whichever toolbar currently exists with no
+        // further coordination needed on either side. See ::slotted(button)
+        // above for the matching visual styling.
+        const extraSlot = document.createElement('slot');
+        extraSlot.name = 'toolbar-extra';
+        toolbar.appendChild(extraSlot);
 
         this.rootEl.appendChild(toolbar);
         this.toolbarEl = toolbar;
