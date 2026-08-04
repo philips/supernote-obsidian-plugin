@@ -25,7 +25,6 @@ interface ViewerPageState extends RenderedNotePage {
     wordEntries: WordOverlayEntry[];
     loaded: boolean;
     visible: boolean;
-    loadDebounceTimer?: number;
 }
 
 interface FindMatch {
@@ -379,6 +378,10 @@ export class SupernoteViewerElement extends HTMLElement {
     private pageIndicatorEl: HTMLElement | null = null;
     private modeToggleBtn: HTMLButtonElement | null = null;
     private pageLoadObserver: IntersectionObserver | null = null;
+    // Shared across every page - see setupPageLoadObserver()'s own comment
+    // for why loading needs one debounce for "has scrolling settled" rather
+    // than each page tracking its own independently.
+    private loadCheckDebounceTimer?: number;
     private resizeObserver: ResizeObserver | null = null;
     private pageStates: ViewerPageState[] = [];
     private currentPage = 0;
@@ -435,7 +438,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageLoadObserver?.disconnect();
         this.resizeObserver?.disconnect();
         this.thumbLoadObserver?.disconnect();
-        for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
+        window.clearTimeout(this.loadCheckDebounceTimer);
     }
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -591,7 +594,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.resizeObserver = null;
         this.thumbLoadObserver?.disconnect();
         this.thumbLoadObserver = null;
-        for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
+        window.clearTimeout(this.loadCheckDebounceTimer);
         this.pageStates = [];
         this.pagesEl = null;
         this.toolbarEl = null;
@@ -725,46 +728,90 @@ export class SupernoteViewerElement extends HTMLElement {
         });
     }
 
-    // Loads each page's image lazily, only once it's about to scroll into
-    // view - rasterizing every page upfront made even the first page wait on
-    // the whole document finishing (see issue #183 and the same fix already
-    // applied to SupernoteEmbed in main.ts, which this mirrors). Also evicts
-    // a page's image once it scrolls back *out* of that same margin (see
-    // evictPageImage()) - loading lazily instead of upfront already bounds
-    // memory by "how many pages are near the viewport right now" rather
-    // than "how many have been scrolled past so far", but without eviction
-    // that first bound only ever grows monotonically as you keep scrolling
-    // through a long document - exactly the memory-safety gap SupernoteView
-    // itself had to fix once (issue #154) before this component existed,
-    // and would otherwise silently reintroduce here.
+    // Loads each page's image lazily, only once scrolling has actually
+    // *settled* somewhere near it - rasterizing every page upfront made
+    // even the first page wait on the whole document finishing (see issue
+    // #183 and the same fix already applied to SupernoteEmbed in main.ts),
+    // and loading eagerly on every single intersection change (an earlier
+    // version of this method did) made a continuous scroll to the bottom
+    // of a long document visibly rasterize *every* page along the way, in
+    // order, well after each one had scrolled back out of view - a real,
+    // reported bug. A page-scoped debounce (checking only "has this one
+    // page been near the viewport for 150ms", the same pattern
+    // SupernoteView's own pageObserver in main.ts uses) doesn't actually
+    // fix that: state.visible reflects the *padded* rootMargin zone (100%
+    // of .pages' own height above/below the real viewport), so a page can
+    // stay "within margin" for 150ms+ even while a fast, *continuous*
+    // scroll carries it straight through and back out again - confirmed
+    // directly, tightening that check to the real, unpadded viewport (or
+    // anywhere in between) made no difference at the scroll speeds that
+    // actually trigger this, since each page genuinely does sit somewhere
+    // in that zone around the 150ms mark either way. What actually
+    // distinguishes "the user paused here" from "just passing through" is
+    // whether *scrolling itself* has stopped, not any one page's own
+    // timer - so this debounce is shared across every page and reset by
+    // both intersection changes and every raw scroll event, only
+    // re-evaluating (and loading) whatever's actually near the viewport
+    // once neither has happened for a while. Also evicts a page's image
+    // immediately (no debounce - see evictPageImage()'s own comment) once
+    // it scrolls back *out* of the prefetch margin - loading lazily
+    // instead of upfront already bounds memory by "how many pages are
+    // near the viewport right now" rather than "how many have been
+    // scrolled past so far", but without eviction that first bound only
+    // ever grows monotonically as you keep scrolling through a long
+    // document - exactly the memory-safety gap SupernoteView itself had
+    // to fix once (issue #154) before this component existed, and would
+    // otherwise silently reintroduce here.
     private setupPageLoadObserver(sn: SupernoteX, states: ViewerPageState[]): void {
+        const scheduleLoadCheck = () => {
+            window.clearTimeout(this.loadCheckDebounceTimer);
+            this.loadCheckDebounceTimer = window.setTimeout(() => {
+                for (const state of states) {
+                    // A generous-but-not-huge buffer once settled (half a
+                    // viewport height) - enough to prime the very next
+                    // page ahead of actually reaching it, far short of the
+                    // observer's own 100% prefetch margin that only exists
+                    // to decide when a page is worth watching at all.
+                    if (state.visible && !state.loaded && this.isPageNearScreen(state, 0.5)) {
+                        void this.ensurePageImageLoaded(sn, state);
+                    }
+                }
+            }, 150);
+        };
+
         this.pageLoadObserver = new IntersectionObserver((entries) => {
             for (const entry of entries) {
                 const state = states.find((s) => s.containerEl === entry.target);
                 if (!state) continue;
                 state.visible = entry.isIntersecting;
-
-                if (!entry.isIntersecting) {
-                    // Unlike loading, eviction isn't debounced - a page
-                    // that's scrolled out of the prefetch margin has, by
-                    // definition, been out of view for at least as long as
-                    // it took to cross that whole margin, so there's no
-                    // equivalent "just passing through" case to guard
-                    // against here the way a fast scroll's transient
-                    // *loads* need guarding against below.
-                    this.evictPageImage(sn, state);
-                    continue;
-                }
-
-                window.clearTimeout(state.loadDebounceTimer);
-                state.loadDebounceTimer = window.setTimeout(() => {
-                    if (!state.visible || state.loaded) return;
-                    void this.ensurePageImageLoaded(sn, state);
-                }, 150);
+                if (!entry.isIntersecting) this.evictPageImage(sn, state);
             }
+            scheduleLoadCheck();
         }, { root: this.pagesEl, rootMargin: '100% 0px' });
 
         for (const state of states) this.pageLoadObserver.observe(state.containerEl);
+
+        // The observer's own callbacks only fire on actual intersection
+        // *transitions*, which can be sparse relative to how continuously
+        // a real scroll gesture fires 'scroll' events - without this, a
+        // long, unbroken scroll pass where nothing happens to enter/exit
+        // the margin for a stretch could let the settle timer fire
+        // mid-scroll instead of only once it actually stops.
+        this.pagesEl?.addEventListener('scroll', scheduleLoadCheck, { passive: true });
+    }
+
+    // Real intersection with .pages' own visible bounds, padded by only
+    // `marginRatio` x .pages' own height - unlike the pageLoadObserver's
+    // own rootMargin: '100% 0px', which deliberately pads a much more
+    // generous zone around the real viewport just to decide when a page is
+    // worth starting to watch at all. See setupPageLoadObserver()'s own
+    // comment for why the two need to be different checks.
+    private isPageNearScreen(state: ViewerPageState, marginRatio: number): boolean {
+        if (!this.pagesEl) return false;
+        const pagesRect = this.pagesEl.getBoundingClientRect();
+        const margin = pagesRect.height * marginRatio;
+        const stateRect = state.containerEl.getBoundingClientRect();
+        return stateRect.bottom > pagesRect.top - margin && stateRect.top < pagesRect.bottom + margin;
     }
 
     // Keeps the toolbar's page indicator in sync with whatever page is
@@ -975,7 +1022,6 @@ export class SupernoteViewerElement extends HTMLElement {
     // at file-open time).
     private evictPageImage(sn: SupernoteX, state: ViewerPageState): void {
         if (!state.loaded) return;
-        window.clearTimeout(state.loadDebounceTimer);
         evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
         state.loaded = false;
     }

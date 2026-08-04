@@ -160,9 +160,24 @@ export function fillNotePagePlaceholder(page: RenderedNotePage, imageDataUrl: st
 // (see that function's own comment for why), the same layout bug the
 // placeholder trick already fixed once for the *initial*, not-yet-loaded
 // state.
+//
+// removeAttribute(), not img.src = '' - confirmed as a real, reported bug:
+// assigning the empty string to the *src* IDL property doesn't clear it
+// the way it might look like it should. Per the HTML spec, resolving an
+// empty string against the document's own base URL yields the document's
+// own URL, so the <img> ends up trying to (re-)fetch the current page
+// itself as an image - which fails to decode, rendering a literal "broken
+// image" icon in place of every evicted page (confirmed directly: the
+// resulting img.src read back as the page's own URL, naturalWidth/Height
+// 0, complete: true - exactly that failed state). removeAttribute('src')
+// instead restores the image to having genuinely no src at all, the same
+// state buildNotePagePlaceholders() itself starts every page in -
+// img.src still reads back as '' either way (the IDL getter returns '' for
+// a missing attribute too), so this doesn't change anything any caller
+// checking that observes.
 export function evictNotePageImage(page: RenderedNotePage, pageWidth: number, pageHeight: number): void {
     page.containerEl.style.width = '100%';
     page.imageEl.style.width = '100%';
     page.imageEl.style.aspectRatio = `${pageWidth} / ${pageHeight}`;
-    page.imageEl.src = '';
+    page.imageEl.removeAttribute('src');
 }
