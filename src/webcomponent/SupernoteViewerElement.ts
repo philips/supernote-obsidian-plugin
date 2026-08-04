@@ -134,16 +134,26 @@ interface FindMatch {
     start: number;
     end: number;
     // The overlay span for the word the match started in - used for
-    // image-mode highlighting/scrolling. Always non-null (see runFind()):
-    // a match whose start landed on a boxless word is discarded rather than
-    // kept with a null entry, since text mode's <mark> highlighting still
-    // needs a real word to point to for image-mode's own highlight.
+    // image-mode scrolling (jump to where the match begins). Always
+    // non-null (see runFind()): a match whose start landed on a boxless
+    // word is discarded rather than kept with a null entry, since text
+    // mode's <mark> highlighting still needs a real word to point to for
+    // image-mode's own highlight.
     entry: WordOverlayEntry;
+    // Every overlay span the match's own [start, end) range overlaps, not
+    // just `entry` above - a multi-word match needs every word it covers
+    // highlighted, not only the one it starts in. Always includes `entry`
+    // itself (its own range overlaps [start, end) by definition). Confirmed
+    // as a real, reported bug: a two-word search previously only
+    // highlighted its first word in image mode, since only `entry` (via
+    // entryAt(start)) was ever marked.
+    entries: WordOverlayEntry[];
 }
 
 interface PageSearchEntry {
     lower: string;
     entryAt: (offset: number) => WordOverlayEntry | undefined;
+    entriesInRange: (start: number, end: number) => WordOverlayEntry[];
 }
 
 const STYLE = `
@@ -584,6 +594,18 @@ button[aria-pressed="true"] {
 .pages.mode-text .page-container {
     width: min(40em, 100%) !important;
 }
+/* user-select: text is not the default and has to be opted into
+   explicitly - Obsidian sets body { user-select: none; } and only opts
+   specific elements it controls back in (its editor, markdown preview,
+   its own PDF viewer's .textLayer). This element had never carried its
+   own explicit override at all (a real, reported regression: SupernoteView
+   in main.ts had it, via the compact-text-mode feature's own pre-#183
+   .supernote-compact-text rule, but it wasn't ported over when that mode
+   was rebuilt here) - it only happened to look selectable in an embed,
+   which inherits user-select: text from Obsidian's own markdown-preview
+   ancestor; SupernoteView's own .view-content is a different kind of view
+   entirely, with nothing re-enabling it, so text there inherited the
+   global default (none) instead. Confirmed via issue #199. */
 .pages .page-container > .page-text {
     display: none;
     white-space: pre-wrap;
@@ -592,6 +614,9 @@ button[aria-pressed="true"] {
     border-radius: 4px;
     max-width: 40em;
     box-sizing: border-box;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
 }
 .pages.mode-text .page-container > .page-text {
     display: block;
@@ -1094,8 +1119,8 @@ export class SupernoteViewerElement extends HTMLElement {
         const states = this.wrapPageStates(sn, placeholders);
         this.pageStates = states;
         this.pageSearchIndex = states.map((state) => {
-            const { text, entryAt } = buildWordSearchText(state.wordEntries);
-            return { lower: text.toLowerCase(), entryAt };
+            const { text, entryAt, entriesInRange } = buildWordSearchText(state.wordEntries);
+            return { lower: text.toLowerCase(), entryAt, entriesInRange };
         });
 
         this.setupPageLoadObserver(sn, states);
@@ -1967,7 +1992,7 @@ export class SupernoteViewerElement extends HTMLElement {
         const q = query.trim().toLowerCase();
         if (q.length > 0) {
             for (let pageIndex = 0; pageIndex < this.pageSearchIndex.length; pageIndex++) {
-                const { lower, entryAt } = this.pageSearchIndex[pageIndex];
+                const { lower, entryAt, entriesInRange } = this.pageSearchIndex[pageIndex];
                 let from = 0;
                 for (;;) {
                     const idx = lower.indexOf(q, from);
@@ -1983,10 +2008,20 @@ export class SupernoteViewerElement extends HTMLElement {
                     // mode's <mark> highlighting only needs the offsets,
                     // but keeping one rule for what counts as a match, in
                     // both modes, is simpler than two).
-                    if (entry?.el) this.findMatches.push({ pageIndex, start: idx, end, entry });
+                    if (entry?.el) {
+                        // Every word the match spans, not just the one it
+                        // starts in - see FindMatch.entries' own comment.
+                        // Filtered to entries with a real span: a boxless
+                        // one (e.g. the space between two matched words)
+                        // has no element to add a highlight class to.
+                        const entries = entriesInRange(idx, end).filter((e) => e.el);
+                        this.findMatches.push({ pageIndex, start: idx, end, entry, entries });
+                    }
                 }
             }
-            for (const match of this.findMatches) match.entry.el!.classList.add('word-overlay-match');
+            for (const match of this.findMatches) {
+                for (const entry of match.entries) entry.el!.classList.add('word-overlay-match');
+            }
         }
 
         if (this.findMatches.length > 0) this.stepFind(1);
@@ -2004,13 +2039,14 @@ export class SupernoteViewerElement extends HTMLElement {
     private stepFind(delta: number): void {
         if (this.findMatches.length === 0) return;
 
-        this.findMatches[this.findMatchIndex]?.entry.el?.classList.remove('word-overlay-match-current');
+        const previous = this.findMatches[this.findMatchIndex];
+        if (previous) for (const entry of previous.entries) entry.el?.classList.remove('word-overlay-match-current');
 
         const n = this.findMatches.length;
         this.findMatchIndex = ((this.findMatchIndex + delta) % n + n) % n;
 
         const match = this.findMatches[this.findMatchIndex];
-        match.entry.el?.classList.add('word-overlay-match-current');
+        for (const entry of match.entries) entry.el?.classList.add('word-overlay-match-current');
         this.updateFindCount();
         this.renderPageTextHighlights();
         this.scrollToMatch(match);
@@ -2107,7 +2143,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
     private clearFindHighlights(): void {
         for (const match of this.findMatches) {
-            match.entry.el?.classList.remove('word-overlay-match', 'word-overlay-match-current');
+            for (const entry of match.entries) entry.el?.classList.remove('word-overlay-match', 'word-overlay-match-current');
         }
     }
 

@@ -849,6 +849,42 @@ describe('<supernote-viewer>', () => {
             expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('No results');
         });
 
+        it('a multi-word query highlights every word it spans, not just the first (issue #199)', async () => {
+            // Confirmed as a real, reported bug: searching "with enough"
+            // (present once in this fixture, in "With enough space a new
+            // paragraph") correctly reported "1 / 1" but only ever
+            // highlighted "With" - the first word in the match, via
+            // entryAt(match.start) alone - leaving "enough" unhighlighted
+            // even though the match genuinely spans both words. Works
+            // correctly in recognized-text mode already (a single <mark>
+            // wraps the whole [start, end) range there, not one span per
+            // word), which is why this was image-mode-only.
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+
+            input.value = 'with enough';
+            input.dispatchEvent(new Event('input'));
+
+            expect(el.shadowRoot!.querySelector('.find-count')?.textContent).toBe('1 / 1');
+            const current = Array.from(el.shadowRoot!.querySelectorAll('.word-overlay-match-current'));
+            expect(current.map((s) => s.textContent)).toEqual(['With', 'enough']);
+        });
+
+        it('clears every word\'s highlight from a multi-word match, not just the first', async () => {
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!.click();
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.find-bar input')!;
+
+            input.value = 'with enough';
+            input.dispatchEvent(new Event('input'));
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match')).toHaveLength(2);
+
+            input.value = 'zzzznotfound';
+            input.dispatchEvent(new Event('input'));
+            expect(el.shadowRoot!.querySelectorAll('.word-overlay-match, .word-overlay-match-current')).toHaveLength(0);
+        });
+
         it('highlights matches with <mark> in recognized-text mode too', async () => {
             // Image-mode's word-overlay spans have nothing sensible to
             // overlay in text mode (the image is hidden entirely, and the

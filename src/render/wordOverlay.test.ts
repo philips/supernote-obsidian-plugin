@@ -133,6 +133,42 @@ describe('buildWordSearchText', () => {
         const { entryAt } = buildWordSearchText([]);
         expect(entryAt(0)).toBeUndefined();
     });
+
+    describe('entriesInRange', () => {
+        it('returns every entry a multi-word range overlaps, not just the one at its start', () => {
+            // Confirmed as a real, reported bug (issue #199): a caller that
+            // only ever looked up entryAt(range.start) - the shape
+            // runFind() used before this function existed - silently
+            // dropped every word after the first one a multi-word match
+            // spanned, e.g. only "With" out of a "With enough" match.
+            const container = document.createElement('div');
+            const page = fakePage([
+                {
+                    label: 'With enough space',
+                    type: 'Text',
+                    words: [
+                        { label: 'With', 'bounding-box': { x: 0, y: 0, width: 1, height: 1 } },
+                        { label: ' ' },
+                        { label: 'enough', 'bounding-box': { x: 0, y: 0, width: 1, height: 1 } },
+                        { label: ' ' },
+                        { label: 'space', 'bounding-box': { x: 0, y: 0, width: 1, height: 1 } },
+                    ],
+                },
+            ]);
+            const entries = buildWordOverlay(page, container, 1);
+            const { text, entriesInRange } = buildWordSearchText(entries);
+            expect(text).toBe('With enough space');
+
+            // "With enough" spans [0, 11).
+            const spanned = entriesInRange(0, 11);
+            expect(spanned.map((e) => e.label)).toEqual(['With', ' ', 'enough']);
+        });
+
+        it('returns an empty array for a range with no overlap', () => {
+            const { entriesInRange } = buildWordSearchText([]);
+            expect(entriesInRange(0, 5)).toEqual([]);
+        });
+    });
 });
 
 describe('repositionWordOverlay', () => {

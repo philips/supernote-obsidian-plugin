@@ -143,7 +143,11 @@ export function buildWordOverlay(page: IPage, container: HTMLElement, pageNumber
 // '\n'), individual whitespace/punctuation characters between words are
 // already present as their own boxless word entries in real recognition
 // data, so adding another separator here would double them up.
-export function buildWordSearchText(entries: WordOverlayEntry[]): { text: string; entryAt: (offset: number) => WordOverlayEntry | undefined } {
+export function buildWordSearchText(entries: WordOverlayEntry[]): {
+    text: string;
+    entryAt: (offset: number) => WordOverlayEntry | undefined;
+    entriesInRange: (start: number, end: number) => WordOverlayEntry[];
+} {
     let text = '';
     const ranges: { start: number; end: number; entry: WordOverlayEntry }[] = [];
 
@@ -158,7 +162,20 @@ export function buildWordSearchText(entries: WordOverlayEntry[]): { text: string
         return found?.entry;
     };
 
-    return { text, entryAt };
+    // Every entry a *multi-word* match's own [start, end) range overlaps,
+    // not just the single word at its start offset - entryAt() alone only
+    // ever finds the first word a match begins in, which is enough to
+    // scroll to, but silently drops every word after it from the caller's
+    // own view of "what did this match cover" (confirmed as a real,
+    // reported bug: a two-word search only highlighted its first word in
+    // image mode, since the caller was highlighting entryAt(match.start)
+    // alone). Half-open interval overlap (r.start < end && r.end > start),
+    // matching this module's own [start, end) convention throughout.
+    const entriesInRange = (start: number, end: number): WordOverlayEntry[] => {
+        return ranges.filter((r) => r.start < end && r.end > start).map((r) => r.entry);
+    };
+
+    return { text, entryAt, entriesInRange };
 }
 
 // Repositions every word span in `entries` to match the page's *currently
