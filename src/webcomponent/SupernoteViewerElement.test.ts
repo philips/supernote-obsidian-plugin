@@ -163,7 +163,7 @@ describe('<supernote-viewer>', () => {
         vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: 895 } as DOMRect);
         pagesEl.dispatchEvent(new Event('scroll'));
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
-        expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
+        expect(el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')?.value).toBe('1');
         expect(el.currentPage).toBe(1);
 
         // Now page 2 is the one at the top instead (a real fast scroll
@@ -172,7 +172,7 @@ describe('<supernote-viewer>', () => {
         vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: -5 } as DOMRect);
         pagesEl.dispatchEvent(new Event('scroll'));
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
-        expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('2 / 2');
+        expect(el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')?.value).toBe('2');
         expect(el.currentPage).toBe(2);
     });
 
@@ -261,6 +261,83 @@ describe('<supernote-viewer>', () => {
 
         expect(scrollToSpy).toHaveBeenCalledTimes(1);
         expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    });
+
+    describe('page-jump textbox (issue #194)', () => {
+        it('jumps to the typed page on Enter', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+            await loaded;
+
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            const scrollToSpy = vi.spyOn(pagesEl, 'scrollTo');
+
+            // Enter itself only blurs the field (see its own keydown
+            // handler comment for why) - real focus is needed first, or
+            // that blur() call is a no-op and no 'blur' event ever fires.
+            input.focus();
+            input.value = '2';
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+            expect(scrollToSpy).toHaveBeenCalledTimes(1);
+            expect(el.rasterizePage).toHaveBeenCalledWith(expect.anything(), 2);
+        });
+
+        it('jumps to the typed page on blur, same as Enter', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
+            input.value = '2';
+            input.dispatchEvent(new Event('blur'));
+
+            expect(el.rasterizePage).toHaveBeenCalledWith(expect.anything(), 2);
+        });
+
+        it('ignores a non-numeric value rather than jumping or throwing', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
+            input.value = 'not a number';
+            input.dispatchEvent(new Event('blur'));
+
+            expect(el.rasterizePage).not.toHaveBeenCalled();
+        });
+
+        it('does not overwrite the input\'s value while the user is focused on it', async () => {
+            // Mirrors SupernoteView's own identical guard (main.ts) - see
+            // updateCurrentPageIndicator()'s own comment on why this
+            // needs shadowRoot.activeElement, not document.activeElement.
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            const [, page2] = Array.from(el.shadowRoot!.querySelectorAll('.page-container'));
+
+            input.focus();
+            input.value = '2 (typing...)';
+
+            vi.spyOn(pagesEl, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
+            vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: -5 } as DOMRect);
+            pagesEl.dispatchEvent(new Event('scroll'));
+            await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+            expect(input.value).toBe('2 (typing...)');
+        });
     });
 
     describe('thumbnail sidebar', () => {
@@ -631,9 +708,9 @@ describe('<supernote-viewer>', () => {
 
     it('shows the toolbar and find bar even for a single-page note, but no page nav', async () => {
         // The mode toggle and find button are useful regardless of page
-        // count - only the prev/next-page arrows and page indicator are
-        // conditioned on there being more than one page to navigate
-        // between (see buildToolbar()).
+        // count - only the page-jump textbox is conditioned on there
+        // being more than one page to navigate between (see
+        // buildToolbar()).
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
@@ -643,8 +720,7 @@ describe('<supernote-viewer>', () => {
         expect(el.shadowRoot!.querySelector('.toolbar')).toBeTruthy();
         expect(el.shadowRoot!.querySelector('.find-bar')).toBeTruthy();
         expect(el.shadowRoot!.querySelector('button[aria-label="Find in note"]')).toBeTruthy();
-        expect(el.shadowRoot!.querySelector('button[aria-label="Previous page"]')).toBeNull();
-        expect(el.shadowRoot!.querySelector('.page-indicator')).toBeNull();
+        expect(el.shadowRoot!.querySelector('.page-jump-input')).toBeNull();
     });
 
     describe('find in note', () => {

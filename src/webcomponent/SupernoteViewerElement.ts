@@ -62,12 +62,6 @@ function iconThumbnails(): SVGSVGElement {
         ['line', { x1: '9', y1: '3', x2: '9', y2: '21' }],
     ]);
 }
-function iconChevronUp(): SVGSVGElement {
-    return svgIcon([['path', { d: 'M18 15l-6-6-6 6' }]]);
-}
-function iconChevronDown(): SVGSVGElement {
-    return svgIcon([['path', { d: 'M6 9l6 6 6-6' }]]);
-}
 function iconTextMode(): SVGSVGElement {
     return svgIcon([
         ['line', { x1: '4', y1: '6', x2: '20', y2: '6' }],
@@ -269,11 +263,29 @@ button[aria-pressed="true"] {
     background: var(--supernote-viewer-muted);
     opacity: 0.3;
 }
-.page-indicator {
-    min-width: 4em;
-    text-align: center;
+.page-jump-label,
+.page-jump-total {
     color: var(--supernote-viewer-muted);
     font-size: 0.9em;
+    white-space: nowrap;
+}
+/* Editable page-number textbox (issue #194 - copies Obsidian's own PDF
+   viewer UX), not a display-only indicator - width sized for a
+   comfortable few digits, not full-flex like the find bar's own text
+   input, since this always holds just a number. Native number-input
+   spinner arrows are left in place deliberately - unlike the find bar's
+   plain text input, letting a user tick a page number up/down with the
+   browser's own control is a reasonable alternative to typing one, not
+   visual clutter worth suppressing. */
+.page-jump-input {
+    width: 3.5em;
+    font: inherit;
+    color: inherit;
+    text-align: center;
+    background: transparent;
+    border: 1px solid var(--supernote-viewer-border);
+    border-radius: 4px;
+    padding: 0.2em 0.3em;
 }
 .zoom-label {
     min-width: 3.5em;
@@ -629,7 +641,7 @@ export class SupernoteViewerElement extends HTMLElement {
     private readonly rootEl: HTMLElement;
     private pagesEl: HTMLElement | null = null;
     private toolbarEl: HTMLElement | null = null;
-    private pageIndicatorEl: HTMLElement | null = null;
+    private pageJumpInputEl: HTMLInputElement | null = null;
     private modeToggleBtn: HTMLButtonElement | null = null;
     private pageLoadObserver: IntersectionObserver | null = null;
     // Shared across every page - see setupPageLoadObserver()'s own comment
@@ -962,7 +974,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageStates = [];
         this.pagesEl = null;
         this.toolbarEl = null;
-        this.pageIndicatorEl = null;
+        this.pageJumpInputEl = null;
         this.modeToggleBtn = null;
         this.currentPageIndex = 0;
         this.pageIndicatorScrollScheduled = false;
@@ -1281,6 +1293,14 @@ export class SupernoteViewerElement extends HTMLElement {
 
     private updateCurrentPageIndicator(): void {
         if (!this.pagesEl || this.pageStates.length === 0) return;
+        // Mirrors SupernoteView's own identical guard (main.ts,
+        // updateCurrentPageIndicator()) - don't fight the user's own typing
+        // by overwriting the input's value out from under them mid-edit. A
+        // shadow root has its own activeElement (document.activeElement
+        // only ever resolves to the shadow *host* from outside it, per the
+        // DOM spec), so this checks shadowRoot.activeElement, not
+        // document.activeElement, unlike that non-shadow-DOM original.
+        if (this.shadowRoot?.activeElement === this.pageJumpInputEl) return;
         const threshold = this.pagesEl.getBoundingClientRect().top + 1;
 
         let current = 0;
@@ -1293,7 +1313,7 @@ export class SupernoteViewerElement extends HTMLElement {
         }
 
         this.currentPageIndex = current;
-        if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${current + 1} / ${this.pageStates.length}`;
+        if (this.pageJumpInputEl) this.pageJumpInputEl.value = String(current + 1);
         this.highlightThumbnail(current);
     }
 
@@ -1615,7 +1635,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
         // Nothing to navigate to with only one page - the mode toggle and
         // find button below are still worth having regardless of page
-        // count, so only these four are conditioned on pageCount > 1.
+        // count, so only this block is conditioned on pageCount > 1.
         if (pageCount > 1) {
             const thumbBtn = document.createElement('button');
             thumbBtn.type = 'button';
@@ -1627,28 +1647,67 @@ export class SupernoteViewerElement extends HTMLElement {
             toolbar.appendChild(thumbBtn);
             this.thumbToggleBtn = thumbBtn;
 
-            const prevBtn = document.createElement('button');
-            prevBtn.type = 'button';
-            prevBtn.setAttribute('part', 'button');
-            prevBtn.setAttribute('aria-label', 'Previous page');
-            prevBtn.appendChild(iconChevronUp());
-            prevBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex));
-            toolbar.appendChild(prevBtn);
+            // An editable page-number textbox, not up/down page-step
+            // buttons - copies Obsidian's own PDF viewer UX (issue #194):
+            // confirmed as a real, reported preference over stepping one
+            // page at a time, especially on a long document where jumping
+            // straight to a known page number is the more common thing a
+            // user actually wants to do. Mirrors SupernoteView's own
+            // pre-web-component page-jump input (main.ts) exactly -
+            // label, input, "/ N" total, commit on Enter or blur.
+            const pageJumpLabel = document.createElement('span');
+            pageJumpLabel.className = 'page-jump-label';
+            pageJumpLabel.textContent = 'Page';
+            toolbar.appendChild(pageJumpLabel);
 
-            const indicator = document.createElement('span');
-            indicator.className = 'page-indicator';
-            indicator.setAttribute('part', 'page-indicator');
-            indicator.textContent = `1 / ${pageCount}`;
-            toolbar.appendChild(indicator);
-            this.pageIndicatorEl = indicator;
+            const pageInput = document.createElement('input');
+            pageInput.type = 'number';
+            pageInput.className = 'page-jump-input';
+            pageInput.setAttribute('part', 'page-jump-input');
+            pageInput.min = '1';
+            pageInput.max = String(pageCount);
+            pageInput.value = '1';
+            pageInput.setAttribute('aria-label', 'Page number');
+            toolbar.appendChild(pageInput);
+            this.pageJumpInputEl = pageInput;
 
-            const nextBtn = document.createElement('button');
-            nextBtn.type = 'button';
-            nextBtn.setAttribute('part', 'button');
-            nextBtn.setAttribute('aria-label', 'Next page');
-            nextBtn.appendChild(iconChevronDown());
-            nextBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex + 2));
-            toolbar.appendChild(nextBtn);
+            const pageJumpTotal = document.createElement('span');
+            pageJumpTotal.className = 'page-jump-total';
+            pageJumpTotal.textContent = `/ ${pageCount}`;
+            toolbar.appendChild(pageJumpTotal);
+
+            const jumpToPage = () => {
+                // An empty string (a user clearing the field, or a browser
+                // silently rejecting/normalizing an invalid typed value on
+                // this type="number" input - confirmed as real behavior,
+                // not just a hypothetical) coerces to 0 via Number(''),
+                // which is finite - checked for explicitly so an empty
+                // field does nothing instead of jumping to page 1 as a
+                // confusing side effect of that coercion.
+                if (pageInput.value.trim() === '') return;
+                const requested = Number(pageInput.value);
+                if (!Number.isFinite(requested)) return;
+                this.goToPage(Math.round(requested));
+            };
+            pageInput.addEventListener('keydown', (evt: KeyboardEvent) => {
+                if (evt.key === 'Enter') {
+                    evt.preventDefault();
+                    // Blurring (not calling jumpToPage() directly here too)
+                    // routes both Enter and a manual click-away through the
+                    // exact same single commit path below - pressing Enter
+                    // doesn't blur a field on its own (browsers leave focus
+                    // where it was), and updateCurrentPageIndicator()
+                    // deliberately skips updating this same input while
+                    // it's focused, so without this, the field would keep
+                    // showing whatever was just typed instead of catching
+                    // up to the real destination once the jump below lands
+                    // (e.g. an out-of-range value getting clamped) -
+                    // confirmed as a real, reproducible staleness bug via
+                    // direct testing.
+                    pageInput.blur();
+                }
+            });
+            pageInput.addEventListener('blur', jumpToPage);
         }
 
         // Zoom - worth having regardless of page count (even a single-page
