@@ -11,7 +11,7 @@
 // not Obsidian's vault-write APIs this codebase otherwise uses).
 import { SupernoteX } from 'supernote-typescript';
 import { ImageConverter } from '../render/imageConverter';
-import { RenderedNotePage, buildNotePagePlaceholders, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
+import { RenderedNotePage, buildNotePagePlaceholders, evictNotePageImage, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
 import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 
@@ -486,6 +486,17 @@ export class SupernoteViewerElement extends HTMLElement {
         const targetRect = state.containerEl.getBoundingClientRect();
         const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top);
         this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+        // Marked visible before forcing the load (not just left to whatever
+        // the observer last reported) - a jump can target a page nowhere
+        // near the current scroll position, still mid-animation and not
+        // actually intersecting yet, which ensurePageImageLoaded()'s own
+        // scrolled-away-mid-load guard would otherwise mistake for exactly
+        // that: a page that's since become irrelevant, discarding the
+        // result instead of finishing the load. Mirrors SupernoteView's own
+        // goToPage()/highlightCurrentMatch() in main.ts, which set
+        // visibleInMainView = true for the same reason before their own
+        // forced loads.
+        state.visible = true;
         if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
     }
 
@@ -681,6 +692,12 @@ export class SupernoteViewerElement extends HTMLElement {
         const [state] = this.wrapPageStates(sn, placeholders);
         this.pageStates = [state];
         this.setupWordOverlayResizing(sn, this.pageStates);
+        // Single-page mode has no IntersectionObserver at all (nothing else
+        // to scroll to), so nothing else would ever mark this page visible -
+        // needed so ensurePageImageLoaded()'s scrolled-away-mid-load guard
+        // doesn't mistake this one-and-only page for one that's since
+        // become irrelevant.
+        state.visible = true;
         void this.ensurePageImageLoaded(sn, state);
     }
 
@@ -711,14 +728,33 @@ export class SupernoteViewerElement extends HTMLElement {
     // Loads each page's image lazily, only once it's about to scroll into
     // view - rasterizing every page upfront made even the first page wait on
     // the whole document finishing (see issue #183 and the same fix already
-    // applied to SupernoteEmbed in main.ts, which this mirrors).
+    // applied to SupernoteEmbed in main.ts, which this mirrors). Also evicts
+    // a page's image once it scrolls back *out* of that same margin (see
+    // evictPageImage()) - loading lazily instead of upfront already bounds
+    // memory by "how many pages are near the viewport right now" rather
+    // than "how many have been scrolled past so far", but without eviction
+    // that first bound only ever grows monotonically as you keep scrolling
+    // through a long document - exactly the memory-safety gap SupernoteView
+    // itself had to fix once (issue #154) before this component existed,
+    // and would otherwise silently reintroduce here.
     private setupPageLoadObserver(sn: SupernoteX, states: ViewerPageState[]): void {
         this.pageLoadObserver = new IntersectionObserver((entries) => {
             for (const entry of entries) {
                 const state = states.find((s) => s.containerEl === entry.target);
                 if (!state) continue;
                 state.visible = entry.isIntersecting;
-                if (!entry.isIntersecting) continue;
+
+                if (!entry.isIntersecting) {
+                    // Unlike loading, eviction isn't debounced - a page
+                    // that's scrolled out of the prefetch margin has, by
+                    // definition, been out of view for at least as long as
+                    // it took to cross that whole margin, so there's no
+                    // equivalent "just passing through" case to guard
+                    // against here the way a fast scroll's transient
+                    // *loads* need guarding against below.
+                    this.evictPageImage(sn, state);
+                    continue;
+                }
 
                 window.clearTimeout(state.loadDebounceTimer);
                 state.loadDebounceTimer = window.setTimeout(() => {
@@ -899,6 +935,26 @@ export class SupernoteViewerElement extends HTMLElement {
         state.loaded = true;
         try {
             const imageDataUrl = await this.rasterizePage(sn, state.pageNumber);
+            // The page can easily have scrolled back out of view while this
+            // was in flight (a worker round-trip) - finalizing anyway would
+            // leave it "stuck" loaded, with eviction never getting a chance
+            // to run for it until the user happens to scroll back to this
+            // exact page again. Confirmed as a real cause of a memory
+            // regression in SupernoteView's own equivalent (main.ts's
+            // ensurePageImage(), issue #154) via real profiling there: on a
+            // fast scroll, most in-flight loads lose this race, and without
+            // this check "currently loaded" climbed well past what the
+            // observer's own prefetch margin should ever allow, with zero
+            // evictions. Resetting `loaded` (not just discarding the
+            // result) lets a later re-visit trigger a fresh load instead of
+            // silently doing nothing forever - goToPage()/scrollToMatch()/
+            // buildSinglePageViewer() all mark `visible` true immediately
+            // before a forced call for exactly this reason, so a
+            // deliberate jump never trips this guard.
+            if (!state.visible) {
+                state.loaded = false;
+                return;
+            }
             fillNotePagePlaceholder(state, imageDataUrl);
         } catch (err) {
             // Allows a retry on the next intersection - a transient
@@ -907,6 +963,21 @@ export class SupernoteViewerElement extends HTMLElement {
             console.error(`supernote-viewer: page ${state.pageNumber} failed to load`, err);
             this.dispatchEvent(new CustomEvent('supernote-error', { detail: { error: err, pageNumber: state.pageNumber } }));
         }
+    }
+
+    // Releases a loaded page's image once it's scrolled out of the
+    // pageLoadObserver's own prefetch margin (see setupPageLoadObserver()) -
+    // the "evict" half of the lazy-load/evict cycle that bounds memory on a
+    // long scroll, mirroring SupernoteView's own evictPageImage() (main.ts,
+    // issue #154's fix). Safe to call speculatively: a no-op if nothing's
+    // actually loaded (most pages, most of the time - the observer also
+    // reports initial non-intersection for anything outside the viewport
+    // at file-open time).
+    private evictPageImage(sn: SupernoteX, state: ViewerPageState): void {
+        if (!state.loaded) return;
+        window.clearTimeout(state.loadDebounceTimer);
+        evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
+        state.loaded = false;
     }
 
     private buildToolbar(pageCount: number): void {
@@ -1194,6 +1265,10 @@ export class SupernoteViewerElement extends HTMLElement {
 
         const el = match.entry.el;
         if (!el) return;
+        // See goToPage()'s identical comment - a find match can jump the
+        // length of the whole document, well before the smooth-scroll
+        // animation to it actually finishes.
+        state.visible = true;
         if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
         this.scrollElementIntoPagesView(el);
     }

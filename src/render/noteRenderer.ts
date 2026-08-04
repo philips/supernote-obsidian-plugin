@@ -146,3 +146,23 @@ export function fillNotePagePlaceholder(page: RenderedNotePage, imageDataUrl: st
     page.imageEl.style.aspectRatio = '';
     page.imageEl.src = imageDataUrl;
 }
+
+// The inverse of fillNotePagePlaceholder() - reverts a loaded page back to
+// placeholder sizing and clears its image, for a caller bounding memory on
+// a long scroll (mirrors SupernoteView's own evictPageImage() in main.ts,
+// issue #154's fix, adapted for this module's <img>-based rendering: there's
+// no separate decoded ImageBitmap/canvas backing store to release
+// explicitly here, just the <img>'s own src - clearing it lets the
+// browser's own image decode cache release the decoded bitmap the same as
+// any other now-unreferenced image). Reapplies the same aspect-ratio +
+// width: 100% overrides buildNotePagePlaceholders() sets initially -
+// without them, the now-src-less <img> would collapse back to ~0 height
+// (see that function's own comment for why), the same layout bug the
+// placeholder trick already fixed once for the *initial*, not-yet-loaded
+// state.
+export function evictNotePageImage(page: RenderedNotePage, pageWidth: number, pageHeight: number): void {
+    page.containerEl.style.width = '100%';
+    page.imageEl.style.width = '100%';
+    page.imageEl.style.aspectRatio = `${pageWidth} / ${pageHeight}`;
+    page.imageEl.src = '';
+}
