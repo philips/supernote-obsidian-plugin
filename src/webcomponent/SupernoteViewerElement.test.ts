@@ -588,4 +588,86 @@ describe('<supernote-viewer>', () => {
         expect(status?.classList.contains('error')).toBe(true);
         expect(status?.textContent).toMatch(/failed to load/i);
     });
+
+    describe('link overlay', () => {
+        // Same fixture linkOverlay.test.ts's own "LINKRECT against a real
+        // .note fixture" block uses - a real, device-created note with 3
+        // genuine internal links, all on page index 1 (page 2), confirmed
+        // there via bucketLinksByPage(). None of its 3 links have an empty
+        // ILink.text prefix (every one explicitly names a target note,
+        // including the one whose PAGEID actually resolves to this same
+        // note's own page 1) - real device-authored links apparently always
+        // carry a filename, even for what would be a same-file jump in an
+        // Obsidian-aware viewer that knows its own file's basename. That
+        // makes this fixture a good real-world check of the *deferred*
+        // path (dispatching link-click) specifically, which is what a
+        // portable component with no concept of "my own filename" will hit
+        // for virtually every real link.
+        it('builds one clickable rect per page for that page\'s own links, none for pages with none', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+            await loaded;
+
+            const [page1, page2, page3] = Array.from(el.shadowRoot!.querySelectorAll('.page-container'));
+            expect(page1.querySelectorAll('.link-overlay-rect')).toHaveLength(0);
+            expect(page2.querySelectorAll('.link-overlay-rect')).toHaveLength(3);
+            expect(page3.querySelectorAll('.link-overlay-rect')).toHaveLength(0);
+        });
+
+        it('dispatches link-click with the full ILink when a rect is clicked, and prevents the anchor\'s own navigation', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+            await loaded;
+
+            const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];
+            const [rect] = Array.from(page2.querySelectorAll<HTMLAnchorElement>('.link-overlay-rect'));
+
+            const clicked = waitForEvent<{ link: { text: string; PAGEID: string } }>(el, 'link-click');
+            const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+            rect.dispatchEvent(clickEvent);
+
+            const evt = await clicked;
+            expect(evt.detail.link.text).toBe('nomad-3.26.40-link-tag-3p#Page 1');
+            expect(evt.detail.link.PAGEID).toBe('P20240303144624294784hYDadze19JFd');
+            expect(clickEvent.defaultPrevented).toBe(true);
+        });
+
+        it('repositions link rects to the page\'s rendered size via the shared ResizeObserver', async () => {
+            // happy-dom's ResizeObserver never actually fires (no real
+            // layout engine), so it's stubbed here to synchronously hand
+            // back a chosen size instead - same technique as this file's
+            // other geometry-scaling tests, capturing setupOverlayResizing()
+            // ()'s callback so it can be driven directly.
+            const observed: { target: Element; cb: ResizeObserverCallback }[] = [];
+            class FakeResizeObserver {
+                constructor(private cb: ResizeObserverCallback) {}
+                observe(target: Element) { observed.push({ target, cb: this.cb }); }
+                disconnect() {}
+            }
+            vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+            await loaded;
+
+            const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];
+            const [rect] = Array.from(page2.querySelectorAll<HTMLAnchorElement>('.link-overlay-rect'));
+
+            const entry = observed.find((o) => o.target === page2);
+            entry?.cb([{ target: page2, contentRect: { width: 500, height: 600 } } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+
+            // LINKRECT '118,1253,743,132' in this note's native 1404x1872
+            // page space, scaled to a 500x600 render, should land well away
+            // from its raw native-space numbers - proving the rendered size
+            // (not the native pixel size) drove the positioning.
+            expect(rect.style.left).not.toBe('118px');
+            expect(parseFloat(rect.style.left)).toBeCloseTo((118 / 1404) * 500, 0);
+        });
+    });
 });

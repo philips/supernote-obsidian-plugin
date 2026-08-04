@@ -17,7 +17,7 @@ import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerEleme
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
-import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
+import { parseLinkRect, bucketLinksByPage } from './render/linkOverlay';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 

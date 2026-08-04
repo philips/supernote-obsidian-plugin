@@ -1,8 +1,9 @@
+// @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ILink, SupernoteX } from 'supernote-typescript';
-import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
+import { parseLinkRect, bucketLinksByPage, buildLinkOverlay, repositionLinkOverlay } from './linkOverlay';
 
 function fakeLink(overrides: Partial<ILink> = {}): ILink {
     return {
@@ -88,7 +89,7 @@ describe('LINKRECT against a real .note fixture', () => {
     // uses (tests/main.test.ts, describe("links")) — confirms the coordinate
     // -space assumption positionLinkOverlay() in main.ts depends on: LINKRECT
     // is in the page's own native pixel space, not some other unit/origin.
-    const fixturePath = path.join(import.meta.dirname, '..', 'supernote-typescript', 'tests', 'input', 'nomad-3.26.40-link-tag-3p.note');
+    const fixturePath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'nomad-3.26.40-link-tag-3p.note');
 
     it('decodes to 4 numbers within [0, pageWidth] x [0, pageHeight]', () => {
         const buffer = fs.readFileSync(fixturePath);
@@ -130,5 +131,73 @@ describe('LINKRECT against a real .note fixture', () => {
         expect(byPage.get(1)?.length).toBe(3);
         expect(byPage.has(0)).toBe(false);
         expect(byPage.has(2)).toBe(false);
+    });
+});
+
+describe('buildLinkOverlay', () => {
+    it('creates one appended <a> per link with a valid LINKRECT', () => {
+        const container = document.createElement('div');
+        const links = [fakeLink({ text: 'a' }), fakeLink({ text: 'b', LINKRECT: '1,2,3,4' })];
+        const entries = buildLinkOverlay(links, container);
+
+        expect(entries).toHaveLength(2);
+        expect(container.querySelectorAll('a.link-overlay-rect')).toHaveLength(2);
+        for (const entry of entries) {
+            expect(entry.el.parentElement).toBe(container);
+        }
+    });
+
+    it('carries the parsed rect through as native geometry', () => {
+        const container = document.createElement('div');
+        const [entry] = buildLinkOverlay([fakeLink({ LINKRECT: '10,20,300,400' })], container);
+        expect(entry).toMatchObject({ nativeX: 10, nativeY: 20, nativeWidth: 300, nativeHeight: 400 });
+    });
+
+    it('skips a link whose LINKRECT does not parse, without throwing', () => {
+        const container = document.createElement('div');
+        const entries = buildLinkOverlay([fakeLink({ LINKRECT: 'garbage' })], container);
+        expect(entries).toHaveLength(0);
+        expect(container.children).toHaveLength(0);
+    });
+
+    it('sets the anchor\'s title to the link\'s decoded text', () => {
+        const container = document.createElement('div');
+        const [entry] = buildLinkOverlay([fakeLink({ text: 'Other Note#Page 3' })], container);
+        expect(entry.el.title).toBe('Other Note#Page 3');
+    });
+
+    it('keeps the original ILink reachable from the entry, for the caller\'s own click handling', () => {
+        const container = document.createElement('div');
+        const link = fakeLink({ text: 'a' });
+        const [entry] = buildLinkOverlay([link], container);
+        expect(entry.link).toBe(link);
+    });
+});
+
+describe('repositionLinkOverlay', () => {
+    it('scales native rect geometry to the rendered page size', () => {
+        const container = document.createElement('div');
+        const entries = buildLinkOverlay([fakeLink({ LINKRECT: '100,200,300,400' })], container);
+
+        // Rendered at exactly half the note's native page size.
+        repositionLinkOverlay(entries, 500, 600, 1000, 1200);
+
+        expect(entries[0].el.style.left).toBe('50px');
+        expect(entries[0].el.style.top).toBe('100px');
+        expect(entries[0].el.style.width).toBe('150px');
+        expect(entries[0].el.style.height).toBe('200px');
+    });
+
+    it('repositions every entry independently', () => {
+        const container = document.createElement('div');
+        const entries = buildLinkOverlay(
+            [fakeLink({ LINKRECT: '0,0,100,100' }), fakeLink({ LINKRECT: '100,100,100,100' })],
+            container,
+        );
+
+        repositionLinkOverlay(entries, 1000, 1000, 1000, 1000);
+
+        expect(entries[0].el.style.left).toBe('0px');
+        expect(entries[1].el.style.left).toBe('100px');
     });
 });

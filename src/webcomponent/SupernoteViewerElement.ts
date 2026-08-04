@@ -9,10 +9,11 @@
 // recognized-text mode), no save/export UI - see the plan on #183 for why
 // that's a separate concern (it needs a browser-native Blob/download story,
 // not Obsidian's vault-write APIs this codebase otherwise uses).
-import { SupernoteX } from 'supernote-typescript';
+import { ILink, SupernoteX } from 'supernote-typescript';
 import { ImageConverter } from '../render/imageConverter';
 import { RenderedNotePage, buildNotePagePlaceholders, evictNotePageImage, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
 import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
+import { LinkOverlayEntry, bucketLinksByPage, buildLinkOverlay, repositionLinkOverlay } from '../render/linkOverlay';
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 
 interface ViewerPageState extends RenderedNotePage {
@@ -23,6 +24,7 @@ interface ViewerPageState extends RenderedNotePage {
     // time, without needing the original SupernoteX instance around.
     rawText: string;
     wordEntries: WordOverlayEntry[];
+    linkEntries: LinkOverlayEntry[];
     loaded: boolean;
     visible: boolean;
 }
@@ -311,6 +313,35 @@ button[aria-pressed="true"] {
    renderPageTextHighlights() in SupernoteViewerElement.ts), so the
    image-mode spans have nothing useful to do here regardless. */
 .pages.mode-text .word-overlay-span {
+    display: none;
+}
+/* Clickable overlay for Supernote internal links (see
+   src/render/linkOverlay.ts and handleLinkClick() below) - positioned
+   absolutely over the page image using the same container's position:
+   relative, same convention as .word-overlay-span above. Unlike that span,
+   this is meant to be seen and clicked (a visible hover highlight, real
+   pointer events - no pointer-events: none override needed here the way
+   .word-overlay-span has, since an <a> already defaults to receiving
+   them). */
+.link-overlay-rect {
+    position: absolute;
+    display: block;
+    border-radius: 2px;
+    cursor: pointer;
+    background: transparent;
+    transition: background-color 0.1s ease;
+}
+.link-overlay-rect:hover {
+    background: color-mix(in srgb, var(--supernote-viewer-muted) 35%, transparent);
+}
+/* Text mode reflows this page's content into a column with nothing like
+   the image's native pixel layout the link rects above are positioned
+   against (same reasoning as the word-overlay-span rule above, and the
+   same behavior main.ts's own SupernoteView already has for its link
+   overlay in text/layer mode) - no natural position to anchor a link rect
+   to once the text is reflowed, so it's hidden entirely rather than left
+   floating at a stale position. */
+.pages.mode-text .link-overlay-rect {
     display: none;
 }
 .pages.mode-text .page-container > img {
@@ -782,7 +813,7 @@ export class SupernoteViewerElement extends HTMLElement {
             this.setupPageIndicatorTracking();
             this.buildThumbSidebar(sn, pageCount);
         }
-        this.setupWordOverlayResizing(sn, states);
+        this.setupOverlayResizing(sn, states);
     }
 
     // A single deep-linked page (the `page` attribute, clamped, defaulting
@@ -813,7 +844,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
         const [state] = this.wrapPageStates(sn, placeholders);
         this.pageStates = [state];
-        this.setupWordOverlayResizing(sn, this.pageStates);
+        this.setupOverlayResizing(sn, this.pageStates);
         // Single-page mode has no IntersectionObserver at all (nothing else
         // to scroll to), so nothing else would ever mark this page visible -
         // needed so ensurePageImageLoaded()'s scrolled-away-mid-load guard
@@ -827,6 +858,12 @@ export class SupernoteViewerElement extends HTMLElement {
     // ViewerPageState - shared by the normal (all-pages, lazy) and
     // single-page (one page, eager) construction paths above.
     private wrapPageStates(sn: SupernoteX, placeholders: RenderedNotePage[]): ViewerPageState[] {
+        // Bucketed once for the whole call, not per page - see
+        // bucketLinksByPage()'s own doc comment for why the key-prefix
+        // convention it implements is the reliable way to find which page a
+        // link is drawn on.
+        const linksByPage = bucketLinksByPage(sn.links);
+
         return placeholders.map((page) => {
             const notePage = sn.pages[page.pageNumber - 1];
             const rawText = notePage?.text ?? '';
@@ -843,8 +880,43 @@ export class SupernoteViewerElement extends HTMLElement {
             // to reason about.
             const wordEntries = notePage ? buildWordOverlay(notePage, page.containerEl, page.pageNumber) : [];
 
-            return { ...page, textEl, rawText, wordEntries, loaded: false, visible: false };
+            const linkEntries = buildLinkOverlay(linksByPage.get(page.pageNumber - 1) ?? [], page.containerEl);
+            for (const entry of linkEntries) {
+                entry.el.addEventListener('click', (evt) => {
+                    evt.preventDefault();
+                    this.handleLinkClick(entry.link);
+                });
+            }
+
+            return { ...page, textEl, rawText, wordEntries, linkEntries, loaded: false, visible: false };
         });
+    }
+
+    // A clicked link region's target: a same-note page jump (resolvable
+    // entirely from this note's own parsed pages, no host/vault knowledge
+    // needed at all) when the link carries no filename of its own - per
+    // ILink.text's own doc comment, a same-file page anchor is already
+    // resolved to bare "#Page N" with nothing before the '#', unlike a
+    // cross-file link, which names the target note explicitly. Anything
+    // else - a link naming another file, or a same-file link whose PAGEID
+    // doesn't resolve to any page this note actually has - needs
+    // information this portable component doesn't have (which vault file a
+    // name belongs to, how to open it), so it's handed off entirely via the
+    // `link-click` event instead: matches issue #183's own phased plan,
+    // "component renders/detects the clickable regions; navigation decision
+    // ... stays with whoever's listening". Mirrors SupernoteView's own
+    // handleLinkClick() (main.ts) for the part that *is* self-contained.
+    private handleLinkClick(link: ILink): void {
+        if (!this.sn) return;
+        const targetBasename = link.text.split('#')[0];
+        if (!targetBasename) {
+            const pageIndex = this.sn.pages.findIndex((p) => p.PAGEID === link.PAGEID);
+            if (pageIndex >= 0) {
+                this.goToPage(pageIndex + 1);
+                return;
+            }
+        }
+        this.dispatchEvent(new CustomEvent<{ link: ILink }>('link-click', { detail: { link } }));
     }
 
     // Loads each page's image lazily, only once scrolling has actually
@@ -989,15 +1061,15 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     // Keeps every page's word-overlay spans (see src/render/wordOverlay.ts)
-    // aligned with that page's *currently rendered* CSS size - a
-    // ResizeObserver, not a one-time measurement at build time, since a
-    // page's rendered size can change after these spans are first
-    // positioned (a window resize, a host layout change, or the
-    // placeholder's forced 100% width giving way to the real image's
-    // natural size once it loads). Guarded for environments without
-    // ResizeObserver (none known among real browsers this targets, but
-    // costs nothing to check).
-    private setupWordOverlayResizing(sn: SupernoteX, states: ViewerPageState[]): void {
+    // and link-click rects (src/render/linkOverlay.ts) aligned with that
+    // page's *currently rendered* CSS size - a ResizeObserver, not a
+    // one-time measurement at build time, since a page's rendered size can
+    // change after these are first positioned (a window resize, a host
+    // layout change, or the placeholder's forced 100% width giving way to
+    // the real image's natural size once it loads). Guarded for
+    // environments without ResizeObserver (none known among real browsers
+    // this targets, but costs nothing to check).
+    private setupOverlayResizing(sn: SupernoteX, states: ViewerPageState[]): void {
         if (typeof ResizeObserver === 'undefined') return;
         const { pageWidth, pageHeight } = sn;
         this.resizeObserver = new ResizeObserver((entries) => {
@@ -1007,6 +1079,7 @@ export class SupernoteViewerElement extends HTMLElement {
                 const { width, height } = entry.contentRect;
                 if (width <= 0 || height <= 0) continue;
                 repositionWordOverlay(state.wordEntries, width, height, pageWidth, pageHeight);
+                repositionLinkOverlay(state.linkEntries, width, height, pageWidth, pageHeight);
             }
         });
         for (const state of states) this.resizeObserver.observe(state.containerEl);
