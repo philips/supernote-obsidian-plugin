@@ -11,7 +11,7 @@
 // not Obsidian's vault-write APIs this codebase otherwise uses).
 import { SupernoteX } from 'supernote-typescript';
 import { ImageConverter } from '../render/imageConverter';
-import { RenderedNotePage, buildNotePagePlaceholders, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
+import { RenderedNotePage, buildNotePagePlaceholders, evictNotePageImage, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
 import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 
@@ -25,7 +25,6 @@ interface ViewerPageState extends RenderedNotePage {
     wordEntries: WordOverlayEntry[];
     loaded: boolean;
     visible: boolean;
-    loadDebounceTimer?: number;
 }
 
 interface FindMatch {
@@ -264,6 +263,23 @@ button[aria-pressed="true"] {
     display: block;
     max-width: 100%;
 }
+/* A not-yet-loaded or evicted img (buildNotePagePlaceholders()/
+   evictNotePageImage() in noteRenderer.ts) deliberately has no src
+   attribute at all, not even an empty one - but it's still given an
+   explicit box size via inline width/aspect-ratio (see those functions'
+   own comments for why: so the page list's scroll height is correct
+   before any image has loaded). Confirmed via direct screenshot during a
+   reliably-reproducible report: Chromium paints its generic "broken
+   image" glyph for any img with a defined layout box and no image
+   content, regardless of whether a src was ever set or a request ever
+   failed - no error event fires for this (confirmed separately), it's
+   just the browser's default rendering for "sized replaced element,
+   nothing to show". img:not([src]) hides that glyph while leaving the
+   reserved box itself (and thus the scroll-height math) untouched -
+   visibility: hidden, not display: none, for exactly that reason. */
+.pages .page-container > img:not([src]) {
+    visibility: hidden;
+}
 /* Invisible-by-default per-word overlay (see src/render/wordOverlay.ts) -
    positioned absolutely over the page image/placeholder using the same
    container this rule's own position: relative above establishes. Text
@@ -299,6 +315,39 @@ button[aria-pressed="true"] {
 }
 .pages.mode-text .page-container > img {
     display: none;
+}
+/* Left-aligned, not centered (.pages' own align-items: center, meant for
+   image mode's varying page widths) - confirmed as a real, reported
+   readability complaint: centered text columns whose width also varies
+   per page (see the fixed-width rule just below for why that varied)
+   made scrolling through recognized text distracting, each page
+   drifting to a different horizontal position as well as a different
+   width. */
+.pages.mode-text {
+    align-items: flex-start;
+}
+/* A fixed width, not auto - !important, not just specificity, because
+   this overrides an *inline* style (buildNotePagePlaceholders()/
+   fillNotePagePlaceholder() in noteRenderer.ts, set directly on
+   .style.width - no selector can ever outrank that without it). That
+   inline width is a placeholder-sizing trick for the still-hidden <img>
+   above (see those functions' own comments), reserving a full-width box
+   before the real image loads so .pages' scroll height is correct - but
+   text mode never shows that img at all.
+   Originally just "auto" here (shrink-to-fit .page-text's own content),
+   which did stop a background image load from visibly resizing this
+   box (see that fix's own history) but turned out to have its own
+   readability problem: shrink-to-fit sizes to each page's own longest
+   wrapped line, so a page of short lines produced a genuinely narrower
+   box than a page that wrapped all the way out to .page-text's
+   max-width: 40em below - a different width per page, confirmed as a
+   real, reported distraction while scrolling. A fixed width - matching
+   that same max-width, so .page-text (block, no explicit width of its
+   own) fills it exactly via ordinary block layout, capped again by
+   min(...,100%) so a narrow host viewport isn't overflowed - gives
+   every page the same box regardless of its own text's line lengths. */
+.pages.mode-text .page-container {
+    width: min(40em, 100%) !important;
 }
 .pages .page-container > .page-text {
     display: none;
@@ -379,6 +428,12 @@ export class SupernoteViewerElement extends HTMLElement {
     private pageIndicatorEl: HTMLElement | null = null;
     private modeToggleBtn: HTMLButtonElement | null = null;
     private pageLoadObserver: IntersectionObserver | null = null;
+    // Shared across every page - see setupPageLoadObserver()'s own comment
+    // for why loading needs one debounce for "has scrolling settled" rather
+    // than each page tracking its own independently.
+    private loadCheckDebounceTimer?: number;
+    // Manual debugging aid only - see debugLoopEvictReload().
+    private debugLoopTimer?: number;
     private resizeObserver: ResizeObserver | null = null;
     private pageStates: ViewerPageState[] = [];
     private currentPage = 0;
@@ -435,7 +490,8 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageLoadObserver?.disconnect();
         this.resizeObserver?.disconnect();
         this.thumbLoadObserver?.disconnect();
-        for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
+        window.clearTimeout(this.loadCheckDebounceTimer);
+        window.clearInterval(this.debugLoopTimer);
     }
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -486,7 +542,83 @@ export class SupernoteViewerElement extends HTMLElement {
         const targetRect = state.containerEl.getBoundingClientRect();
         const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top);
         this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+        // Marked visible before forcing the load (not just left to whatever
+        // the observer last reported) - a jump can target a page nowhere
+        // near the current scroll position, still mid-animation and not
+        // actually intersecting yet, which ensurePageImageLoaded()'s own
+        // scrolled-away-mid-load guard would otherwise mistake for exactly
+        // that: a page that's since become irrelevant, discarding the
+        // result instead of finishing the load. Mirrors SupernoteView's own
+        // goToPage()/highlightCurrentMatch() in main.ts, which set
+        // visibleInMainView = true for the same reason before their own
+        // forced loads.
+        state.visible = true;
         if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
+    }
+
+    // Manual debugging aid for a report that's hard to reproduce
+    // second-hand (e.g. a broken-image icon or a page that won't reload
+    // seen on someone else's machine) - dumps every page's own load/
+    // visibility bookkeeping alongside its <img>'s actual DOM state, so a
+    // mismatch between the two (the most likely shape of that kind of bug)
+    // is visible directly rather than needing to guess from a screenshot.
+    // Call from the browser DevTools console, e.g.:
+    //   document.querySelectorAll('supernote-viewer').forEach(v => v.debugDumpPageStates())
+    debugDumpPageStates(): void {
+        console.debug(`supernote-viewer: ${this.pageStates.length} page(s), mode=${this.mode}`);
+        for (const state of this.pageStates) {
+            const img = state.imageEl;
+            console.debug(
+                `  page ${state.pageNumber}: loaded=${state.loaded} visible=${state.visible} ` +
+                `img.hasAttribute('src')=${img.hasAttribute('src')} img.src=${JSON.stringify(img.src.slice(0, 50))} ` +
+                `naturalWidth=${img.naturalWidth} naturalHeight=${img.naturalHeight} complete=${img.complete}`,
+            );
+        }
+    }
+
+    // Manual debugging aid for a reliably-seen but hard-to-catch
+    // broken-image report: repeatedly loads then evicts one page on a fixed
+    // interval, isolating the load/evict *logic* itself from any real
+    // scrolling, so a user can just watch (or screen-record) that one page
+    // without needing to reproduce a specific scroll gesture at all. Each
+    // cycle goes through the real rasterizePage()/worker pipeline (eviction
+    // via removeAttribute() means there's no cached data URL to reuse - see
+    // evictNotePageImage()'s own comment), so this genuinely re-exercises
+    // the browser's own decode path every time, in case a large data URL
+    // assigned to img.src shows as transiently "broken" while still
+    // decoding rather than only on a genuine failed load (an open
+    // hypothesis raised against this specific report). If that hypothesis
+    // is right, the existing <img> `error` listener in
+    // buildNotePagePlaceholders() should stay silent throughout even if the
+    // image looks broken on screen - a failed load isn't the only way to
+    // get a broken-image icon on screen; a decode error while the src IS
+    // valid can also blank the image before the natural size is known,
+    // though that's not the same DOM state a *failed* load produces. Call
+    // from DevTools:
+    //   document.querySelectorAll('supernote-viewer').forEach(v => v.debugLoopEvictReload(1))
+    // Stop with:
+    //   document.querySelectorAll('supernote-viewer').forEach(v => v.debugStopLoop())
+    debugLoopEvictReload(pageNumber: number, intervalMs = 800): void {
+        if (!this.sn) return;
+        const sn = this.sn;
+        const state = this.pageStates[pageNumber - 1];
+        if (!state) return;
+        window.clearInterval(this.debugLoopTimer);
+        let evictNext = state.loaded;
+        this.debugLoopTimer = window.setInterval(() => {
+            if (evictNext) {
+                this.evictPageImage(sn, state);
+            } else {
+                state.visible = true;
+                void this.ensurePageImageLoaded(sn, state);
+            }
+            evictNext = !evictNext;
+        }, intervalMs);
+    }
+
+    debugStopLoop(): void {
+        window.clearInterval(this.debugLoopTimer);
+        this.debugLoopTimer = undefined;
     }
 
     // Coalesces a burst of synchronous attribute/property sets (e.g. setting
@@ -580,7 +712,8 @@ export class SupernoteViewerElement extends HTMLElement {
         this.resizeObserver = null;
         this.thumbLoadObserver?.disconnect();
         this.thumbLoadObserver = null;
-        for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
+        window.clearTimeout(this.loadCheckDebounceTimer);
+        window.clearInterval(this.debugLoopTimer);
         this.pageStates = [];
         this.pagesEl = null;
         this.toolbarEl = null;
@@ -681,6 +814,12 @@ export class SupernoteViewerElement extends HTMLElement {
         const [state] = this.wrapPageStates(sn, placeholders);
         this.pageStates = [state];
         this.setupWordOverlayResizing(sn, this.pageStates);
+        // Single-page mode has no IntersectionObserver at all (nothing else
+        // to scroll to), so nothing else would ever mark this page visible -
+        // needed so ensurePageImageLoaded()'s scrolled-away-mid-load guard
+        // doesn't mistake this one-and-only page for one that's since
+        // become irrelevant.
+        state.visible = true;
         void this.ensurePageImageLoaded(sn, state);
     }
 
@@ -708,27 +847,90 @@ export class SupernoteViewerElement extends HTMLElement {
         });
     }
 
-    // Loads each page's image lazily, only once it's about to scroll into
-    // view - rasterizing every page upfront made even the first page wait on
-    // the whole document finishing (see issue #183 and the same fix already
-    // applied to SupernoteEmbed in main.ts, which this mirrors).
+    // Loads each page's image lazily, only once scrolling has actually
+    // *settled* somewhere near it - rasterizing every page upfront made
+    // even the first page wait on the whole document finishing (see issue
+    // #183 and the same fix already applied to SupernoteEmbed in main.ts),
+    // and loading eagerly on every single intersection change (an earlier
+    // version of this method did) made a continuous scroll to the bottom
+    // of a long document visibly rasterize *every* page along the way, in
+    // order, well after each one had scrolled back out of view - a real,
+    // reported bug. A page-scoped debounce (checking only "has this one
+    // page been near the viewport for 150ms", the same pattern
+    // SupernoteView's own pageObserver in main.ts uses) doesn't actually
+    // fix that: state.visible reflects the *padded* rootMargin zone (100%
+    // of .pages' own height above/below the real viewport), so a page can
+    // stay "within margin" for 150ms+ even while a fast, *continuous*
+    // scroll carries it straight through and back out again - confirmed
+    // directly, tightening that check to the real, unpadded viewport (or
+    // anywhere in between) made no difference at the scroll speeds that
+    // actually trigger this, since each page genuinely does sit somewhere
+    // in that zone around the 150ms mark either way. What actually
+    // distinguishes "the user paused here" from "just passing through" is
+    // whether *scrolling itself* has stopped, not any one page's own
+    // timer - so this debounce is shared across every page and reset by
+    // both intersection changes and every raw scroll event, only
+    // re-evaluating (and loading) whatever's actually near the viewport
+    // once neither has happened for a while. Also evicts a page's image
+    // immediately (no debounce - see evictPageImage()'s own comment) once
+    // it scrolls back *out* of the prefetch margin - loading lazily
+    // instead of upfront already bounds memory by "how many pages are
+    // near the viewport right now" rather than "how many have been
+    // scrolled past so far", but without eviction that first bound only
+    // ever grows monotonically as you keep scrolling through a long
+    // document - exactly the memory-safety gap SupernoteView itself had
+    // to fix once (issue #154) before this component existed, and would
+    // otherwise silently reintroduce here.
     private setupPageLoadObserver(sn: SupernoteX, states: ViewerPageState[]): void {
+        const scheduleLoadCheck = () => {
+            window.clearTimeout(this.loadCheckDebounceTimer);
+            this.loadCheckDebounceTimer = window.setTimeout(() => {
+                for (const state of states) {
+                    // A generous-but-not-huge buffer once settled (half a
+                    // viewport height) - enough to prime the very next
+                    // page ahead of actually reaching it, far short of the
+                    // observer's own 100% prefetch margin that only exists
+                    // to decide when a page is worth watching at all.
+                    if (state.visible && !state.loaded && this.isPageNearScreen(state, 0.5)) {
+                        void this.ensurePageImageLoaded(sn, state);
+                    }
+                }
+            }, 150);
+        };
+
         this.pageLoadObserver = new IntersectionObserver((entries) => {
             for (const entry of entries) {
                 const state = states.find((s) => s.containerEl === entry.target);
                 if (!state) continue;
                 state.visible = entry.isIntersecting;
-                if (!entry.isIntersecting) continue;
-
-                window.clearTimeout(state.loadDebounceTimer);
-                state.loadDebounceTimer = window.setTimeout(() => {
-                    if (!state.visible || state.loaded) return;
-                    void this.ensurePageImageLoaded(sn, state);
-                }, 150);
+                if (!entry.isIntersecting) this.evictPageImage(sn, state);
             }
+            scheduleLoadCheck();
         }, { root: this.pagesEl, rootMargin: '100% 0px' });
 
         for (const state of states) this.pageLoadObserver.observe(state.containerEl);
+
+        // The observer's own callbacks only fire on actual intersection
+        // *transitions*, which can be sparse relative to how continuously
+        // a real scroll gesture fires 'scroll' events - without this, a
+        // long, unbroken scroll pass where nothing happens to enter/exit
+        // the margin for a stretch could let the settle timer fire
+        // mid-scroll instead of only once it actually stops.
+        this.pagesEl?.addEventListener('scroll', scheduleLoadCheck, { passive: true });
+    }
+
+    // Real intersection with .pages' own visible bounds, padded by only
+    // `marginRatio` x .pages' own height - unlike the pageLoadObserver's
+    // own rootMargin: '100% 0px', which deliberately pads a much more
+    // generous zone around the real viewport just to decide when a page is
+    // worth starting to watch at all. See setupPageLoadObserver()'s own
+    // comment for why the two need to be different checks.
+    private isPageNearScreen(state: ViewerPageState, marginRatio: number): boolean {
+        if (!this.pagesEl) return false;
+        const pagesRect = this.pagesEl.getBoundingClientRect();
+        const margin = pagesRect.height * marginRatio;
+        const stateRect = state.containerEl.getBoundingClientRect();
+        return stateRect.bottom > pagesRect.top - margin && stateRect.top < pagesRect.bottom + margin;
     }
 
     // Keeps the toolbar's page indicator in sync with whatever page is
@@ -897,9 +1099,32 @@ export class SupernoteViewerElement extends HTMLElement {
     // a slow rasterization can't be triggered twice for the same page.
     private async ensurePageImageLoaded(sn: SupernoteX, state: ViewerPageState): Promise<void> {
         state.loaded = true;
+        console.debug(`supernote-viewer: loading page ${state.pageNumber}`);
         try {
             const imageDataUrl = await this.rasterizePage(sn, state.pageNumber);
+            // The page can easily have scrolled back out of view while this
+            // was in flight (a worker round-trip) - finalizing anyway would
+            // leave it "stuck" loaded, with eviction never getting a chance
+            // to run for it until the user happens to scroll back to this
+            // exact page again. Confirmed as a real cause of a memory
+            // regression in SupernoteView's own equivalent (main.ts's
+            // ensurePageImage(), issue #154) via real profiling there: on a
+            // fast scroll, most in-flight loads lose this race, and without
+            // this check "currently loaded" climbed well past what the
+            // observer's own prefetch margin should ever allow, with zero
+            // evictions. Resetting `loaded` (not just discarding the
+            // result) lets a later re-visit trigger a fresh load instead of
+            // silently doing nothing forever - goToPage()/scrollToMatch()/
+            // buildSinglePageViewer() all mark `visible` true immediately
+            // before a forced call for exactly this reason, so a
+            // deliberate jump never trips this guard.
+            if (!state.visible) {
+                state.loaded = false;
+                console.debug(`supernote-viewer: discarding page ${state.pageNumber}'s load - scrolled away while rasterizing`);
+                return;
+            }
             fillNotePagePlaceholder(state, imageDataUrl);
+            console.debug(`supernote-viewer: page ${state.pageNumber} loaded, img.src set (length ${imageDataUrl.length})`);
         } catch (err) {
             // Allows a retry on the next intersection - a transient
             // rasterization failure shouldn't permanently blank this page.
@@ -907,6 +1132,21 @@ export class SupernoteViewerElement extends HTMLElement {
             console.error(`supernote-viewer: page ${state.pageNumber} failed to load`, err);
             this.dispatchEvent(new CustomEvent('supernote-error', { detail: { error: err, pageNumber: state.pageNumber } }));
         }
+    }
+
+    // Releases a loaded page's image once it's scrolled out of the
+    // pageLoadObserver's own prefetch margin (see setupPageLoadObserver()) -
+    // the "evict" half of the lazy-load/evict cycle that bounds memory on a
+    // long scroll, mirroring SupernoteView's own evictPageImage() (main.ts,
+    // issue #154's fix). Safe to call speculatively: a no-op if nothing's
+    // actually loaded (most pages, most of the time - the observer also
+    // reports initial non-intersection for anything outside the viewport
+    // at file-open time).
+    private evictPageImage(sn: SupernoteX, state: ViewerPageState): void {
+        if (!state.loaded) return;
+        console.debug(`supernote-viewer: evicting page ${state.pageNumber}`);
+        evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
+        state.loaded = false;
     }
 
     private buildToolbar(pageCount: number): void {
@@ -1194,6 +1434,10 @@ export class SupernoteViewerElement extends HTMLElement {
 
         const el = match.entry.el;
         if (!el) return;
+        // See goToPage()'s identical comment - a find match can jump the
+        // length of the whole document, well before the smooth-scroll
+        // animation to it actually finishes.
+        state.visible = true;
         if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
         this.scrollElementIntoPagesView(el);
     }

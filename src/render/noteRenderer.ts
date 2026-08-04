@@ -127,6 +127,22 @@ export function buildNotePagePlaceholders(
         img.style.width = '100%';
         img.style.aspectRatio = `${options.pageWidth} / ${options.pageHeight}`;
         if (options.invertColorsWhenDark) img.classList.add('supernote-invert-dark');
+        // Diagnostic only - a real <img> load failure (a broken-image icon)
+        // always fires this event; logging it here catches the exact
+        // moment and raw state even if whatever caused it self-corrects
+        // again (a fresh load overwriting it) before anyone can inspect it
+        // by hand - confirmed as a real, reported difficulty debugging a
+        // transient broken-image report live. getAttribute() (the raw
+        // attribute), not the src IDL property (which normalizes a missing
+        // attribute and an explicit empty string to the same '' either
+        // way) - this is specifically to tell those two apart.
+        img.addEventListener('error', () => {
+            console.error(
+                `supernote-viewer: page ${img.closest<HTMLElement>('.page-container')?.dataset.pageNumber ?? '?'} ` +
+                `<img> error - getAttribute('src')=${JSON.stringify(img.getAttribute('src'))} ` +
+                `.src=${JSON.stringify(img.src)} naturalWidth=${img.naturalWidth} complete=${img.complete}`,
+            );
+        });
         pageContainer.appendChild(img);
         container.appendChild(pageContainer);
 
@@ -145,4 +161,39 @@ export function fillNotePagePlaceholder(page: RenderedNotePage, imageDataUrl: st
     page.imageEl.style.width = '';
     page.imageEl.style.aspectRatio = '';
     page.imageEl.src = imageDataUrl;
+}
+
+// The inverse of fillNotePagePlaceholder() - reverts a loaded page back to
+// placeholder sizing and clears its image, for a caller bounding memory on
+// a long scroll (mirrors SupernoteView's own evictPageImage() in main.ts,
+// issue #154's fix, adapted for this module's <img>-based rendering: there's
+// no separate decoded ImageBitmap/canvas backing store to release
+// explicitly here, just the <img>'s own src - clearing it lets the
+// browser's own image decode cache release the decoded bitmap the same as
+// any other now-unreferenced image). Reapplies the same aspect-ratio +
+// width: 100% overrides buildNotePagePlaceholders() sets initially -
+// without them, the now-src-less <img> would collapse back to ~0 height
+// (see that function's own comment for why), the same layout bug the
+// placeholder trick already fixed once for the *initial*, not-yet-loaded
+// state.
+//
+// removeAttribute(), not img.src = '' - confirmed as a real, reported bug:
+// assigning the empty string to the *src* IDL property doesn't clear it
+// the way it might look like it should. Per the HTML spec, resolving an
+// empty string against the document's own base URL yields the document's
+// own URL, so the <img> ends up trying to (re-)fetch the current page
+// itself as an image - which fails to decode, rendering a literal "broken
+// image" icon in place of every evicted page (confirmed directly: the
+// resulting img.src read back as the page's own URL, naturalWidth/Height
+// 0, complete: true - exactly that failed state). removeAttribute('src')
+// instead restores the image to having genuinely no src at all, the same
+// state buildNotePagePlaceholders() itself starts every page in -
+// img.src still reads back as '' either way (the IDL getter returns '' for
+// a missing attribute too), so this doesn't change anything any caller
+// checking that observes.
+export function evictNotePageImage(page: RenderedNotePage, pageWidth: number, pageHeight: number): void {
+    page.containerEl.style.width = '100%';
+    page.imageEl.style.width = '100%';
+    page.imageEl.style.aspectRatio = `${pageWidth} / ${pageHeight}`;
+    page.imageEl.removeAttribute('src');
 }

@@ -6,7 +6,7 @@
 // happy-dom environment (see the directive above); everything else in this
 // project still runs under vitest's default node environment.
 import { describe, it, expect } from 'vitest';
-import { buildNotePageElements, buildNotePagePlaceholders, fillNotePagePlaceholder } from './noteRenderer';
+import { buildNotePageElements, buildNotePagePlaceholders, evictNotePageImage, fillNotePagePlaceholder } from './noteRenderer';
 
 describe('buildNotePageElements', () => {
     it('builds one page-container per image, in order', () => {
@@ -79,5 +79,24 @@ describe('fillNotePagePlaceholder', () => {
         expect(page.imageEl.style.width).toBe('');
         expect(page.imageEl.style.aspectRatio).toBe('');
         expect(page.containerEl.style.width).toBe('');
+    });
+});
+
+describe('evictNotePageImage', () => {
+    it('clears the image and restores placeholder sizing (the inverse of fillNotePagePlaceholder)', () => {
+        const container = document.createElement('div');
+        const [page] = buildNotePagePlaceholders(1, container, { pageWidth: 1404, pageHeight: 1872 });
+        fillNotePagePlaceholder(page, 'data:image/png;base64,ccc');
+
+        evictNotePageImage(page, 1404, 1872);
+
+        expect(page.imageEl.src).toBe('');
+        // Load-bearing, not cosmetic - see buildNotePagePlaceholders()' own
+        // comment: without these, a src-less <img> collapses to ~0 height
+        // under a flex container using align-items: center, the same bug
+        // already fixed once for the *initial* not-yet-loaded state.
+        expect(page.imageEl.style.width).toBe('100%');
+        expect(page.imageEl.style.aspectRatio).toBe('1404 / 1872');
+        expect(page.containerEl.style.width).toBe('100%');
     });
 });
