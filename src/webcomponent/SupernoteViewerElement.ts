@@ -16,6 +16,84 @@ import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWord
 import { LinkOverlayEntry, bucketLinksByPage, buildLinkOverlay, repositionLinkOverlay } from '../render/linkOverlay';
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 
+// Inline SVG toolbar icons, not Obsidian's own icon font (setIcon()/Lucide) -
+// this component has no Obsidian dependency at all (see this file's own
+// header comment) and needs to look right in a standalone/embed context with
+// no Obsidian runtime loaded, so the icons are baked in directly rather than
+// taken as a host-supplied dependency. Drawn in Lucide's own visual style
+// (24x24 viewBox, stroke-based, round caps/joins) for visual consistency with
+// the rest of Obsidian's UI where this ends up embedded, without actually
+// depending on the Lucide package - each is small enough (a handful of
+// path/line/circle primitives) that hand-drawing them outright is simpler
+// and lighter than pulling in an icon library for eight glyphs. stroke:
+// currentColor, not a fixed color, so each button's own text color (already
+// themed correctly - see the :host color-scheme rules) drives the icon too.
+//
+// Built via createElementNS(), not innerHTML/a parsed template - a static,
+// hardcoded string would be perfectly safe here in practice, but this
+// project's lint config flags any innerHTML/outerHTML write unconditionally
+// (no-unsanitized/property, @microsoft/sdl/no-inner-html), and real DOM
+// construction is only a little more verbose for icons this simple. Each
+// icon* function below builds a fresh <svg> per call - called once per
+// button at toolbar-build time, not cached/cloned, since nothing here is
+// hot enough to matter.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgIcon(children: [string, Record<string, string>][]): SVGSVGElement {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const [tag, attrs] of children) {
+        const el = document.createElementNS(SVG_NS, tag);
+        for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+        svg.appendChild(el);
+    }
+    return svg;
+}
+
+function iconThumbnails(): SVGSVGElement {
+    return svgIcon([
+        ['rect', { x: '3', y: '3', width: '18', height: '18', rx: '2' }],
+        ['line', { x1: '9', y1: '3', x2: '9', y2: '21' }],
+    ]);
+}
+function iconChevronUp(): SVGSVGElement {
+    return svgIcon([['path', { d: 'M18 15l-6-6-6 6' }]]);
+}
+function iconChevronDown(): SVGSVGElement {
+    return svgIcon([['path', { d: 'M6 9l6 6 6-6' }]]);
+}
+function iconTextMode(): SVGSVGElement {
+    return svgIcon([
+        ['line', { x1: '4', y1: '6', x2: '20', y2: '6' }],
+        ['line', { x1: '4', y1: '12', x2: '16', y2: '12' }],
+        ['line', { x1: '4', y1: '18', x2: '12', y2: '18' }],
+    ]);
+}
+function iconSearch(): SVGSVGElement {
+    return svgIcon([
+        ['circle', { cx: '11', cy: '11', r: '8' }],
+        ['path', { d: 'm21 21-4.3-4.3' }],
+    ]);
+}
+function iconChevronLeft(): SVGSVGElement {
+    return svgIcon([['path', { d: 'M15 18l-6-6 6-6' }]]);
+}
+function iconChevronRight(): SVGSVGElement {
+    return svgIcon([['path', { d: 'M9 18l6-6-6-6' }]]);
+}
+function iconClose(): SVGSVGElement {
+    return svgIcon([
+        ['path', { d: 'M18 6 6 18' }],
+        ['path', { d: 'M6 6l12 12' }],
+    ]);
+}
+
 interface ViewerPageState extends RenderedNotePage {
     textEl: HTMLElement;
     // Stashed alongside textEl (rather than re-reading sn.pages each time)
@@ -146,6 +224,20 @@ button {
     border-radius: 4px;
     padding: 0.2em 0.6em;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+/* Sized relative to font-size (not a fixed px value) so an icon button
+   scales the same way a text button already did. Only ever the toolbar/
+   find-bar's own icon* functions (see this file's top) - a host's own
+   slotted button (see the toolbar-extra slot) is free to put whatever
+   content it wants there instead, this rule just happens to also apply if
+   it slots in an <svg> of its own. */
+button svg {
+    width: 1.1em;
+    height: 1.1em;
+    display: block;
 }
 /* Lets each slotted node lay out as its own independent toolbar flex item
    (same "display: contents on the wrapper" trick .supernote-toolbar-group
@@ -1311,7 +1403,7 @@ export class SupernoteViewerElement extends HTMLElement {
             thumbBtn.setAttribute('part', 'button');
             thumbBtn.setAttribute('aria-label', 'Toggle page thumbnails');
             thumbBtn.setAttribute('aria-pressed', 'false');
-            thumbBtn.textContent = '☰';
+            thumbBtn.appendChild(iconThumbnails());
             thumbBtn.addEventListener('click', () => this.toggleThumbSidebar());
             toolbar.appendChild(thumbBtn);
             this.thumbToggleBtn = thumbBtn;
@@ -1320,7 +1412,7 @@ export class SupernoteViewerElement extends HTMLElement {
             prevBtn.type = 'button';
             prevBtn.setAttribute('part', 'button');
             prevBtn.setAttribute('aria-label', 'Previous page');
-            prevBtn.textContent = '↑';
+            prevBtn.appendChild(iconChevronUp());
             prevBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex));
             toolbar.appendChild(prevBtn);
 
@@ -1335,7 +1427,7 @@ export class SupernoteViewerElement extends HTMLElement {
             nextBtn.type = 'button';
             nextBtn.setAttribute('part', 'button');
             nextBtn.setAttribute('aria-label', 'Next page');
-            nextBtn.textContent = '↓';
+            nextBtn.appendChild(iconChevronDown());
             nextBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex + 2));
             toolbar.appendChild(nextBtn);
         }
@@ -1345,7 +1437,7 @@ export class SupernoteViewerElement extends HTMLElement {
         modeBtn.setAttribute('part', 'button');
         modeBtn.setAttribute('aria-label', 'Toggle recognized text view');
         modeBtn.setAttribute('aria-pressed', 'false');
-        modeBtn.textContent = 'Aa';
+        modeBtn.appendChild(iconTextMode());
         modeBtn.addEventListener('click', () => this.toggleMode());
         toolbar.appendChild(modeBtn);
         this.modeToggleBtn = modeBtn;
@@ -1355,7 +1447,7 @@ export class SupernoteViewerElement extends HTMLElement {
         findBtn.setAttribute('part', 'button');
         findBtn.setAttribute('aria-label', 'Find in note');
         findBtn.setAttribute('aria-pressed', 'false');
-        findBtn.textContent = 'Find';
+        findBtn.appendChild(iconSearch());
         findBtn.addEventListener('click', () => this.toggleFindBar());
         toolbar.appendChild(findBtn);
         this.findToggleBtn = findBtn;
@@ -1415,7 +1507,7 @@ export class SupernoteViewerElement extends HTMLElement {
         prevBtn.type = 'button';
         prevBtn.setAttribute('part', 'button');
         prevBtn.setAttribute('aria-label', 'Previous match');
-        prevBtn.textContent = '‹';
+        prevBtn.appendChild(iconChevronLeft());
         prevBtn.addEventListener('click', () => this.stepFind(-1));
         bar.appendChild(prevBtn);
 
@@ -1423,7 +1515,7 @@ export class SupernoteViewerElement extends HTMLElement {
         nextBtn.type = 'button';
         nextBtn.setAttribute('part', 'button');
         nextBtn.setAttribute('aria-label', 'Next match');
-        nextBtn.textContent = '›';
+        nextBtn.appendChild(iconChevronRight());
         nextBtn.addEventListener('click', () => this.stepFind(1));
         bar.appendChild(nextBtn);
 
@@ -1437,7 +1529,7 @@ export class SupernoteViewerElement extends HTMLElement {
         closeBtn.type = 'button';
         closeBtn.setAttribute('part', 'button');
         closeBtn.setAttribute('aria-label', 'Close find bar');
-        closeBtn.textContent = '×';
+        closeBtn.appendChild(iconClose());
         closeBtn.addEventListener('click', () => this.closeFindBar());
         bar.appendChild(closeBtn);
 
