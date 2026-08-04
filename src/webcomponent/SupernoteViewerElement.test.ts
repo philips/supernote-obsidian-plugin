@@ -109,6 +109,49 @@ describe('<supernote-viewer>', () => {
         expect(slot!.assignedElements()).toEqual([btn]);
     });
 
+    describe('iconRenderer', () => {
+        it('falls back to a baked-in SVG icon when unset', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+            await loaded;
+
+            const findBtn = el.shadowRoot!.querySelector('button[aria-label="Find in note"]')!;
+            expect(findBtn.querySelector('svg')).toBeTruthy();
+        });
+
+        it('calls a host-supplied renderer with the icon\'s canonical (Lucide-matching) name and the button element, instead of using the fallback', async () => {
+            // A host (e.g. SupernoteView/SupernoteEmbed in main.ts) wires
+            // this to Obsidian's own setIcon() for exact visual
+            // consistency with the rest of its UI - see iconRenderer's
+            // own doc comment for why IconName's values already equal
+            // Lucide's own icon names, so a real host needs no
+            // translation table, just `(name, el) => setIcon(el, name)`.
+            const el = createViewer();
+            const calls: Array<{ name: string; el: HTMLElement }> = [];
+            el.iconRenderer = (name, iconEl) => {
+                calls.push({ name, el: iconEl });
+                iconEl.textContent = `[${name}]`;
+            };
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            const findBtn = el.shadowRoot!.querySelector('button[aria-label="Find in note"]')!;
+            expect(findBtn.querySelector('svg')).toBeNull();
+            expect(findBtn.textContent).toBe('[search]');
+            expect(calls.some((c) => c.name === 'search' && c.el === findBtn)).toBe(true);
+            expect(calls.some((c) => c.name === 'layout-list')).toBe(true);
+            expect(calls.some((c) => c.name === 'zoom-in')).toBe(true);
+            expect(calls.some((c) => c.name === 'zoom-out')).toBe(true);
+            expect(calls.some((c) => c.name === 'rotate-ccw')).toBe(true);
+            expect(calls.some((c) => c.name === 'stretch-horizontal')).toBe(true);
+            expect(calls.some((c) => c.name === 'type')).toBe(true);
+        });
+    });
+
     it('includes each page\'s own PAGEID in the supernote-load event, for a host resolving a same-named link-click', async () => {
         // A host embedding this component (e.g. SupernoteEmbed in main.ts)
         // knows its own file's name, which this component deliberately

@@ -661,6 +661,15 @@ export class SupernoteView extends FileView {
 		// textProcessor's own doc comment (SupernoteViewerElement.ts) for
 		// the narrow find-in-note inconsistency this leaves.
 		viewer.textProcessor = (text) => processSupernoteText(text, this.settings);
+		// Obsidian's own icon set (setIcon()/Lucide) instead of the
+		// component's own baked-in inline SVGs - see iconRenderer's own
+		// doc comment (SupernoteViewerElement.ts) for why this is safe:
+		// the component picked its icon names to already equal Lucide's
+		// own, specifically so a host with a real icon system can wire
+		// this up with no translation table of its own (issue #197's
+		// original ask for the export button, extended here to the whole
+		// toolbar for full UX consistency with the rest of Obsidian).
+		viewer.iconRenderer = (name, el) => setIcon(el, name);
 		if (this.settings.invertColorsWhenDark) {
 			viewer.setAttribute('invert-dark', '');
 		}
@@ -940,6 +949,10 @@ export class SupernoteEmbed extends Component {
 		if (this.settings.invertColorsWhenDark) {
 			viewer.setAttribute('invert-dark', '');
 		}
+		// Obsidian's own icon set (setIcon()/Lucide), same as SupernoteView's
+		// identical assignment - see its own comment, and iconRenderer's
+		// doc comment in SupernoteViewerElement.ts, for why this is safe.
+		viewer.iconRenderer = (name, el) => setIcon(el, name);
 		this.viewerEl = viewer;
 		this.updateDarkAttribute();
 

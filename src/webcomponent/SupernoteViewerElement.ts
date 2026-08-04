@@ -56,37 +56,60 @@ function svgIcon(children: [string, Record<string, string>][]): SVGSVGElement {
     return svg;
 }
 
-function iconThumbnails(): SVGSVGElement {
-    return svgIcon([
+// Canonical names for every icon this component's own toolbar/find-bar
+// ever needs - chosen to equal real Lucide icon names (confirmed against
+// this codebase's own existing setIcon() call sites, e.g. atelierView.ts's
+// 'rotate-ccw'/'stretch-horizontal') wherever a matching Lucide icon
+// exists, specifically so a host that wants Obsidian's own icon set (see
+// iconRenderer below) can hand this straight to setIcon() with no
+// translation table of its own to maintain.
+type IconName =
+    | 'layout-list'
+    | 'type'
+    | 'search'
+    | 'chevron-left'
+    | 'chevron-right'
+    | 'x'
+    | 'zoom-out'
+    | 'zoom-in'
+    | 'rotate-ccw'
+    | 'stretch-horizontal';
+
+const FALLBACK_ICONS: Record<IconName, () => SVGSVGElement> = {
+    'layout-list': () => svgIcon([
         ['rect', { x: '3', y: '3', width: '18', height: '18', rx: '2' }],
         ['line', { x1: '9', y1: '3', x2: '9', y2: '21' }],
-    ]);
-}
-function iconTextMode(): SVGSVGElement {
-    return svgIcon([
+    ]),
+    'type': () => svgIcon([
         ['line', { x1: '4', y1: '6', x2: '20', y2: '6' }],
         ['line', { x1: '4', y1: '12', x2: '16', y2: '12' }],
         ['line', { x1: '4', y1: '18', x2: '12', y2: '18' }],
-    ]);
-}
-function iconSearch(): SVGSVGElement {
-    return svgIcon([
+    ]),
+    'search': () => svgIcon([
         ['circle', { cx: '11', cy: '11', r: '8' }],
         ['path', { d: 'm21 21-4.3-4.3' }],
-    ]);
-}
-function iconChevronLeft(): SVGSVGElement {
-    return svgIcon([['path', { d: 'M15 18l-6-6 6-6' }]]);
-}
-function iconChevronRight(): SVGSVGElement {
-    return svgIcon([['path', { d: 'M9 18l6-6-6-6' }]]);
-}
-function iconClose(): SVGSVGElement {
-    return svgIcon([
+    ]),
+    'chevron-left': () => svgIcon([['path', { d: 'M15 18l-6-6 6-6' }]]),
+    'chevron-right': () => svgIcon([['path', { d: 'M9 18l6-6-6-6' }]]),
+    'x': () => svgIcon([
         ['path', { d: 'M18 6 6 18' }],
         ['path', { d: 'M6 6l12 12' }],
-    ]);
-}
+    ]),
+    'zoom-out': () => svgIcon([['line', { x1: '5', y1: '12', x2: '19', y2: '12' }]]),
+    'zoom-in': () => svgIcon([
+        ['line', { x1: '12', y1: '5', x2: '12', y2: '19' }],
+        ['line', { x1: '5', y1: '12', x2: '19', y2: '12' }],
+    ]),
+    'rotate-ccw': () => svgIcon([
+        ['path', { d: 'M3 12a9 9 0 1 0 2.6-6.4' }],
+        ['path', { d: 'M3 4v5h5' }],
+    ]),
+    'stretch-horizontal': () => svgIcon([
+        ['path', { d: 'M8 3 4 7l4 4' }],
+        ['line', { x1: '4', y1: '7', x2: '20', y2: '7' }],
+        ['path', { d: 'M16 3l4 4-4 4' }],
+    ]),
+};
 
 interface ViewerPageState extends RenderedNotePage {
     textEl: HTMLElement;
@@ -249,12 +272,26 @@ button svg {
    ::slotted() is the mechanism for reaching in from here. Only matches
    top-level slotted nodes, which is exactly the shape a host is expected
    to provide - see buildToolbar()'s own comment on the "toolbar-extra"
-   slot for the full contract. */
+   slot for the full contract.
+
+   border: ... !important - confirmed via real headless-Obsidian testing
+   (getComputedStyle) that without it, a host button also carrying
+   Obsidian's own "clickable-icon" class (e.g. SupernoteView's export
+   button in main.ts, styled with setIcon() - see its own comment on why
+   that class is used there) rendered with no border at all: Obsidian's
+   own core CSS for that class sets border: none, and won out over this
+   rule despite ::slotted() living in this shadow root - the same class
+   of "Obsidian's own core CSS beats this component's styling" problem
+   .internal-embed.supernote-embed's own !important already exists to
+   solve elsewhere in this codebase (styles.css), just encountered here
+   from the opposite direction (a *light DOM* host element reaching
+   *into* a shadow root's own visual language, not the reverse). Scoped
+   to just this one property, not a blanket escape hatch. */
 ::slotted(button) {
     font: inherit;
     color: inherit;
     background: transparent;
-    border: 1px solid var(--supernote-viewer-border);
+    border: 1px solid var(--supernote-viewer-border) !important;
     border-radius: 4px;
     padding: 0.2em 0.6em;
     cursor: pointer;
@@ -637,6 +674,29 @@ export class SupernoteViewerElement extends HTMLElement {
     // no concept of). Left unset, this component's recognized-text mode
     // shows sn.pages[i].text completely unprocessed.
     textProcessor: (text: string) => string = (text) => text;
+
+    // Overridable hook for rendering a toolbar/find-bar icon into `el` -
+    // unset by default, in which case renderIcon() below falls back to
+    // this component's own baked-in inline SVGs (FALLBACK_ICONS above),
+    // needing no external icon set or Obsidian runtime at all. Exists so
+    // a host that already has a real icon system (e.g. Obsidian's own
+    // setIcon()/Lucide) can use it here too, for exact visual consistency
+    // with the rest of its own UI, instead of this component's
+    // necessarily-simpler baked-in icons - same overridable-property
+    // pattern rasterizePage/textProcessor above already use. `name` is
+    // one of IconName's own values, chosen to already equal the matching
+    // Lucide icon name wherever one exists (see IconName's own comment),
+    // so a host wiring this up to setIcon() needs no translation table:
+    // `viewer.iconRenderer = (name, el) => setIcon(el, name);` is enough.
+    iconRenderer?: (name: IconName, el: HTMLElement) => void;
+
+    private renderIcon(name: IconName, el: HTMLElement): void {
+        if (this.iconRenderer) {
+            this.iconRenderer(name, el);
+            return;
+        }
+        el.appendChild(FALLBACK_ICONS[name]());
+    }
 
     private readonly rootEl: HTMLElement;
     private pagesEl: HTMLElement | null = null;
@@ -1642,7 +1702,7 @@ export class SupernoteViewerElement extends HTMLElement {
             thumbBtn.setAttribute('part', 'button');
             thumbBtn.setAttribute('aria-label', 'Toggle page thumbnails');
             thumbBtn.setAttribute('aria-pressed', 'false');
-            thumbBtn.appendChild(iconThumbnails());
+            this.renderIcon('layout-list', thumbBtn);
             thumbBtn.addEventListener('click', () => this.toggleThumbSidebar());
             toolbar.appendChild(thumbBtn);
             this.thumbToggleBtn = thumbBtn;
@@ -1717,7 +1777,7 @@ export class SupernoteViewerElement extends HTMLElement {
         zoomOutBtn.type = 'button';
         zoomOutBtn.setAttribute('part', 'button');
         zoomOutBtn.setAttribute('aria-label', 'Zoom out');
-        zoomOutBtn.textContent = '−';
+        this.renderIcon('zoom-out', zoomOutBtn);
         zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
         toolbar.appendChild(zoomOutBtn);
 
@@ -1732,7 +1792,7 @@ export class SupernoteViewerElement extends HTMLElement {
         zoomInBtn.type = 'button';
         zoomInBtn.setAttribute('part', 'button');
         zoomInBtn.setAttribute('aria-label', 'Zoom in');
-        zoomInBtn.textContent = '+';
+        this.renderIcon('zoom-in', zoomInBtn);
         zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
         toolbar.appendChild(zoomInBtn);
 
@@ -1740,7 +1800,7 @@ export class SupernoteViewerElement extends HTMLElement {
         zoomResetBtn.type = 'button';
         zoomResetBtn.setAttribute('part', 'button');
         zoomResetBtn.setAttribute('aria-label', 'Reset zoom');
-        zoomResetBtn.textContent = '↺';
+        this.renderIcon('rotate-ccw', zoomResetBtn);
         zoomResetBtn.addEventListener('click', () => this.setZoom(1));
         toolbar.appendChild(zoomResetBtn);
 
@@ -1749,7 +1809,7 @@ export class SupernoteViewerElement extends HTMLElement {
         fitWidthBtn.setAttribute('part', 'button');
         fitWidthBtn.setAttribute('aria-label', 'Fit page to viewport width');
         fitWidthBtn.setAttribute('aria-pressed', 'true'); // fitWidthEnabled defaults to true
-        fitWidthBtn.textContent = 'Fit';
+        this.renderIcon('stretch-horizontal', fitWidthBtn);
         fitWidthBtn.addEventListener('click', () => {
             this.fitWidthEnabled = !this.fitWidthEnabled;
             if (this.fitWidthEnabled) this.applyFitWidth();
@@ -1763,7 +1823,7 @@ export class SupernoteViewerElement extends HTMLElement {
         modeBtn.setAttribute('part', 'button');
         modeBtn.setAttribute('aria-label', 'Toggle recognized text view');
         modeBtn.setAttribute('aria-pressed', 'false');
-        modeBtn.appendChild(iconTextMode());
+        this.renderIcon('type', modeBtn);
         modeBtn.addEventListener('click', () => this.toggleMode());
         toolbar.appendChild(modeBtn);
         this.modeToggleBtn = modeBtn;
@@ -1773,7 +1833,7 @@ export class SupernoteViewerElement extends HTMLElement {
         findBtn.setAttribute('part', 'button');
         findBtn.setAttribute('aria-label', 'Find in note');
         findBtn.setAttribute('aria-pressed', 'false');
-        findBtn.appendChild(iconSearch());
+        this.renderIcon('search', findBtn);
         findBtn.addEventListener('click', () => this.toggleFindBar());
         toolbar.appendChild(findBtn);
         this.findToggleBtn = findBtn;
@@ -1833,7 +1893,7 @@ export class SupernoteViewerElement extends HTMLElement {
         prevBtn.type = 'button';
         prevBtn.setAttribute('part', 'button');
         prevBtn.setAttribute('aria-label', 'Previous match');
-        prevBtn.appendChild(iconChevronLeft());
+        this.renderIcon('chevron-left', prevBtn);
         prevBtn.addEventListener('click', () => this.stepFind(-1));
         bar.appendChild(prevBtn);
 
@@ -1841,7 +1901,7 @@ export class SupernoteViewerElement extends HTMLElement {
         nextBtn.type = 'button';
         nextBtn.setAttribute('part', 'button');
         nextBtn.setAttribute('aria-label', 'Next match');
-        nextBtn.appendChild(iconChevronRight());
+        this.renderIcon('chevron-right', nextBtn);
         nextBtn.addEventListener('click', () => this.stepFind(1));
         bar.appendChild(nextBtn);
 
@@ -1855,7 +1915,7 @@ export class SupernoteViewerElement extends HTMLElement {
         closeBtn.type = 'button';
         closeBtn.setAttribute('part', 'button');
         closeBtn.setAttribute('aria-label', 'Close find bar');
-        closeBtn.appendChild(iconClose());
+        this.renderIcon('x', closeBtn);
         closeBtn.addEventListener('click', () => this.closeFindBar());
         bar.appendChild(closeBtn);
 
