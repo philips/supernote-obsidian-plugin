@@ -316,6 +316,27 @@ button[aria-pressed="true"] {
 .pages.mode-text .page-container > img {
     display: none;
 }
+/* !important, not just specificity, because the width this overrides is
+   an *inline* style (buildNotePagePlaceholders()/fillNotePagePlaceholder()
+   in noteRenderer.ts, set directly on .style.width - no selector can ever
+   outrank that without it). That inline width is a placeholder-sizing
+   trick for the still-hidden <img> above (see those functions' own
+   comments), reserving a full-width box before the real image loads so
+   .pages' scroll height is correct - but text mode never shows that img
+   at all, and the visible .page-text is already capped at max-width: 40em
+   with nothing to reserve a box for. Left alone, a page's background
+   image load (still happening even in text mode - the lazy-load observer
+   doesn't check which mode is active) clears that inline width the
+   moment it finishes, which - since .pages uses align-items: center -
+   visibly recentered every .page-text box from full-width down to its
+   real, narrower width: confirmed as a real, reported bug, its timing
+   exactly matching the "page N loaded" log line. Forcing auto
+   unconditionally here means .page-container's width is already
+   text-content-sized before that clear ever happens, so nothing moves
+   when it does. */
+.pages.mode-text .page-container {
+    width: auto !important;
+}
 .pages .page-container > .page-text {
     display: none;
     white-space: pre-wrap;
