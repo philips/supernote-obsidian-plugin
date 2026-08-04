@@ -703,7 +703,14 @@ export class SupernoteViewerElement extends HTMLElement {
         this.sn = sn;
         this.buildViewer(sn);
         this.dispatchEvent(new CustomEvent('supernote-load', {
-            detail: { pageCount: sn.pages.length, pageWidth: sn.pageWidth, pageHeight: sn.pageHeight },
+            // pageIds lets a host resolve a link-click whose target names
+            // this same note explicitly (see handleLinkClick() above) -
+            // this component only resolves the *un-named* same-note case
+            // itself, since it has no concept of "my own filename" to
+            // compare a link's target against; a host that does know its
+            // own file's name can match it here without re-parsing the
+            // note a second time just to get this list.
+            detail: { pageCount: sn.pages.length, pageWidth: sn.pageWidth, pageHeight: sn.pageHeight, pageIds: sn.pages.map((p) => p.PAGEID ?? '') },
         }));
 
         // Single-page mode already built exactly the requested page directly

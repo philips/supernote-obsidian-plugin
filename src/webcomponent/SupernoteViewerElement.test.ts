@@ -83,6 +83,26 @@ describe('<supernote-viewer>', () => {
         // test sets up.
     });
 
+    it('includes each page\'s own PAGEID in the supernote-load event, for a host resolving a same-named link-click', async () => {
+        // A host embedding this component (e.g. SupernoteEmbed in main.ts)
+        // knows its own file's name, which this component deliberately
+        // doesn't - pageIds is what lets it resolve a link whose text
+        // happens to match that name without re-parsing the same note a
+        // second time just to get this list back. See handleLinkClick()'s
+        // own dispatch comment for the split.
+        const el = createViewer();
+        document.body.appendChild(el);
+        const loaded = waitForEvent<{ pageIds: string[] }>(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+
+        const evt = await loaded;
+        expect(evt.detail.pageIds).toEqual([
+            'P20240303144624294784hYDadze19JFd',
+            'P20240303145300685218PTuXezQHAYAa',
+            'P20260603095253336544uuby12WmGW3u',
+        ]);
+    });
+
     it('recomputes the current page from real geometry on scroll, not a batch of observer entries', async () => {
         // The page indicator used to be driven by an IntersectionObserver,
         // which caused two related but distinct bugs on real, many-page
