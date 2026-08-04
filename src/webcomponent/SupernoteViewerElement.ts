@@ -266,6 +266,24 @@ button[aria-pressed="true"] {
 .pages .page-container {
     position: relative;
     max-width: 100%;
+    /* Centers a page narrower than .pages via auto-margin absorption
+       instead of relying on .pages' own align-items: center - real,
+       reported bug: a flex/grid item centered via the *container's* own
+       align-items, once zoomed in wide enough to overflow, only exposes
+       the *end*-side overflow to scrolling in Chromium/WebKit - the start
+       (left) side stays permanently unreachable no matter how far you
+       scroll, since align-items-driven centering shifts the item without
+       extending the scrollable area to cover its start-side overflow.
+       margin: auto on the item itself takes priority over the parent's
+       align-items for centering (per the flex spec's auto-margin
+       cross-axis absorption rule) and, critically, auto margins compute
+       to 0 rather than negative once the item is wider than its
+       container - so an overflowing page instead sits flush at the
+       start, restoring the ordinary, fully-reachable [0, scrollWidth -
+       clientWidth] scroll range. Confirmed directly: before this, even
+       scrollLeft = 0 (as far left as scrolling allowed) still left the
+       image's own left edge far off-screen. */
+    margin: 0 auto;
 }
 /* Zoom (see setZoom()/applyFitWidth()) needs a page to be able to render
    wider than .pages' own available width - a manually zoomed-in page
@@ -1288,8 +1306,17 @@ export class SupernoteViewerElement extends HTMLElement {
     // minus its first page-container's own horizontal margin, if any -
     // mirrors SupernoteView's own applyFitWidth() exactly, including
     // reading that margin from computed style rather than assuming it's
-    // zero, even though this component's own stylesheet uses .pages' gap
-    // rather than page-container margins for inter-page spacing today).
+    // zero: page-container now sets margin: 0 auto (see that rule's own
+    // comment - centering via auto-margin absorption rather than .pages'
+    // align-items, so a zoomed-in, overflowing page stays fully
+    // scrollable to its start edge), and an *unresolved* auto margin -
+    // getComputedStyle() returning the literal string "auto" rather than
+    // a resolved pixel value, which real layout engines normally avoid
+    // but this project's own happy-dom test environment doesn't - would
+    // otherwise silently corrupt this whole computation into NaN
+    // (parseFloat('auto') is NaN, and NaN propagates through every
+    // arithmetic operation after it). The `|| 0` fallbacks below guard
+    // against exactly that, in any environment, not just tests.
     private applyFitWidth(): void {
         if (!this.sn || !this.pagesEl || this.sn.pageWidth <= 0) return;
 
@@ -1299,7 +1326,7 @@ export class SupernoteViewerElement extends HTMLElement {
         const state = this.pageStates[0];
         const containerStyle = state ? getComputedStyle(state.containerEl) : null;
         const horizontalMargin = containerStyle
-            ? parseFloat(containerStyle.marginLeft || '0') + parseFloat(containerStyle.marginRight || '0')
+            ? (parseFloat(containerStyle.marginLeft) || 0) + (parseFloat(containerStyle.marginRight) || 0)
             : 0;
         const targetWidth = Math.max(availableWidth - horizontalMargin, 1);
 
