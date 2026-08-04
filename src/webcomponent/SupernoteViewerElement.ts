@@ -263,6 +263,23 @@ button[aria-pressed="true"] {
     display: block;
     max-width: 100%;
 }
+/* A not-yet-loaded or evicted img (buildNotePagePlaceholders()/
+   evictNotePageImage() in noteRenderer.ts) deliberately has no src
+   attribute at all, not even an empty one - but it's still given an
+   explicit box size via inline width/aspect-ratio (see those functions'
+   own comments for why: so the page list's scroll height is correct
+   before any image has loaded). Confirmed via direct screenshot during a
+   reliably-reproducible report: Chromium paints its generic "broken
+   image" glyph for any img with a defined layout box and no image
+   content, regardless of whether a src was ever set or a request ever
+   failed - no error event fires for this (confirmed separately), it's
+   just the browser's default rendering for "sized replaced element,
+   nothing to show". img:not([src]) hides that glyph while leaving the
+   reserved box itself (and thus the scroll-height math) untouched -
+   visibility: hidden, not display: none, for exactly that reason. */
+.pages .page-container > img:not([src]) {
+    visibility: hidden;
+}
 /* Invisible-by-default per-word overlay (see src/render/wordOverlay.ts) -
    positioned absolutely over the page image/placeholder using the same
    container this rule's own position: relative above establishes. Text
