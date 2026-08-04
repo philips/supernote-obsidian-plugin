@@ -812,6 +812,8 @@ export class SupernoteViewerElement extends HTMLElement {
         this.rootEl.className = 'root';
         this.rootEl.setAttribute('part', 'root');
         shadow.appendChild(this.rootEl);
+
+        this.setupHostGestureOptOut();
     }
 
     // Raw note bytes, as an alternative to the `src` URL attribute - for
@@ -1703,6 +1705,16 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pagesEl.addEventListener('touchcancel', endPinch);
     }
 
+    // Blocks the scroll-boundary "rubber band" bounce itself (the CSS/
+    // native overscroll animation) - a real, worthwhile fix for old WebKit
+    // in its own right (see this method's own comment), but NOT what
+    // actually stops Obsidian's own gesture recognizer from firing: that
+    // one lives entirely in Obsidian's own JS (see
+    // setupHostGestureOptOut() below, added for issue #204 after this fix
+    // alone turned out not to be enough - confirmed by testing directly,
+    // and by reading Obsidian's own app.js) and pays no attention to
+    // whether a touchmove's default was prevented at all.
+    //
     // Blocks the scroll-boundary "rubber band" that would otherwise chain
     // a pull gesture out to whatever's outside this element (issue #202):
     // inside Obsidian's mobile app shell, continuing to pull up past
@@ -1740,6 +1752,84 @@ export class SupernoteViewerElement extends HTMLElement {
             // otherwise rubber-band/chain outward.
             if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) evt.preventDefault();
         }, { passive: false });
+    }
+
+    // Opts this whole component out of Obsidian's own mobile navigation
+    // gestures - pull-down-to-open-command-palette and swipe-to-open-
+    // sidebar (issue #204, reported as still broken even after
+    // setupScrollBoundaryContainment() above) - confirmed by reading
+    // Obsidian's own app.js: both gestures are recognized by one shared
+    // generic swipe-detector registered on the whole workspace container,
+    // which walks a touch's ancestor chain via plain DOM `.parentElement`
+    // to decide whether some scrollable container already has room to
+    // consume the gesture instead (and if so, backs off - this is exactly
+    // how its own PDF viewer avoids the problem, since a PDF's scrollable
+    // container sits in the ordinary light DOM where that walk works
+    // fine). That walk cannot see past a shadow root at all -
+    // `Node.parentElement` (unlike `.parentNode`) is null for a shadow
+    // root's own top-level children once there's nowhere left to go
+    // *within* the shadow tree - so it can never discover that .pages,
+    // sitting inside *this* shadow root, is scrollable, and treats every
+    // drag here as a navigation gesture regardless of whether there's
+    // genuinely anything left to scroll.
+    //
+    // Obsidian's core does honor one specific escape hatch for exactly
+    // this situation: a touch's target chain (walked via `.parentNode`,
+    // which - unlike `.parentElement` - does keep ascending correctly up
+    // to a shadow root's own boundary) carrying a truthy
+    // `dataset.ignoreSwipe` anywhere along it makes the gesture recognizer
+    // bail out entirely for that touch, before it ever looks at
+    // scrollability at all. Toggled fresh on every touchstart (not left
+    // permanently on) so this only opts out while .pages genuinely still
+    // has relevant scroll room - once it doesn't, the attribute is cleared
+    // and Obsidian's own gesture takes over exactly as it would for its
+    // own exhausted PDF viewer (e.g. the command palette pull activating
+    // only once you've reached the first page).
+    private setupHostGestureOptOut(): void {
+        this.rootEl.addEventListener('touchstart', () => {
+            const pagesEl = this.pagesEl;
+            // A pull-down-to-open-palette gesture only ever needs
+            // *upward* scroll room (there's nowhere to "pull down into" -
+            // pulling down at the very top is the whole point of that
+            // gesture) - scrollTop > 0 means there's still a page above
+            // what's currently visible, so a downward drag here should
+            // just be an ordinary scroll up through the document, not a
+            // navigation gesture.
+            const blocksPalettePull = !!pagesEl && pagesEl.scrollTop > 0;
+            // A left/right swipe-to-open-sidebar gesture can go either
+            // direction, unlike the palette pull above (always downward) -
+            // so unlike scrollTop, there's no single "the only edge that
+            // matters" position to check here. Blocking any time .pages
+            // has *some* horizontal overflow at all, regardless of exactly
+            // where within it, is the simple, defensible line: relevant
+            // only once zoomed in past the point .pages overflows
+            // horizontally (see setZoom()) - in the far more common
+            // un-zoomed case scrollWidth shouldn't exceed clientWidth at
+            // all, so this shouldn't block the sidebar swipe needlessly,
+            // matching the reported "not in pdf view IF the pdf view is
+            // scrollable" framing exactly. A flat 50px tolerance, not a
+            // bare > 0 comparison - confirmed via real headless-Obsidian
+            // testing that .pages' own padding (see its CSS) alone leaves
+            // a real ~28px scrollWidth/clientWidth gap even at ordinary,
+            // un-zoomed fit-width sizing, which would otherwise trip this
+            // check on every single note and permanently block the
+            // sidebar swipe regardless of actual zoom level. 50px clears
+            // that gap with real margin while staying far below any
+            // genuinely zoomed-in overflow (hundreds of pixels once zoomed
+            // in far enough to matter).
+            const blocksSidebarSwipe = !!pagesEl && pagesEl.scrollWidth > pagesEl.clientWidth + 50;
+            // Obsidian's own check (see this method's own doc comment) is
+            // a plain truthiness test on `dataset.ignoreSwipe`, not an
+            // `!== undefined`/presence check - `toggleAttribute()` sets an
+            // *empty*-string attribute value when true, which reads back
+            // as `""` (falsy!) through `dataset`, silently defeating the
+            // whole opt-out. A real, literal "true" string is required -
+            // confirmed directly against Obsidian's own app.js, which sets
+            // exactly this same literal string on its own swipe-exempt
+            // elements (e.g. its range-slider input).
+            if (blocksPalettePull || blocksSidebarSwipe) this.rootEl.setAttribute('data-ignore-swipe', 'true');
+            else this.rootEl.removeAttribute('data-ignore-swipe');
+        }, { passive: true });
     }
 
     // While "Fit width" is on, keeps every page matched to however much

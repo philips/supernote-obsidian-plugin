@@ -874,6 +874,74 @@ describe('<supernote-viewer>', () => {
         });
     });
 
+    describe('Obsidian host gesture opt-out (issue #204)', () => {
+        async function createLoadedViewer() {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+            return el;
+        }
+
+        function touchstart(target: HTMLElement) {
+            const touch = new Touch({ identifier: 1, target, clientX: 0, clientY: 0 });
+            target.dispatchEvent(new TouchEvent('touchstart', { touches: [touch], cancelable: true }));
+        }
+
+        it('sets data-ignore-swipe when scrolled below the top (blocks the palette-pull gesture)', async () => {
+            const el = await createLoadedViewer();
+            const rootEl = el.shadowRoot!.querySelector('.root') as HTMLElement;
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 500, configurable: true });
+
+            touchstart(rootEl);
+
+            expect(rootEl.dataset.ignoreSwipe).toBe('true');
+        });
+
+        it('clears data-ignore-swipe when at the very top and not horizontally scrollable', async () => {
+            const el = await createLoadedViewer();
+            const rootEl = el.shadowRoot!.querySelector('.root') as HTMLElement;
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 0, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollWidth', { value: 400, configurable: true });
+            Object.defineProperty(pagesEl, 'clientWidth', { value: 400, configurable: true });
+
+            touchstart(rootEl);
+
+            expect(rootEl.hasAttribute('data-ignore-swipe')).toBe(false);
+        });
+
+        it('sets data-ignore-swipe when horizontally scrollable and not at an edge (blocks the sidebar-swipe gesture)', async () => {
+            const el = await createLoadedViewer();
+            const rootEl = el.shadowRoot!.querySelector('.root') as HTMLElement;
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 0, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollWidth', { value: 1000, configurable: true });
+            Object.defineProperty(pagesEl, 'clientWidth', { value: 400, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollLeft', { value: 300, configurable: true });
+
+            touchstart(rootEl);
+
+            expect(rootEl.dataset.ignoreSwipe).toBe('true');
+        });
+
+        it('sets data-ignore-swipe for horizontal overflow regardless of scroll position (no single "edge" - a sidebar swipe can go either way)', async () => {
+            const el = await createLoadedViewer();
+            const rootEl = el.shadowRoot!.querySelector('.root') as HTMLElement;
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 0, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollWidth', { value: 1000, configurable: true });
+            Object.defineProperty(pagesEl, 'clientWidth', { value: 400, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollLeft', { value: 0, configurable: true }); // at the left edge
+
+            touchstart(rootEl);
+
+            expect(rootEl.dataset.ignoreSwipe).toBe('true');
+        });
+    });
+
     describe('find in note', () => {
         async function createLoadedViewer() {
             const el = createViewer();
