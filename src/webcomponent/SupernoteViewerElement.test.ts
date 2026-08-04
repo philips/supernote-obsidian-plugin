@@ -259,6 +259,25 @@ describe('<supernote-viewer>', () => {
             }
         });
 
+        it('tags thumbnail images for dark-mode inversion when invert-dark is set, same as main page images', async () => {
+            // Confirmed as a real, reported bug (issue #192): only main page
+            // images (buildNotePagePlaceholders() in noteRenderer.ts) got
+            // the supernote-invert-dark class - thumbnails never did, so
+            // they never inverted regardless of dark mode.
+            const el = createViewer();
+            el.setAttribute('invert-dark', '');
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            const thumbs = el.shadowRoot!.querySelectorAll<HTMLImageElement>('.sidebar-list-thumb');
+            expect(thumbs).toHaveLength(2);
+            for (const thumb of Array.from(thumbs)) {
+                expect(thumb.classList.contains('supernote-invert-dark')).toBe(true);
+            }
+        });
+
         it('toggle button opens and closes the sidebar', async () => {
             const el = await createLoadedViewer();
             const toggleBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle page thumbnails"]')!;

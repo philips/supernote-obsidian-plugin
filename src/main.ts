@@ -546,6 +546,20 @@ export class SupernoteView extends FileView {
 		// Documented pattern (obsidian.d.ts View.scope) for registering hotkeys
 		// that are only active while this view has focus.
 		this.scope = new Scope(this.app.scope);
+		// Mirrors SupernoteEmbed's own identical registration/reasoning (see
+		// its constructor) - without this, <supernote-viewer>'s own light/
+		// dark default (the OS-level prefers-color-scheme media feature) is
+		// the only thing driving it, completely independent of Obsidian's
+		// own theme setting - confirmed as a real, reported bug: the full
+		// view stayed permanently dark (or light) regardless of Obsidian's
+		// theme, tracking only the OS's own scheme instead. registerEvent()
+		// is auto-cleaned-up by Component (View extends Component), so this
+		// needs no matching onClose() teardown.
+		this.registerEvent(this.app.workspace.on('css-change', () => this.updateDarkAttribute()));
+	}
+
+	private updateDarkAttribute(): void {
+		this.viewerEl?.setAttribute('dark', document.body.classList.contains('theme-dark') ? 'true' : 'false');
 	}
 
 	getViewType() {
@@ -669,6 +683,7 @@ export class SupernoteView extends FileView {
 			viewer.setAttribute('invert-dark', '');
 		}
 		this.viewerEl = viewer;
+		this.updateDarkAttribute();
 
 		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageIds: string[] }>) => {
 			this.pageIds = e.detail.pageIds;

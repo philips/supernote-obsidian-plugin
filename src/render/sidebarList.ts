@@ -49,6 +49,12 @@ export interface BuildSidebarListOptions {
     // doc comment) shares one native size.
     thumbnailAspectRatio: { width: number; height: number };
     onItemClick?: (index: number) => void;
+    // Tags each thumbnail <img> for dark-mode stroke inversion, same as a
+    // main page image (see noteRenderer.ts's own invertColorsWhenDark) -
+    // without this, a thumbnail's handwriting stayed uninverted regardless
+    // of the setting, since this class was never applied here at all
+    // (confirmed as a real, reported bug - issue #192).
+    invertColorsWhenDark?: boolean;
 }
 
 // Builds one item per entry in `items` and appends them to `container` -
@@ -84,6 +90,7 @@ export function buildSidebarList(
 
         const img = document.createElement('img');
         img.className = 'sidebar-list-thumb';
+        if (options.invertColorsWhenDark) img.classList.add('supernote-invert-dark');
         img.style.aspectRatio = `${width} / ${height}`;
         itemEl.appendChild(img);
 

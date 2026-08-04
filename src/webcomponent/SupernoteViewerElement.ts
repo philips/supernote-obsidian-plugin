@@ -419,13 +419,21 @@ button[aria-pressed="true"] {
    same reason: without the :not([dark])/[dark="false"] guards, a
    light-themed host on a dark-OS system would still get its page images
    inverted underneath it, same bug as the border/background colors
-   above. */
+   above.
+
+   .sidebar-list-thumb.supernote-invert-dark alongside the main page image
+   selector - confirmed as a real, reported bug (issue #192): a thumbnail's
+   own <img> gets the same class (see sidebarList.ts's buildSidebarList())
+   but this rule originally only ever matched .pages' own page images, so
+   thumbnails never inverted regardless of dark mode. */
 @media (prefers-color-scheme: dark) {
-    :host(:not([dark])) .pages .page-container > img.supernote-invert-dark {
+    :host(:not([dark])) .pages .page-container > img.supernote-invert-dark,
+    :host(:not([dark])) .sidebar-list-thumb.supernote-invert-dark {
         filter: invert(1);
     }
 }
-:host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark {
+:host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark,
+:host([dark]:not([dark="false"])) .sidebar-list-thumb.supernote-invert-dark {
     filter: invert(1);
 }
 .status {
@@ -841,7 +849,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.setupPageLoadObserver(sn, states);
         if (pageCount > 1) {
             this.setupPageIndicatorTracking();
-            this.buildThumbSidebar(sn, pageCount);
+            this.buildThumbSidebar(sn, pageCount, invertColorsWhenDark);
         }
         this.setupOverlayResizing(sn, states);
     }
@@ -1140,7 +1148,7 @@ export class SupernoteViewerElement extends HTMLElement {
     // own viewport. Only built for pageCount > 1 (see buildToolbar()) -
     // nothing to navigate to via thumbnails on a single-page document
     // either.
-    private buildThumbSidebar(sn: SupernoteX, pageCount: number): void {
+    private buildThumbSidebar(sn: SupernoteX, pageCount: number, invertColorsWhenDark: boolean): void {
         const sidebar = document.createElement('div');
         sidebar.className = 'thumb-sidebar';
         sidebar.setAttribute('part', 'thumb-sidebar');
@@ -1151,6 +1159,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbItems = buildSidebarList(sidebar, specs, {
             thumbnailAspectRatio: { width: sn.pageWidth, height: sn.pageHeight },
             onItemClick: (index) => this.goToPage(index + 1),
+            invertColorsWhenDark,
         });
 
         this.thumbLoadObserver = setupLazyListLoading(
