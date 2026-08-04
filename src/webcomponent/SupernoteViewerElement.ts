@@ -147,6 +147,32 @@ button {
     padding: 0.2em 0.6em;
     cursor: pointer;
 }
+/* Lets each slotted node lay out as its own independent toolbar flex item
+   (same "display: contents on the wrapper" trick .supernote-toolbar-group
+   uses in main.ts's own styles.css, for the same reason: without it, the
+   <slot> element itself - not each of its assigned nodes - is the flex
+   item, so multiple host-provided buttons would wrap/space as one block
+   instead of individually). See the toolbar-extra slot below and its own
+   comment for what this is for. */
+.toolbar slot {
+    display: contents;
+}
+/* Styles a host's own <button slot="toolbar-extra"> to match this
+   toolbar's built-in buttons - light DOM content projected through a slot
+   doesn't inherit this shadow root's plain button rule above on its own;
+   ::slotted() is the mechanism for reaching in from here. Only matches
+   top-level slotted nodes, which is exactly the shape a host is expected
+   to provide - see buildToolbar()'s own comment on the "toolbar-extra"
+   slot for the full contract. */
+::slotted(button) {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--supernote-viewer-border);
+    border-radius: 4px;
+    padding: 0.2em 0.6em;
+    cursor: pointer;
+}
 button[aria-pressed="true"] {
     background: var(--supernote-viewer-muted);
     opacity: 0.3;
@@ -456,13 +482,21 @@ button[aria-pressed="true"] {
    same reason: without the :not([dark])/[dark="false"] guards, a
    light-themed host on a dark-OS system would still get its page images
    inverted underneath it, same bug as the border/background colors
-   above. */
+   above.
+
+   .sidebar-list-thumb.supernote-invert-dark alongside the main page image
+   selector - confirmed as a real, reported bug (issue #192): a thumbnail's
+   own <img> gets the same class (see sidebarList.ts's buildSidebarList())
+   but this rule originally only ever matched .pages' own page images, so
+   thumbnails never inverted regardless of dark mode. */
 @media (prefers-color-scheme: dark) {
-    :host(:not([dark])) .pages .page-container > img.supernote-invert-dark {
+    :host(:not([dark])) .pages .page-container > img.supernote-invert-dark,
+    :host(:not([dark])) .sidebar-list-thumb.supernote-invert-dark {
         filter: invert(1);
     }
 }
-:host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark {
+:host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark,
+:host([dark]:not([dark="false"])) .sidebar-list-thumb.supernote-invert-dark {
     filter: invert(1);
 }
 .status {
@@ -490,6 +524,16 @@ export class SupernoteViewerElement extends HTMLElement {
         return imageDataUrl;
     };
 
+    // Overridable hook applied to each page's raw recognized text before
+    // it's shown in recognized-text mode or indexed for find-in-note -
+    // identity by default. Exists for a host with its own text
+    // post-processing step that has no portable equivalent here (e.g.
+    // SupernoteView's own custom-dictionary substitution in main.ts,
+    // processSupernoteText() - reads plugin settings this component has
+    // no concept of). Left unset, this component's recognized-text mode
+    // shows sn.pages[i].text completely unprocessed.
+    textProcessor: (text: string) => string = (text) => text;
+
     private readonly rootEl: HTMLElement;
     private pagesEl: HTMLElement | null = null;
     private toolbarEl: HTMLElement | null = null;
@@ -511,7 +555,7 @@ export class SupernoteViewerElement extends HTMLElement {
     private pagesResizeObserver: ResizeObserver | null = null;
     private fitWidthDebounceTimer?: number;
     private pageStates: ViewerPageState[] = [];
-    private currentPage = 0;
+    private currentPageIndex = 0;
     private pageIndicatorScrollScheduled = false;
     private mode: 'image' | 'text' = 'image';
     private sn: SupernoteX | null = null;
@@ -599,6 +643,19 @@ export class SupernoteViewerElement extends HTMLElement {
                 if (Number.isFinite(n)) this.goToPage(n);
             }
         }
+    }
+
+    // 1-indexed, matching goToPage()'s own convention - 0 before any note
+    // has loaded. Kept in sync by updateCurrentPageIndicator() (the same
+    // scroll-driven "what page is actually on screen" logic the toolbar's
+    // own page indicator reads), not just whatever goToPage() last jumped
+    // to - a host reading this after the user has since scrolled elsewhere
+    // gets the page actually on screen, not a stale jump target. Exposed
+    // for a host that needs "what page is the user looking at right now"
+    // for its own UI (e.g. SupernoteView's exportCurrentPageAsImage() in
+    // main.ts, which has no other way to know this from outside).
+    get currentPage(): number {
+        return this.pageStates.length === 0 ? 0 : this.currentPageIndex + 1;
     }
 
     // Scrolls to (1-indexed) `pageNumber` and forces that page's image to
@@ -815,7 +872,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.toolbarEl = null;
         this.pageIndicatorEl = null;
         this.modeToggleBtn = null;
-        this.currentPage = 0;
+        this.currentPageIndex = 0;
         this.pageIndicatorScrollScheduled = false;
         this.mode = 'image';
         this.sn = null;
@@ -880,7 +937,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.setupPageLoadObserver(sn, states);
         if (pageCount > 1) {
             this.setupPageIndicatorTracking();
-            this.buildThumbSidebar(sn, pageCount);
+            this.buildThumbSidebar(sn, pageCount, invertColorsWhenDark);
         }
         this.setupOverlayResizing(sn, states);
 
@@ -944,7 +1001,17 @@ export class SupernoteViewerElement extends HTMLElement {
 
         return placeholders.map((page) => {
             const notePage = sn.pages[page.pageNumber - 1];
-            const rawText = notePage?.text ?? '';
+            // textProcessor only ever touches this rawText/textEl copy, not
+            // the word-overlay entries built just below - those come from
+            // recognitionElements' own per-word boxes (buildWordOverlay()),
+            // an entirely separate representation of this page's text that
+            // a host's text-substitution hook (see textProcessor's own doc
+            // comment) has no way to touch per-word. Find-in-note therefore
+            // matches against the *unprocessed* OCR text even when
+            // recognized-text mode displays a processed version - a known,
+            // narrow inconsistency, not something this hook can close
+            // without per-word substitution data no host actually has.
+            const rawText = this.textProcessor(notePage?.text ?? '');
             const textEl = document.createElement('div');
             textEl.className = 'page-text';
             textEl.classList.toggle('empty', rawText.length === 0);
@@ -1133,7 +1200,7 @@ export class SupernoteViewerElement extends HTMLElement {
             }
         }
 
-        this.currentPage = current;
+        this.currentPageIndex = current;
         if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${current + 1} / ${this.pageStates.length}`;
         this.highlightThumbnail(current);
     }
@@ -1178,7 +1245,7 @@ export class SupernoteViewerElement extends HTMLElement {
     // own viewport. Only built for pageCount > 1 (see buildToolbar()) -
     // nothing to navigate to via thumbnails on a single-page document
     // either.
-    private buildThumbSidebar(sn: SupernoteX, pageCount: number): void {
+    private buildThumbSidebar(sn: SupernoteX, pageCount: number, invertColorsWhenDark: boolean): void {
         const sidebar = document.createElement('div');
         sidebar.className = 'thumb-sidebar';
         sidebar.setAttribute('part', 'thumb-sidebar');
@@ -1189,6 +1256,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbItems = buildSidebarList(sidebar, specs, {
             thumbnailAspectRatio: { width: sn.pageWidth, height: sn.pageHeight },
             onItemClick: (index) => this.goToPage(index + 1),
+            invertColorsWhenDark,
         });
 
         this.thumbLoadObserver = setupLazyListLoading(
@@ -1472,7 +1540,7 @@ export class SupernoteViewerElement extends HTMLElement {
             prevBtn.setAttribute('part', 'button');
             prevBtn.setAttribute('aria-label', 'Previous page');
             prevBtn.textContent = '↑';
-            prevBtn.addEventListener('click', () => this.goToPage(this.currentPage));
+            prevBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex));
             toolbar.appendChild(prevBtn);
 
             const indicator = document.createElement('span');
@@ -1487,7 +1555,7 @@ export class SupernoteViewerElement extends HTMLElement {
             nextBtn.setAttribute('part', 'button');
             nextBtn.setAttribute('aria-label', 'Next page');
             nextBtn.textContent = '↓';
-            nextBtn.addEventListener('click', () => this.goToPage(this.currentPage + 2));
+            nextBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex + 2));
             toolbar.appendChild(nextBtn);
         }
 
@@ -1559,6 +1627,26 @@ export class SupernoteViewerElement extends HTMLElement {
         toolbar.appendChild(findBtn);
         this.findToggleBtn = findBtn;
 
+        // Lets a host add its own controls to this toolbar - e.g.
+        // SupernoteView's "export current page as image" button in
+        // main.ts, which has no portable equivalent here (it writes to an
+        // Obsidian vault) but still deserves a real toolbar button rather
+        // than being relegated to a standalone element outside the
+        // component (a real, reported regression when this component
+        // first replaced SupernoteView's own toolbar - see issue #183's
+        // SupernoteView-swap phase). A named <slot>, not a public
+        // "addToolbarButton()" method: slotted (light DOM) content is
+        // unaffected by this element being torn down and rebuilt on every
+        // note load (see teardownForRerender()/buildViewer()) - the host
+        // adds its <button slot="toolbar-extra"> once, as an ordinary
+        // child of <supernote-viewer> itself, and the browser keeps
+        // re-projecting it into whichever toolbar currently exists with no
+        // further coordination needed on either side. See ::slotted(button)
+        // above for the matching visual styling.
+        const extraSlot = document.createElement('slot');
+        extraSlot.name = 'toolbar-extra';
+        toolbar.appendChild(extraSlot);
+
         this.rootEl.appendChild(toolbar);
         this.toolbarEl = toolbar;
     }
@@ -1624,7 +1712,10 @@ export class SupernoteViewerElement extends HTMLElement {
         this.findBarEl = bar;
     }
 
-    private toggleFindBar(): void {
+    // Public so a host can wire its own hotkey to this (e.g. SupernoteView's
+    // Mod+F Scope registration in main.ts) without needing its own separate
+    // find-bar implementation.
+    toggleFindBar(): void {
         if (this.findBarEl?.classList.contains('open')) this.closeFindBar();
         else this.openFindBar();
     }

@@ -19,6 +19,30 @@ describe('buildSidebarList', () => {
         }
     });
 
+    it('tags each thumbnail img for dark-mode inversion when invertColorsWhenDark is set', () => {
+        // Confirmed as a real, reported bug (issue #192): thumbnails never
+        // inverted regardless of dark mode, since this class was never
+        // applied to them at all - only main page images got it (see
+        // noteRenderer.ts's own buildNotePagePlaceholders()).
+        const container = document.createElement('div');
+        const items = buildSidebarList(
+            container,
+            [{ label: '1' }, { label: '2' }],
+            { thumbnailAspectRatio: { width: 100, height: 200 }, invertColorsWhenDark: true },
+        );
+        for (const item of items) {
+            expect(item.imgEl.classList.contains('supernote-invert-dark')).toBe(true);
+        }
+    });
+
+    it('does not tag thumbnails for inversion when invertColorsWhenDark is omitted', () => {
+        const container = document.createElement('div');
+        const [item] = buildSidebarList(container, [{ label: '1' }], {
+            thumbnailAspectRatio: { width: 100, height: 200 },
+        });
+        expect(item.imgEl.classList.contains('supernote-invert-dark')).toBe(false);
+    });
+
     it('renders a plain label (no checkbox) when checkbox is omitted', () => {
         const container = document.createElement('div');
         const [item] = buildSidebarList(container, [{ label: 'Page 1' }], {

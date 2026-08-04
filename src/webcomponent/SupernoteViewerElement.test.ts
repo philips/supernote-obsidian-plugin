@@ -83,6 +83,32 @@ describe('<supernote-viewer>', () => {
         // test sets up.
     });
 
+    it('projects a light-DOM child slotted as toolbar-extra into the toolbar', async () => {
+        // Lets a host add its own controls (e.g. SupernoteView's "export
+        // current page as image" button in main.ts, which writes to an
+        // Obsidian vault - nothing this portable component can do itself)
+        // without needing an imperative "addToolbarButton()" API - see
+        // buildToolbar()'s own comment on this slot for the full
+        // rationale. Added *before* noteData is set, matching how a real
+        // host builds it (append once, right after creating the element),
+        // to confirm the slotted content survives the element's own
+        // subsequent build/render rather than only working if added after.
+        const el = createViewer();
+        const btn = document.createElement('button');
+        btn.slot = 'toolbar-extra';
+        btn.textContent = 'Export';
+        el.appendChild(btn);
+        document.body.appendChild(el);
+
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        await loaded;
+
+        const slot = el.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="toolbar-extra"]');
+        expect(slot).toBeTruthy();
+        expect(slot!.assignedElements()).toEqual([btn]);
+    });
+
     it('includes each page\'s own PAGEID in the supernote-load event, for a host resolving a same-named link-click', async () => {
         // A host embedding this component (e.g. SupernoteEmbed in main.ts)
         // knows its own file's name, which this component deliberately
@@ -138,6 +164,7 @@ describe('<supernote-viewer>', () => {
         pagesEl.dispatchEvent(new Event('scroll'));
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
         expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
+        expect(el.currentPage).toBe(1);
 
         // Now page 2 is the one at the top instead (a real fast scroll
         // jumping straight past page 1, not an intermediate observer batch).
@@ -146,6 +173,34 @@ describe('<supernote-viewer>', () => {
         pagesEl.dispatchEvent(new Event('scroll'));
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
         expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('2 / 2');
+        expect(el.currentPage).toBe(2);
+    });
+
+    it('currentPage is 0 before any note has loaded', () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        expect(el.currentPage).toBe(0);
+    });
+
+    it('textProcessor transforms recognized text shown in text mode, but not word-overlay/find-in-note\'s own index', async () => {
+        // See textProcessor's own doc comment: it only ever touches the
+        // rawText/textEl copy built in wrapPageStates(), not the separate
+        // word-overlay entries built from recognitionElements' own
+        // per-word boxes - a host substituting text (e.g. SupernoteView's
+        // custom-dictionary feature in main.ts) has no per-word
+        // substitution data, so find-in-note keeps matching the
+        // unprocessed OCR text even though recognized-text mode displays
+        // the processed version.
+        const el = createViewer();
+        el.textProcessor = (text) => text.toUpperCase();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('rtr.note');
+        await loaded;
+
+        const textEl = el.shadowRoot!.querySelector('.page-text');
+        expect(textEl?.textContent).toBe(textEl?.textContent?.toUpperCase());
+        expect(textEl?.textContent?.length).toBeGreaterThan(0);
     });
 
     it('goToPage() forces that page to load immediately, once, idempotently', async () => {
@@ -233,6 +288,25 @@ describe('<supernote-viewer>', () => {
             expect(items).toHaveLength(2);
             for (const item of Array.from(items)) {
                 expect(item.querySelector<HTMLImageElement>('.sidebar-list-thumb')?.style.aspectRatio).toBe('1404 / 1872');
+            }
+        });
+
+        it('tags thumbnail images for dark-mode inversion when invert-dark is set, same as main page images', async () => {
+            // Confirmed as a real, reported bug (issue #192): only main page
+            // images (buildNotePagePlaceholders() in noteRenderer.ts) got
+            // the supernote-invert-dark class - thumbnails never did, so
+            // they never inverted regardless of dark mode.
+            const el = createViewer();
+            el.setAttribute('invert-dark', '');
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            const thumbs = el.shadowRoot!.querySelectorAll<HTMLImageElement>('.sidebar-list-thumb');
+            expect(thumbs).toHaveLength(2);
+            for (const thumb of Array.from(thumbs)) {
+                expect(thumb.classList.contains('supernote-invert-dark')).toBe(true);
             }
         });
 
