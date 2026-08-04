@@ -382,6 +382,8 @@ export class SupernoteViewerElement extends HTMLElement {
     // for why loading needs one debounce for "has scrolling settled" rather
     // than each page tracking its own independently.
     private loadCheckDebounceTimer?: number;
+    // Manual debugging aid only - see debugLoopEvictReload().
+    private debugLoopTimer?: number;
     private resizeObserver: ResizeObserver | null = null;
     private pageStates: ViewerPageState[] = [];
     private currentPage = 0;
@@ -439,6 +441,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.resizeObserver?.disconnect();
         this.thumbLoadObserver?.disconnect();
         window.clearTimeout(this.loadCheckDebounceTimer);
+        window.clearInterval(this.debugLoopTimer);
     }
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -521,6 +524,51 @@ export class SupernoteViewerElement extends HTMLElement {
                 `naturalWidth=${img.naturalWidth} naturalHeight=${img.naturalHeight} complete=${img.complete}`,
             );
         }
+    }
+
+    // Manual debugging aid for a reliably-seen but hard-to-catch
+    // broken-image report: repeatedly loads then evicts one page on a fixed
+    // interval, isolating the load/evict *logic* itself from any real
+    // scrolling, so a user can just watch (or screen-record) that one page
+    // without needing to reproduce a specific scroll gesture at all. Each
+    // cycle goes through the real rasterizePage()/worker pipeline (eviction
+    // via removeAttribute() means there's no cached data URL to reuse - see
+    // evictNotePageImage()'s own comment), so this genuinely re-exercises
+    // the browser's own decode path every time, in case a large data URL
+    // assigned to img.src shows as transiently "broken" while still
+    // decoding rather than only on a genuine failed load (an open
+    // hypothesis raised against this specific report). If that hypothesis
+    // is right, the existing <img> `error` listener in
+    // buildNotePagePlaceholders() should stay silent throughout even if the
+    // image looks broken on screen - a failed load isn't the only way to
+    // get a broken-image icon on screen; a decode error while the src IS
+    // valid can also blank the image before the natural size is known,
+    // though that's not the same DOM state a *failed* load produces. Call
+    // from DevTools:
+    //   document.querySelectorAll('supernote-viewer').forEach(v => v.debugLoopEvictReload(1))
+    // Stop with:
+    //   document.querySelectorAll('supernote-viewer').forEach(v => v.debugStopLoop())
+    debugLoopEvictReload(pageNumber: number, intervalMs = 800): void {
+        if (!this.sn) return;
+        const sn = this.sn;
+        const state = this.pageStates[pageNumber - 1];
+        if (!state) return;
+        window.clearInterval(this.debugLoopTimer);
+        let evictNext = state.loaded;
+        this.debugLoopTimer = window.setInterval(() => {
+            if (evictNext) {
+                this.evictPageImage(sn, state);
+            } else {
+                state.visible = true;
+                void this.ensurePageImageLoaded(sn, state);
+            }
+            evictNext = !evictNext;
+        }, intervalMs);
+    }
+
+    debugStopLoop(): void {
+        window.clearInterval(this.debugLoopTimer);
+        this.debugLoopTimer = undefined;
     }
 
     // Coalesces a burst of synchronous attribute/property sets (e.g. setting
@@ -615,6 +663,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbLoadObserver?.disconnect();
         this.thumbLoadObserver = null;
         window.clearTimeout(this.loadCheckDebounceTimer);
+        window.clearInterval(this.debugLoopTimer);
         this.pageStates = [];
         this.pagesEl = null;
         this.toolbarEl = null;
