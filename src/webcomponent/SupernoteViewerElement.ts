@@ -503,6 +503,26 @@ export class SupernoteViewerElement extends HTMLElement {
         if (!state.loaded) void this.ensurePageImageLoaded(this.sn, state);
     }
 
+    // Manual debugging aid for a report that's hard to reproduce
+    // second-hand (e.g. a broken-image icon or a page that won't reload
+    // seen on someone else's machine) - dumps every page's own load/
+    // visibility bookkeeping alongside its <img>'s actual DOM state, so a
+    // mismatch between the two (the most likely shape of that kind of bug)
+    // is visible directly rather than needing to guess from a screenshot.
+    // Call from the browser DevTools console, e.g.:
+    //   document.querySelectorAll('supernote-viewer').forEach(v => v.debugDumpPageStates())
+    debugDumpPageStates(): void {
+        console.debug(`supernote-viewer: ${this.pageStates.length} page(s), mode=${this.mode}`);
+        for (const state of this.pageStates) {
+            const img = state.imageEl;
+            console.debug(
+                `  page ${state.pageNumber}: loaded=${state.loaded} visible=${state.visible} ` +
+                `img.hasAttribute('src')=${img.hasAttribute('src')} img.src=${JSON.stringify(img.src.slice(0, 50))} ` +
+                `naturalWidth=${img.naturalWidth} naturalHeight=${img.naturalHeight} complete=${img.complete}`,
+            );
+        }
+    }
+
     // Coalesces a burst of synchronous attribute/property sets (e.g. setting
     // `src` right after creating the element, before it's connected) into a
     // single render() call, deferred to a microtask so every attribute set
@@ -980,6 +1000,7 @@ export class SupernoteViewerElement extends HTMLElement {
     // a slow rasterization can't be triggered twice for the same page.
     private async ensurePageImageLoaded(sn: SupernoteX, state: ViewerPageState): Promise<void> {
         state.loaded = true;
+        console.debug(`supernote-viewer: loading page ${state.pageNumber}`);
         try {
             const imageDataUrl = await this.rasterizePage(sn, state.pageNumber);
             // The page can easily have scrolled back out of view while this
@@ -1000,9 +1021,11 @@ export class SupernoteViewerElement extends HTMLElement {
             // deliberate jump never trips this guard.
             if (!state.visible) {
                 state.loaded = false;
+                console.debug(`supernote-viewer: discarding page ${state.pageNumber}'s load - scrolled away while rasterizing`);
                 return;
             }
             fillNotePagePlaceholder(state, imageDataUrl);
+            console.debug(`supernote-viewer: page ${state.pageNumber} loaded, img.src set (length ${imageDataUrl.length})`);
         } catch (err) {
             // Allows a retry on the next intersection - a transient
             // rasterization failure shouldn't permanently blank this page.
@@ -1022,6 +1045,7 @@ export class SupernoteViewerElement extends HTMLElement {
     // at file-open time).
     private evictPageImage(sn: SupernoteX, state: ViewerPageState): void {
         if (!state.loaded) return;
+        console.debug(`supernote-viewer: evicting page ${state.pageNumber}`);
         evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
         state.loaded = false;
     }
