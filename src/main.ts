@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform } from 'obsidian';
+import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
 import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -679,10 +679,23 @@ export class SupernoteView extends FileView {
 		// light-DOM child of `viewer`, unaffected by the component
 		// rebuilding its own shadow-root toolbar on every note load - no
 		// re-adding needed beyond this one call per onLoadFile().
+		//
+		// Uses Obsidian's own icon set (setIcon(), Lucide), not the
+		// component's own inline-SVG icons (issue #197) - this button is
+		// SupernoteView's own addition, built entirely within Obsidian's
+		// context (unlike the component's toolbar, which has no Obsidian
+		// dependency and bakes its icons in for exactly that reason - see
+		// SupernoteViewerElement.ts's own icon* functions), so there's no
+		// portability reason not to use the real thing here. 'download',
+		// cls: 'clickable-icon' - same icon name and pattern this button
+		// had before the #183 web-component swap, and the same pattern
+		// SupernoteAtelierView's own toolbar buttons already use
+		// (atelierView.ts).
 		const exportPageBtn = viewer.createEl('button', {
-			text: 'Export',
+			cls: 'clickable-icon',
 			attr: { type: 'button', slot: 'toolbar-extra', 'aria-label': 'Export current page as image' },
 		});
+		setIcon(exportPageBtn, 'download');
 		exportPageBtn.addEventListener('click', () => {
 			this.exportCurrentPageAsImage().catch((err: unknown) => {
 				new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
