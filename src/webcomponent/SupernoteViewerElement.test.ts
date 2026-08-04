@@ -615,6 +615,47 @@ describe('<supernote-viewer>', () => {
             expect(label.textContent).toBe('105%');
         });
 
+        it('two-finger touch pinch zooms (issue #202)', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
+            resetBtn.click();
+            expect(label.textContent).toBe('100%');
+
+            const touch = (id: number, x: number, y: number) =>
+                new Touch({ identifier: id, target: pagesEl, clientX: x, clientY: y });
+
+            // Two touches 100px apart...
+            pagesEl.dispatchEvent(
+                new TouchEvent('touchstart', { touches: [touch(1, 0, 0), touch(2, 100, 0)], cancelable: true }),
+            );
+            // ...spread to 200px apart - double the starting distance, so
+            // zoom should double from its 100% starting point.
+            const move = new TouchEvent('touchmove', {
+                touches: [touch(1, -50, 0), touch(2, 150, 0)],
+                cancelable: true,
+            });
+            pagesEl.dispatchEvent(move);
+
+            expect(move.defaultPrevented).toBe(true);
+            expect(label.textContent).toBe('200%');
+        });
+
+        it('a single-finger touchmove does not pinch-zoom', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
+            resetBtn.click();
+
+            const touch = (y: number) => new Touch({ identifier: 1, target: pagesEl, clientX: 0, clientY: y });
+            pagesEl.dispatchEvent(new TouchEvent('touchstart', { touches: [touch(100)], cancelable: true }));
+            pagesEl.dispatchEvent(new TouchEvent('touchmove', { touches: [touch(50)], cancelable: true }));
+
+            expect(label.textContent).toBe('100%');
+        });
+
         it('re-enabling fit-width recomputes from .pages\' current width', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
@@ -764,6 +805,73 @@ describe('<supernote-viewer>', () => {
         expect(el.shadowRoot!.querySelector('.find-bar')).toBeTruthy();
         expect(el.shadowRoot!.querySelector('button[aria-label="Find in note"]')).toBeTruthy();
         expect(el.shadowRoot!.querySelector('.page-jump-input')).toBeNull();
+    });
+
+    describe('touch scroll boundary containment (issue #202)', () => {
+        async function createLoadedViewer() {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+            return el;
+        }
+
+        it('prevents default on a single-finger pull past the top boundary', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            // happy-dom has no real layout - scrollTop/scrollHeight/
+            // clientHeight all default to 0, which (0 <= 0, 0+0 >= 0) looks
+            // like both the top *and* bottom boundary at once. Stubbed
+            // explicitly to a real mid-scroll position so this test
+            // exercises the "at top" branch specifically, not an artifact
+            // of the unstubbed defaults.
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 0, configurable: true });
+            Object.defineProperty(pagesEl, 'clientHeight', { value: 400, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollHeight', { value: 2000, configurable: true });
+
+            const touch = (y: number) => new Touch({ identifier: 1, target: pagesEl, clientX: 0, clientY: y });
+            pagesEl.dispatchEvent(new TouchEvent('touchstart', { touches: [touch(100)], cancelable: true }));
+            // Finger moves down (clientY increases) while already scrolled
+            // to the top - the exact "pull past the boundary" motion that
+            // rubber-bands/chains outward without this fix.
+            const pullDown = new TouchEvent('touchmove', { touches: [touch(150)], cancelable: true });
+            pagesEl.dispatchEvent(pullDown);
+
+            expect(pullDown.defaultPrevented).toBe(true);
+        });
+
+        it('prevents default on a single-finger pull past the bottom boundary', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 1600, configurable: true });
+            Object.defineProperty(pagesEl, 'clientHeight', { value: 400, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollHeight', { value: 2000, configurable: true });
+
+            const touch = (y: number) => new Touch({ identifier: 1, target: pagesEl, clientX: 0, clientY: y });
+            pagesEl.dispatchEvent(new TouchEvent('touchstart', { touches: [touch(150)], cancelable: true }));
+            // Finger moves up (clientY decreases) while already scrolled to
+            // the bottom.
+            const pullUp = new TouchEvent('touchmove', { touches: [touch(100)], cancelable: true });
+            pagesEl.dispatchEvent(pullUp);
+
+            expect(pullUp.defaultPrevented).toBe(true);
+        });
+
+        it('does not prevent default for an ordinary in-range scroll', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            Object.defineProperty(pagesEl, 'scrollTop', { value: 800, configurable: true });
+            Object.defineProperty(pagesEl, 'clientHeight', { value: 400, configurable: true });
+            Object.defineProperty(pagesEl, 'scrollHeight', { value: 2000, configurable: true });
+
+            const touch = (y: number) => new Touch({ identifier: 1, target: pagesEl, clientX: 0, clientY: y });
+            pagesEl.dispatchEvent(new TouchEvent('touchstart', { touches: [touch(150)], cancelable: true }));
+            const move = new TouchEvent('touchmove', { touches: [touch(100)], cancelable: true });
+            pagesEl.dispatchEvent(move);
+
+            expect(move.defaultPrevented).toBe(false);
+        });
     });
 
     describe('find in note', () => {
