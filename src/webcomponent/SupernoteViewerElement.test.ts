@@ -889,6 +889,16 @@ describe('<supernote-viewer>', () => {
             target.dispatchEvent(new TouchEvent('touchstart', { touches: [touch], cancelable: true }));
         }
 
+        // The attribute belongs on the *host* element (`el` - what
+        // Obsidian's own retargeted event.target/targetNode actually
+        // resolves to from outside this shadow root), not `.root` inside
+        // the shadow root - see setupHostGestureOptOut()'s own doc comment
+        // for why the first version of this fix, checked here instead,
+        // passed every one of these tests yet still did nothing on a real
+        // device. The touchstart is still dispatched on `.root` (the
+        // listener itself lives there, and the touch still bubbles to it
+        // within the same shadow tree) - only the assertion target changed.
+
         it('sets data-ignore-swipe when scrolled below the top (blocks the palette-pull gesture)', async () => {
             const el = await createLoadedViewer();
             const rootEl = el.shadowRoot!.querySelector('.root') as HTMLElement;
@@ -897,7 +907,7 @@ describe('<supernote-viewer>', () => {
 
             touchstart(rootEl);
 
-            expect(rootEl.dataset.ignoreSwipe).toBe('true');
+            expect(el.dataset.ignoreSwipe).toBe('true');
         });
 
         it('clears data-ignore-swipe when at the very top and not horizontally scrollable', async () => {
@@ -910,7 +920,7 @@ describe('<supernote-viewer>', () => {
 
             touchstart(rootEl);
 
-            expect(rootEl.hasAttribute('data-ignore-swipe')).toBe(false);
+            expect(el.hasAttribute('data-ignore-swipe')).toBe(false);
         });
 
         it('sets data-ignore-swipe when horizontally scrollable and not at an edge (blocks the sidebar-swipe gesture)', async () => {
@@ -924,7 +934,7 @@ describe('<supernote-viewer>', () => {
 
             touchstart(rootEl);
 
-            expect(rootEl.dataset.ignoreSwipe).toBe('true');
+            expect(el.dataset.ignoreSwipe).toBe('true');
         });
 
         it('sets data-ignore-swipe for horizontal overflow regardless of scroll position (no single "edge" - a sidebar swipe can go either way)', async () => {
@@ -938,8 +948,22 @@ describe('<supernote-viewer>', () => {
 
             touchstart(rootEl);
 
-            expect(rootEl.dataset.ignoreSwipe).toBe('true');
+            expect(el.dataset.ignoreSwipe).toBe('true');
         });
+
+        // A test asserting the actual cross-shadow-boundary retargeting
+        // Obsidian's own listener depends on (dispatch inside the shadow
+        // root with composed: true, observe event.target from a listener
+        // on `document`, expect it to resolve to `el`) was tried here and
+        // dropped: happy-dom does not implement shadow DOM event
+        // retargeting at all (confirmed directly - a bare
+        // Event/EventTarget retargeting check against a minimal shadow
+        // host/inner-node pair, with no supernote-viewer involved at all,
+        // still failed), so it could never pass here regardless of
+        // whether the underlying fix is correct. The real-browser
+        // (Playwright/Chromium) verification for this fix lives in this
+        // session's own history, not as an automated test - happy-dom
+        // genuinely cannot exercise this specific DOM behavior.
     });
 
     describe('find in note', () => {
