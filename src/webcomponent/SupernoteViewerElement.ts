@@ -1756,16 +1756,16 @@ export class SupernoteViewerElement extends HTMLElement {
 
     // Opts this whole component out of Obsidian's own mobile navigation
     // gestures - pull-down-to-open-command-palette and swipe-to-open-
-    // sidebar (issue #204, reported as still broken even after
-    // setupScrollBoundaryContainment() above) - confirmed by reading
-    // Obsidian's own app.js: both gestures are recognized by one shared
-    // generic swipe-detector registered on the whole workspace container,
-    // which walks a touch's ancestor chain via plain DOM `.parentElement`
-    // to decide whether some scrollable container already has room to
-    // consume the gesture instead (and if so, backs off - this is exactly
-    // how its own PDF viewer avoids the problem, since a PDF's scrollable
-    // container sits in the ordinary light DOM where that walk works
-    // fine). That walk cannot see past a shadow root at all -
+    // sidebar (issue #204, reported as still broken on a real device even
+    // after this method's own first attempt - see below) - confirmed by
+    // reading Obsidian's own app.js: both gestures are recognized by one
+    // shared generic swipe-detector registered on the whole workspace
+    // container, which walks a touch's ancestor chain via plain DOM
+    // `.parentElement` to decide whether some scrollable container already
+    // has room to consume the gesture instead (and if so, backs off - this
+    // is exactly how its own PDF viewer avoids the problem, since a PDF's
+    // scrollable container sits in the ordinary light DOM where that walk
+    // works fine). That walk cannot see past a shadow root at all -
     // `Node.parentElement` (unlike `.parentNode`) is null for a shadow
     // root's own top-level children once there's nowhere left to go
     // *within* the shadow tree - so it can never discover that .pages,
@@ -1774,17 +1774,37 @@ export class SupernoteViewerElement extends HTMLElement {
     // genuinely anything left to scroll.
     //
     // Obsidian's core does honor one specific escape hatch for exactly
-    // this situation: a touch's target chain (walked via `.parentNode`,
-    // which - unlike `.parentElement` - does keep ascending correctly up
-    // to a shadow root's own boundary) carrying a truthy
+    // this situation: a touch's target chain carrying a truthy
     // `dataset.ignoreSwipe` anywhere along it makes the gesture recognizer
     // bail out entirely for that touch, before it ever looks at
-    // scrollability at all. Toggled fresh on every touchstart (not left
-    // permanently on) so this only opts out while .pages genuinely still
-    // has relevant scroll room - once it doesn't, the attribute is cleared
-    // and Obsidian's own gesture takes over exactly as it would for its
-    // own exhausted PDF viewer (e.g. the command palette pull activating
-    // only once you've reached the first page).
+    // scrollability at all. The chain it walks, though, starts at
+    // `event.targetNode` - confirmed, by extracting and reading Obsidian's
+    // own bundle directly, to be nothing more than a bare alias for
+    // `event.target` (defined once, in a small `enhance.js` bootstrap file
+    // shipped alongside app.js: `Object.defineProperty(UIEvent.prototype,
+    // "targetNode", {get: function(){return this.target}})`) - and
+    // `event.target`, for a touch that originates *inside* a shadow root,
+    // is retargeted (standard DOM behavior, for encapsulation) to the
+    // shadow *host* element for any listener sitting outside that root,
+    // exactly Obsidian's workspace-level listener here. This method's own
+    // first attempt set the attribute on `this.rootEl` - inside the shadow
+    // root - which the resulting `.parentNode` walk, starting from the
+    // *retargeted* (light-DOM, outside-the-shadow-root) node, can never
+    // reach at all: confirmed as the reason the first fix passed every
+    // test written against this component's own internals yet still did
+    // nothing on a real device, since nothing in that testing ever
+    // exercised a touch's target crossing back out through the shadow
+    // boundary the way Obsidian's own listener actually observes it. The
+    // attribute has to live on `this` (the shadow *host*, i.e. this
+    // element itself) - the one node every retargeted `event.target`
+    // still resolves to correctly - not anywhere inside the shadow root.
+    //
+    // Toggled fresh on every touchstart (not left permanently on) so this
+    // only opts out while .pages genuinely still has relevant scroll room
+    // - once it doesn't, the attribute is cleared and Obsidian's own
+    // gesture takes over exactly as it would for its own exhausted PDF
+    // viewer (e.g. the command palette pull activating only once you've
+    // reached the first page).
     private setupHostGestureOptOut(): void {
         this.rootEl.addEventListener('touchstart', () => {
             const pagesEl = this.pagesEl;
@@ -1827,8 +1847,13 @@ export class SupernoteViewerElement extends HTMLElement {
             // confirmed directly against Obsidian's own app.js, which sets
             // exactly this same literal string on its own swipe-exempt
             // elements (e.g. its range-slider input).
-            if (blocksPalettePull || blocksSidebarSwipe) this.rootEl.setAttribute('data-ignore-swipe', 'true');
-            else this.rootEl.removeAttribute('data-ignore-swipe');
+            //
+            // Set on `this` (the shadow host), not `this.rootEl` (inside
+            // the shadow root) - see this method's own doc comment for why
+            // the latter is invisible to Obsidian's own retargeted-target
+            // traversal.
+            if (blocksPalettePull || blocksSidebarSwipe) this.setAttribute('data-ignore-swipe', 'true');
+            else this.removeAttribute('data-ignore-swipe');
         }, { passive: true });
     }
 
