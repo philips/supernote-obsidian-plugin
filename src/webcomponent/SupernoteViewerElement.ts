@@ -316,26 +316,38 @@ button[aria-pressed="true"] {
 .pages.mode-text .page-container > img {
     display: none;
 }
-/* !important, not just specificity, because the width this overrides is
-   an *inline* style (buildNotePagePlaceholders()/fillNotePagePlaceholder()
-   in noteRenderer.ts, set directly on .style.width - no selector can ever
-   outrank that without it). That inline width is a placeholder-sizing
-   trick for the still-hidden <img> above (see those functions' own
-   comments), reserving a full-width box before the real image loads so
-   .pages' scroll height is correct - but text mode never shows that img
-   at all, and the visible .page-text is already capped at max-width: 40em
-   with nothing to reserve a box for. Left alone, a page's background
-   image load (still happening even in text mode - the lazy-load observer
-   doesn't check which mode is active) clears that inline width the
-   moment it finishes, which - since .pages uses align-items: center -
-   visibly recentered every .page-text box from full-width down to its
-   real, narrower width: confirmed as a real, reported bug, its timing
-   exactly matching the "page N loaded" log line. Forcing auto
-   unconditionally here means .page-container's width is already
-   text-content-sized before that clear ever happens, so nothing moves
-   when it does. */
+/* Left-aligned, not centered (.pages' own align-items: center, meant for
+   image mode's varying page widths) - confirmed as a real, reported
+   readability complaint: centered text columns whose width also varies
+   per page (see the fixed-width rule just below for why that varied)
+   made scrolling through recognized text distracting, each page
+   drifting to a different horizontal position as well as a different
+   width. */
+.pages.mode-text {
+    align-items: flex-start;
+}
+/* A fixed width, not auto - !important, not just specificity, because
+   this overrides an *inline* style (buildNotePagePlaceholders()/
+   fillNotePagePlaceholder() in noteRenderer.ts, set directly on
+   .style.width - no selector can ever outrank that without it). That
+   inline width is a placeholder-sizing trick for the still-hidden <img>
+   above (see those functions' own comments), reserving a full-width box
+   before the real image loads so .pages' scroll height is correct - but
+   text mode never shows that img at all.
+   Originally just "auto" here (shrink-to-fit .page-text's own content),
+   which did stop a background image load from visibly resizing this
+   box (see that fix's own history) but turned out to have its own
+   readability problem: shrink-to-fit sizes to each page's own longest
+   wrapped line, so a page of short lines produced a genuinely narrower
+   box than a page that wrapped all the way out to .page-text's
+   max-width: 40em below - a different width per page, confirmed as a
+   real, reported distraction while scrolling. A fixed width - matching
+   that same max-width, so .page-text (block, no explicit width of its
+   own) fills it exactly via ordinary block layout, capped again by
+   min(...,100%) so a narrow host viewport isn't overflowed - gives
+   every page the same box regardless of its own text's line lengths. */
 .pages.mode-text .page-container {
-    width: auto !important;
+    width: min(40em, 100%) !important;
 }
 .pages .page-container > .page-text {
     display: none;
