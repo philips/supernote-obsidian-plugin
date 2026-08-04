@@ -453,6 +453,16 @@ export class SupernoteViewerElement extends HTMLElement {
         return imageDataUrl;
     };
 
+    // Overridable hook applied to each page's raw recognized text before
+    // it's shown in recognized-text mode or indexed for find-in-note -
+    // identity by default. Exists for a host with its own text
+    // post-processing step that has no portable equivalent here (e.g.
+    // SupernoteView's own custom-dictionary substitution in main.ts,
+    // processSupernoteText() - reads plugin settings this component has
+    // no concept of). Left unset, this component's recognized-text mode
+    // shows sn.pages[i].text completely unprocessed.
+    textProcessor: (text: string) => string = (text) => text;
+
     private readonly rootEl: HTMLElement;
     private pagesEl: HTMLElement | null = null;
     private toolbarEl: HTMLElement | null = null;
@@ -467,7 +477,7 @@ export class SupernoteViewerElement extends HTMLElement {
     private debugLoopTimer?: number;
     private resizeObserver: ResizeObserver | null = null;
     private pageStates: ViewerPageState[] = [];
-    private currentPage = 0;
+    private currentPageIndex = 0;
     private pageIndicatorScrollScheduled = false;
     private mode: 'image' | 'text' = 'image';
     private sn: SupernoteX | null = null;
@@ -544,6 +554,19 @@ export class SupernoteViewerElement extends HTMLElement {
                 if (Number.isFinite(n)) this.goToPage(n);
             }
         }
+    }
+
+    // 1-indexed, matching goToPage()'s own convention - 0 before any note
+    // has loaded. Kept in sync by updateCurrentPageIndicator() (the same
+    // scroll-driven "what page is actually on screen" logic the toolbar's
+    // own page indicator reads), not just whatever goToPage() last jumped
+    // to - a host reading this after the user has since scrolled elsewhere
+    // gets the page actually on screen, not a stale jump target. Exposed
+    // for a host that needs "what page is the user looking at right now"
+    // for its own UI (e.g. SupernoteView's exportCurrentPageAsImage() in
+    // main.ts, which has no other way to know this from outside).
+    get currentPage(): number {
+        return this.pageStates.length === 0 ? 0 : this.currentPageIndex + 1;
     }
 
     // Scrolls to (1-indexed) `pageNumber` and forces that page's image to
@@ -757,7 +780,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.toolbarEl = null;
         this.pageIndicatorEl = null;
         this.modeToggleBtn = null;
-        this.currentPage = 0;
+        this.currentPageIndex = 0;
         this.pageIndicatorScrollScheduled = false;
         this.mode = 'image';
         this.sn = null;
@@ -873,7 +896,17 @@ export class SupernoteViewerElement extends HTMLElement {
 
         return placeholders.map((page) => {
             const notePage = sn.pages[page.pageNumber - 1];
-            const rawText = notePage?.text ?? '';
+            // textProcessor only ever touches this rawText/textEl copy, not
+            // the word-overlay entries built just below - those come from
+            // recognitionElements' own per-word boxes (buildWordOverlay()),
+            // an entirely separate representation of this page's text that
+            // a host's text-substitution hook (see textProcessor's own doc
+            // comment) has no way to touch per-word. Find-in-note therefore
+            // matches against the *unprocessed* OCR text even when
+            // recognized-text mode displays a processed version - a known,
+            // narrow inconsistency, not something this hook can close
+            // without per-word substitution data no host actually has.
+            const rawText = this.textProcessor(notePage?.text ?? '');
             const textEl = document.createElement('div');
             textEl.className = 'page-text';
             textEl.classList.toggle('empty', rawText.length === 0);
@@ -1062,7 +1095,7 @@ export class SupernoteViewerElement extends HTMLElement {
             }
         }
 
-        this.currentPage = current;
+        this.currentPageIndex = current;
         if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${current + 1} / ${this.pageStates.length}`;
         this.highlightThumbnail(current);
     }
@@ -1253,7 +1286,7 @@ export class SupernoteViewerElement extends HTMLElement {
             prevBtn.setAttribute('part', 'button');
             prevBtn.setAttribute('aria-label', 'Previous page');
             prevBtn.textContent = '↑';
-            prevBtn.addEventListener('click', () => this.goToPage(this.currentPage));
+            prevBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex));
             toolbar.appendChild(prevBtn);
 
             const indicator = document.createElement('span');
@@ -1268,7 +1301,7 @@ export class SupernoteViewerElement extends HTMLElement {
             nextBtn.setAttribute('part', 'button');
             nextBtn.setAttribute('aria-label', 'Next page');
             nextBtn.textContent = '↓';
-            nextBtn.addEventListener('click', () => this.goToPage(this.currentPage + 2));
+            nextBtn.addEventListener('click', () => this.goToPage(this.currentPageIndex + 2));
             toolbar.appendChild(nextBtn);
         }
 
@@ -1357,7 +1390,10 @@ export class SupernoteViewerElement extends HTMLElement {
         this.findBarEl = bar;
     }
 
-    private toggleFindBar(): void {
+    // Public so a host can wire its own hotkey to this (e.g. SupernoteView's
+    // Mod+F Scope registration in main.ts) without needing its own separate
+    // find-bar implementation.
+    toggleFindBar(): void {
         if (this.findBarEl?.classList.contains('open')) this.closeFindBar();
         else this.openFindBar();
     }

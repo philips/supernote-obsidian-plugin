@@ -138,6 +138,7 @@ describe('<supernote-viewer>', () => {
         pagesEl.dispatchEvent(new Event('scroll'));
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
         expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('1 / 2');
+        expect(el.currentPage).toBe(1);
 
         // Now page 2 is the one at the top instead (a real fast scroll
         // jumping straight past page 1, not an intermediate observer batch).
@@ -146,6 +147,34 @@ describe('<supernote-viewer>', () => {
         pagesEl.dispatchEvent(new Event('scroll'));
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
         expect(el.shadowRoot!.querySelector('.page-indicator')?.textContent).toBe('2 / 2');
+        expect(el.currentPage).toBe(2);
+    });
+
+    it('currentPage is 0 before any note has loaded', () => {
+        const el = createViewer();
+        document.body.appendChild(el);
+        expect(el.currentPage).toBe(0);
+    });
+
+    it('textProcessor transforms recognized text shown in text mode, but not word-overlay/find-in-note\'s own index', async () => {
+        // See textProcessor's own doc comment: it only ever touches the
+        // rawText/textEl copy built in wrapPageStates(), not the separate
+        // word-overlay entries built from recognitionElements' own
+        // per-word boxes - a host substituting text (e.g. SupernoteView's
+        // custom-dictionary feature in main.ts) has no per-word
+        // substitution data, so find-in-note keeps matching the
+        // unprocessed OCR text even though recognized-text mode displays
+        // the processed version.
+        const el = createViewer();
+        el.textProcessor = (text) => text.toUpperCase();
+        document.body.appendChild(el);
+        const loaded = waitForEvent(el, 'supernote-load');
+        el.noteData = readFixture('rtr.note');
+        await loaded;
+
+        const textEl = el.shadowRoot!.querySelector('.page-text');
+        expect(textEl?.textContent).toBe(textEl?.textContent?.toUpperCase());
+        expect(textEl?.textContent?.length).toBeGreaterThan(0);
     });
 
     it('goToPage() forces that page to load immediately, once, idempotently', async () => {

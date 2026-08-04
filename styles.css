@@ -18,121 +18,34 @@
     filter: invert(1);
 }
 
-.theme-dark canvas.supernote-invert-dark {
-    filter: invert(1);
-}
-
-.theme-light canvas.supernote-invert-light {
-    filter: invert(1);
-}
-
 .supernote-view-content button.mod-cta,
 .supernote-import-modal button.mod-cta {
     display: block;
 }
 
-div.page-container {
-    display: inline-block;
-    vertical-align: top;
-    margin: 1.2em;
-}
-
-/* Issue #148: 1.2em of margin on every side of every page is real, wasted
-   width on a small screen already tight for legibility of handwritten
-   content - a phone doesn't have the spare width a desktop window does.
-   Left alone elsewhere; SupernoteView.onOpen() reduces its own ancestor
-   .view-content padding the same way, scoped the same way. */
-body.is-mobile div.page-container {
-    margin: 0.3em;
-}
-
-div.supernote-canvas-wrap {
-    position: relative;
-    display: inline-block;
-    transform-origin: top left;
-}
-
-div.supernote-canvas-wrap canvas {
-    display: block;
-    max-width: 100%;
-}
-
-/* Mirrors pdf.js's own text_layer_builder.css: canvas carries the pixels,
-   this transparent layer carries selectable/searchable text on top of it.
-   pointer-events: none on the container (re-enabled per-span below) matters
-   beyond just this layer: without it, this fully covers every page's canvas
-   (position: absolute; inset: 0) and, being on top in paint order, would
-   swallow every mouse event anywhere on the page - including the canvas's
-   own manually-wired drag-out (see SupernoteView.onLoadFile()) - not just
-   clicks on an actual text span. */
-.textLayer {
-    position: absolute;
-    inset: 0;
+/* Same fix, same reason, as .internal-embed.supernote-embed further below
+   (SupernoteEmbed's own <supernote-viewer> sizing) - confirmed via real
+   headless-Obsidian testing to be the identical bug in this wrapper too:
+   without a flex column here and flex: 1; min-height: 0 on the viewer
+   itself, <supernote-viewer> rendered at its full (every-page) content
+   height instead of being clipped/scrollable at the pane's own height, so
+   nothing inside the component's shadow root ever needed to scroll
+   internally - goToPage()'s own .pages.scrollTo() call (and everything
+   built on real scroll/intersection behavior: lazy loading, eviction, the
+   scroll-driven page indicator) silently did nothing, since .pages was
+   never actually the container doing the scrolling. overflow: hidden, not
+   auto - the actual scrolling happens inside <supernote-viewer>'s own
+   shadow root; a second scrollbar here would just double up on the same
+   content. */
+.supernote-view-content {
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
-    line-height: 1;
-    text-align: initial;
-    transform-origin: 0 0;
-    pointer-events: none;
 }
 
-.textLayer span,
-.textLayer br {
-    color: transparent;
-    position: absolute;
-    white-space: pre;
-    cursor: text;
-    transform-origin: 0% 0%;
-    pointer-events: auto;
-}
-
-.textLayer ::selection {
-    background: var(--text-selection);
-}
-
-.textLayer .supernote-find-match {
-    background: rgba(255, 224, 0, 0.4);
-    border-radius: 2px;
-}
-
-.textLayer .supernote-find-match-current {
-    background: rgba(255, 145, 0, 0.7);
-}
-
-/* Clickable overlay for Supernote internal links (see
-   SupernoteView.positionLinkOverlay() in main.ts). Sits above the text
-   layer; positioned/sized per-link via inline styles since geometry is
-   data-driven, same pattern as canvas/textLayer sizing. pointer-events: none
-   on the container (re-enabled on each link rect below) for the same reason
-   as .textLayer above - otherwise this, being topmost, would swallow every
-   mouse event on the page, not just clicks on an actual link. */
-.supernote-links-layer {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    pointer-events: none;
-}
-
-.supernote-link-rect {
-    position: absolute;
-    display: block;
-    border-radius: 2px;
-    cursor: pointer;
-    background: transparent;
-    transition: background-color 0.1s ease;
-    pointer-events: auto;
-}
-
-.supernote-link-rect:hover {
-    background: var(--background-modifier-hover);
-}
-
-.supernote-header {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: var(--background-primary);
-    padding-top: 0.5em;
-    padding-bottom: 0.5em;
+.supernote-view-content supernote-viewer {
+    flex: 1;
+    min-height: 0;
 }
 
 .supernote-toolbar {
@@ -165,189 +78,6 @@ div.supernote-canvas-wrap canvas {
 .supernote-file-list-toolbar {
     padding: 0.5em 0.75em 0;
     margin: 0;
-}
-
-.supernote-page-jump-input {
-    width: 4em;
-    text-align: center;
-}
-
-.supernote-page-jump-total {
-    color: var(--text-muted);
-}
-
-/* Text mode: hide the raster page (and its word-positioned, invisible
-   textLayer overlay - that one stays reserved for search-highlighting over
-   the image in image mode, see runFind()) in favor of .supernote-compact-text
-   below. */
-.supernote-mode-text .supernote-canvas-wrap {
-    display: none;
-}
-
-/* div.page-container above is display: inline-block, which shrink-to-fits
-   its content's width - fine in image mode, where canvasWrap always carries
-   an explicit pixel width (see drawPageImage()) for it to shrink-to-fit
-   *to*, identically on every page (same source page dimensions). Text mode
-   has no such explicit width anywhere in the chain, so that same
-   shrink-to-fit instead sized each page's box to whatever its own longest
-   line happened to need, up to .supernote-compact-text's max-width below -
-   a short page got a narrow box, a long one a wide one. Switching to
-   display: block for text mode's page-container stretches it to
-   .supernote-pages' own (flex-determined, so already page-count- and
-   content-independent) full width instead, giving the child's `width: 100%`
-   below something concrete and *uniform across every page* to resolve
-   against. */
-.supernote-mode-text .page-container {
-    display: block;
-}
-
-/* Compact text mode - see SupernoteView.ensureCompactText(). Reflowed plain
-   text in normal document flow (not positioned to match the original
-   handwriting layout, unlike .textLayer above), so selection/copy behaves
-   like any other text and a sparse page doesn't leave a huge blank gap.
-   Hidden outside text mode; sized independently of the page's own pixel
-   dimensions/aspect ratio, unlike canvasWrap/textLayer.
-
-   user-select: text is not the default and has to be opted into explicitly
-   - Obsidian sets `body { user-select: none; }` and only opts specific
-   elements it controls back in (its editor, markdown preview, its own PDF
-   viewer's .textLayer via `.pdf-container .textLayer`, which - being scoped
-   to .pdf-container - doesn't reach this plugin's own same-named .textLayer
-   either). Without this, the text renders exactly as intended but a drag
-   across it does nothing - confirmed via issue #171's own follow-up. */
-.supernote-compact-text {
-    display: none;
-    box-sizing: border-box;
-    width: 100%;
-    max-width: 42em;
-    padding: 1em 1.2em;
-    user-select: text;
-    -webkit-user-select: text;
-    cursor: text;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
-    color: var(--text-normal);
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: var(--radius-s);
-}
-
-.supernote-compact-text-empty {
-    color: var(--text-muted);
-    font-style: italic;
-}
-
-/* Text mode's per-page marker (see the page-build loop in onLoadFile()) -
-   same muted/small treatment as .supernote-thumb-label and
-   .supernote-page-jump-total, so a long note's worth of stacked text blocks
-   in text mode still reads as distinct pages while scrolling. */
-.supernote-compact-text-label {
-    display: none;
-    margin: 0 0 0.3em;
-    color: var(--text-muted);
-    font-size: var(--font-smaller);
-    font-weight: var(--font-semibold);
-}
-
-.supernote-mode-text .supernote-compact-text,
-.supernote-mode-text .supernote-compact-text-label {
-    display: block;
-}
-
-.supernote-find-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.5em;
-    padding: 0.4em;
-    background: var(--background-primary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: var(--radius-s);
-    width: fit-content;
-}
-
-.supernote-find-count {
-    min-width: 5em;
-    color: var(--text-muted);
-    font-size: var(--font-smaller);
-}
-
-/* Issue #179: .supernote-pages and .supernote-thumb-sidebar both sit in this
-   single grid cell (see grid-row/grid-column below) instead of splitting a
-   flex row between them. Previously, opening/closing the sidebar changed how
-   much of that row pagesEl got, which fit-width then re-rendered every page's
-   size against, reflowing the whole note and bouncing whatever page was
-   currently in view. Stacking them means pagesEl always gets the cell's full
-   width regardless of whether the sidebar is showing - it overlays pagesEl
-   instead of squeezing it. */
-.supernote-body {
-    display: grid;
-    grid-template-columns: 1fr;
-}
-
-.supernote-pages {
-    grid-column: 1;
-    grid-row: 1;
-    min-width: 0;
-}
-
-/* justify-self/align-self (not the old flex gap/align-items on .supernote-body)
-   position this within the shared grid cell - hugging the top-left corner,
-   same spot it occupied back when it was a flex sibling (it's built before
-   pagesEl in the DOM, so it landed first/left in that flex row). Still
-   position: sticky (unchanged from before this issue - that part already
-   worked, it's only the flex-row width-sharing that caused the bounce) so it
-   keeps tracking scroll the same way .supernote-header does. z-index lifts
-   it above pagesEl's own (unpositioned, z-index: auto) canvases so it
-   visibly overlays them rather than being painted underneath. */
-.supernote-thumb-sidebar {
-    display: flex;
-    grid-column: 1;
-    grid-row: 1;
-    justify-self: start;
-    align-self: start;
-    position: sticky;
-    z-index: 5;
-    flex-flow: column;
-    flex-shrink: 0;
-    width: 140px;
-    max-height: calc(100vh - 4em);
-    margin-left: 0.5em;
-    overflow-y: auto;
-    gap: 0.75em;
-    padding: 0.5em;
-    background: var(--background-secondary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: var(--radius-s);
-    box-shadow: var(--shadow-l);
-}
-
-.supernote-thumb-item {
-    cursor: pointer;
-    text-align: center;
-    padding: 0.25em;
-    border: 2px solid transparent;
-    border-radius: var(--radius-s);
-}
-
-.supernote-thumb-item:hover {
-    background: var(--background-modifier-hover);
-}
-
-.supernote-thumb-item.is-active {
-    border-color: var(--interactive-accent);
-}
-
-.supernote-thumb-img {
-    display: block;
-    width: 100%;
-    border-radius: 2px;
-}
-
-.supernote-thumb-label {
-    display: block;
-    margin-top: 0.25em;
-    color: var(--text-muted);
-    font-size: var(--font-smaller);
 }
 
 /* `.internal-embed.supernote-embed`, not just `.supernote-embed` alone -
