@@ -13,6 +13,7 @@ import { SupernoteX } from 'supernote-typescript';
 import { ImageConverter } from '../render/imageConverter';
 import { RenderedNotePage, buildNotePagePlaceholders, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
 import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
+import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 
 interface ViewerPageState extends RenderedNotePage {
     textEl: HTMLElement;
@@ -100,6 +101,7 @@ const STYLE = `
     --supernote-viewer-muted: #a0a0a0;
 }
 .root {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -180,6 +182,69 @@ button[aria-pressed="true"] {
     color: var(--supernote-viewer-muted);
     font-size: 0.9em;
     white-space: nowrap;
+}
+/* Overlays .pages (position: absolute against .root's own position:
+   relative above) rather than sharing a flex row with it - the same
+   lesson SupernoteView's own thumbnail sidebar already learned the hard
+   way (issue #179): if opening/closing this changed how much width .pages
+   itself got, fit-width would re-render every page's size against that,
+   reflowing the whole note and bouncing whatever page was currently in
+   view. Overlaying instead means toggling this never affects .pages'
+   own width at all. "top" is set from JS (see
+   updateThumbSidebarOffset()) to sit just below the toolbar/find-bar,
+   since neither is a fixed, CSS-only height (the find bar toggles
+   open/closed, changing the total header height beneath which this
+   should start). */
+.thumb-sidebar {
+    display: none;
+    position: absolute;
+    left: 0;
+    z-index: 2;
+    flex-direction: column;
+    width: 140px;
+    max-height: calc(100% - 1em);
+    margin: 0.5em;
+    overflow-y: auto;
+    gap: 0.6em;
+    padding: 0.5em;
+    background: var(--supernote-viewer-bg);
+    border: 1px solid var(--supernote-viewer-border);
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    box-sizing: border-box;
+}
+.thumb-sidebar.open {
+    display: flex;
+}
+.sidebar-list-item {
+    cursor: pointer;
+    text-align: center;
+    padding: 0.25em;
+    border: 2px solid transparent;
+    border-radius: 4px;
+}
+.sidebar-list-item:hover {
+    background: rgba(128, 128, 128, 0.2);
+}
+.sidebar-list-item.is-active {
+    border-color: var(--supernote-viewer-fg);
+}
+.sidebar-list-thumb {
+    display: block;
+    width: 100%;
+    border-radius: 2px;
+}
+.sidebar-list-label {
+    display: block;
+    margin-top: 0.25em;
+    color: var(--supernote-viewer-muted);
+    font-size: 0.85em;
+}
+.sidebar-list-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    cursor: pointer;
 }
 .pages {
     flex: 1;
@@ -330,6 +395,11 @@ export class SupernoteViewerElement extends HTMLElement {
     private pageSearchIndex: PageSearchEntry[] = [];
     private findMatches: FindMatch[] = [];
     private findMatchIndex = -1;
+    private thumbSidebarEl: HTMLElement | null = null;
+    private thumbToggleBtn: HTMLButtonElement | null = null;
+    private thumbItems: SidebarListItem[] = [];
+    private thumbLoadObserver: IntersectionObserver | null = null;
+    private thumbnailsVisible = false;
 
     constructor() {
         super();
@@ -364,6 +434,7 @@ export class SupernoteViewerElement extends HTMLElement {
     disconnectedCallback(): void {
         this.pageLoadObserver?.disconnect();
         this.resizeObserver?.disconnect();
+        this.thumbLoadObserver?.disconnect();
         for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
     }
 
@@ -507,6 +578,8 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageLoadObserver = null;
         this.resizeObserver?.disconnect();
         this.resizeObserver = null;
+        this.thumbLoadObserver?.disconnect();
+        this.thumbLoadObserver = null;
         for (const state of this.pageStates) window.clearTimeout(state.loadDebounceTimer);
         this.pageStates = [];
         this.pagesEl = null;
@@ -524,6 +597,10 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageSearchIndex = [];
         this.findMatches = [];
         this.findMatchIndex = -1;
+        this.thumbSidebarEl = null;
+        this.thumbToggleBtn = null;
+        this.thumbItems = [];
+        this.thumbnailsVisible = false;
         this.rootEl.innerHTML = '';
     }
 
@@ -568,7 +645,10 @@ export class SupernoteViewerElement extends HTMLElement {
         });
 
         this.setupPageLoadObserver(sn, states);
-        if (pageCount > 1) this.setupPageIndicatorTracking();
+        if (pageCount > 1) {
+            this.setupPageIndicatorTracking();
+            this.buildThumbSidebar(sn, pageCount);
+        }
         this.setupWordOverlayResizing(sn, states);
     }
 
@@ -703,6 +783,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
         this.currentPage = current;
         if (this.pageIndicatorEl) this.pageIndicatorEl.textContent = `${current + 1} / ${this.pageStates.length}`;
+        this.highlightThumbnail(current);
     }
 
     // Keeps every page's word-overlay spans (see src/render/wordOverlay.ts)
@@ -729,6 +810,89 @@ export class SupernoteViewerElement extends HTMLElement {
         for (const state of states) this.resizeObserver.observe(state.containerEl);
     }
 
+    // Downsample factor for ensureThumbnailLoaded() below - the sidebar
+    // only ever displays a thumbnail at ~140px CSS width (see
+    // .sidebar-list-thumb), so a full-resolution rasterization would be
+    // needless decode/memory cost for a preview this small. Mirrors
+    // SupernoteView's own THUMBNAIL_SCALE (main.ts) exactly.
+    private static readonly THUMBNAIL_SCALE = 4;
+
+    // Builds the (initially closed - see .thumb-sidebar/.open) page
+    // thumbnail sidebar: one item per page (via the portable
+    // src/render/sidebarList.ts, built to be reusable by a future
+    // Supernote Atelier/.spd layer-toggle view too - see that module's own
+    // header comment), each lazily rasterized once it nears the sidebar's
+    // own viewport. Only built for pageCount > 1 (see buildToolbar()) -
+    // nothing to navigate to via thumbnails on a single-page document
+    // either.
+    private buildThumbSidebar(sn: SupernoteX, pageCount: number): void {
+        const sidebar = document.createElement('div');
+        sidebar.className = 'thumb-sidebar';
+        sidebar.setAttribute('part', 'thumb-sidebar');
+        this.rootEl.appendChild(sidebar);
+        this.thumbSidebarEl = sidebar;
+
+        const specs = Array.from({ length: pageCount }, (_, i) => ({ label: String(i + 1) }));
+        this.thumbItems = buildSidebarList(sidebar, specs, {
+            thumbnailAspectRatio: { width: sn.pageWidth, height: sn.pageHeight },
+            onItemClick: (index) => this.goToPage(index + 1),
+        });
+
+        this.thumbLoadObserver = setupLazyListLoading(
+            sidebar,
+            this.thumbItems.map((item) => item.itemEl),
+            (index) => void this.ensureThumbnailLoaded(sn, index),
+        );
+
+        this.updateThumbSidebarOffset();
+    }
+
+    private toggleThumbSidebar(): void {
+        this.thumbnailsVisible = !this.thumbnailsVisible;
+        this.thumbSidebarEl?.classList.toggle('open', this.thumbnailsVisible);
+        this.thumbToggleBtn?.setAttribute('aria-pressed', String(this.thumbnailsVisible));
+        // Toggling never changes .pages' own width (the sidebar overlays
+        // it - see .thumb-sidebar's own CSS comment), so there's no
+        // fit-width re-render to trigger here, unlike zoom's own resize
+        // handling.
+        if (this.thumbnailsVisible) this.updateThumbSidebarOffset();
+    }
+
+    // The thumbnail sidebar overlays .pages (position: absolute against
+    // .root) rather than sharing a flex row with it - see its own CSS
+    // comment for why - so its `top` has to be set from here instead of a
+    // fixed CSS value: neither the toolbar nor the find bar has a fixed
+    // height (the find bar toggles open/closed, changing the total header
+    // height beneath which this should start). pagesEl's own offsetTop
+    // already reflects however much space both of those actually take up,
+    // whatever that combined height happens to be, without this needing
+    // to know about either one individually.
+    private updateThumbSidebarOffset(): void {
+        if (!this.thumbSidebarEl || !this.pagesEl) return;
+        this.thumbSidebarEl.style.top = `${this.pagesEl.offsetTop}px`;
+    }
+
+    // Idempotent - a page's thumbnail is loaded once and never evicted
+    // (see fillSidebarThumbnail()'s own comment for why) - checking the
+    // <img>'s own src rather than a separate loaded flag keeps this in
+    // sync with the DOM directly, with nothing else to fall out of sync.
+    private async ensureThumbnailLoaded(sn: SupernoteX, index: number): Promise<void> {
+        const item = this.thumbItems[index];
+        if (!item || item.imgEl.src) return;
+        try {
+            const [dataUrl] = await new ImageConverter().convertToImages(
+                sn, [index + 1], SupernoteViewerElement.THUMBNAIL_SCALE,
+            );
+            fillSidebarThumbnail(item, dataUrl);
+        } catch (err) {
+            console.error(`supernote-viewer: page ${index + 1}'s thumbnail failed to load`, err);
+        }
+    }
+
+    private highlightThumbnail(index: number): void {
+        this.thumbItems.forEach((item, i) => item.itemEl.classList.toggle('is-active', i === index));
+    }
+
     // Idempotent and safe to call speculatively - `loaded` is set eagerly so
     // a slow rasterization can't be triggered twice for the same page.
     private async ensurePageImageLoaded(sn: SupernoteX, state: ViewerPageState): Promise<void> {
@@ -752,8 +916,18 @@ export class SupernoteViewerElement extends HTMLElement {
 
         // Nothing to navigate to with only one page - the mode toggle and
         // find button below are still worth having regardless of page
-        // count, so only these three are conditioned on pageCount > 1.
+        // count, so only these four are conditioned on pageCount > 1.
         if (pageCount > 1) {
+            const thumbBtn = document.createElement('button');
+            thumbBtn.type = 'button';
+            thumbBtn.setAttribute('part', 'button');
+            thumbBtn.setAttribute('aria-label', 'Toggle page thumbnails');
+            thumbBtn.setAttribute('aria-pressed', 'false');
+            thumbBtn.textContent = '☰';
+            thumbBtn.addEventListener('click', () => this.toggleThumbSidebar());
+            toolbar.appendChild(thumbBtn);
+            this.thumbToggleBtn = thumbBtn;
+
             const prevBtn = document.createElement('button');
             prevBtn.type = 'button';
             prevBtn.setAttribute('part', 'button');
@@ -873,6 +1047,10 @@ export class SupernoteViewerElement extends HTMLElement {
         this.findToggleBtn?.setAttribute('aria-pressed', 'true');
         this.findInputEl?.focus();
         this.findInputEl?.select();
+        // The find bar adds to the total header height the thumbnail
+        // sidebar sits below - see updateThumbSidebarOffset()'s own
+        // comment for why this can't just be a fixed CSS value.
+        this.updateThumbSidebarOffset();
     }
 
     private closeFindBar(): void {
@@ -884,6 +1062,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.renderPageTextHighlights(); // clears every page's <mark>s too
         if (this.findInputEl) this.findInputEl.value = '';
         if (this.findCountEl) this.findCountEl.textContent = '';
+        this.updateThumbSidebarOffset();
     }
 
     // Rebuilds findMatches from scratch against every page's search text -

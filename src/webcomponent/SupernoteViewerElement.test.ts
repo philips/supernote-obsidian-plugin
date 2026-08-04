@@ -182,6 +182,119 @@ describe('<supernote-viewer>', () => {
         expect(scrollIntoViewSpy).not.toHaveBeenCalled();
     });
 
+    describe('thumbnail sidebar', () => {
+        async function createLoadedViewer() {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // pageWidth 1404, pageHeight 1872, 2 pages
+            await loaded;
+            return el;
+        }
+
+        it('builds one item per page, reserving the note\'s own aspect ratio, initially closed', async () => {
+            const el = await createLoadedViewer();
+
+            const toggleBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle page thumbnails"]');
+            expect(toggleBtn).toBeTruthy();
+            expect(toggleBtn!.getAttribute('aria-pressed')).toBe('false');
+
+            const sidebar = el.shadowRoot!.querySelector('.thumb-sidebar');
+            expect(sidebar).toBeTruthy();
+            expect(sidebar!.classList.contains('open')).toBe(false);
+
+            const items = el.shadowRoot!.querySelectorAll('.sidebar-list-item');
+            expect(items).toHaveLength(2);
+            for (const item of Array.from(items)) {
+                expect(item.querySelector<HTMLImageElement>('.sidebar-list-thumb')?.style.aspectRatio).toBe('1404 / 1872');
+            }
+        });
+
+        it('toggle button opens and closes the sidebar', async () => {
+            const el = await createLoadedViewer();
+            const toggleBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle page thumbnails"]')!;
+            const sidebar = el.shadowRoot!.querySelector('.thumb-sidebar')!;
+
+            toggleBtn.click();
+            expect(sidebar.classList.contains('open')).toBe(true);
+            expect(toggleBtn.getAttribute('aria-pressed')).toBe('true');
+
+            toggleBtn.click();
+            expect(sidebar.classList.contains('open')).toBe(false);
+            expect(toggleBtn.getAttribute('aria-pressed')).toBe('false');
+        });
+
+        it('clicking a thumbnail navigates to that page', async () => {
+            const el = await createLoadedViewer();
+            const items = el.shadowRoot!.querySelectorAll<HTMLElement>('.sidebar-list-item');
+
+            items[1].click();
+            // ensurePageImageLoaded() (triggered by goToPage()) is async.
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(el.rasterizePage).toHaveBeenCalledWith(expect.anything(), 2);
+        });
+
+        it('highlights the thumbnail for whatever page is actually scrolled into view', async () => {
+            // Mirrors the page-indicator test's own approach: happy-dom has
+            // no real layout engine, so this stubs each page's geometry
+            // directly to exercise updateCurrentPageIndicator()'s
+            // threshold-scanning logic (which now also drives thumbnail
+            // highlighting) deterministically.
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages')!;
+            const [page1, page2] = Array.from(el.shadowRoot!.querySelectorAll('.page-container'));
+            const [thumb1, thumb2] = Array.from(el.shadowRoot!.querySelectorAll('.sidebar-list-item'));
+            vi.spyOn(pagesEl, 'getBoundingClientRect').mockReturnValue({ top: 0 } as DOMRect);
+
+            vi.spyOn(page1, 'getBoundingClientRect').mockReturnValue({ top: -5 } as DOMRect);
+            vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: 895 } as DOMRect);
+            pagesEl.dispatchEvent(new Event('scroll'));
+            await new Promise((resolve) => window.requestAnimationFrame(resolve));
+            expect(thumb1.classList.contains('is-active')).toBe(true);
+            expect(thumb2.classList.contains('is-active')).toBe(false);
+
+            vi.spyOn(page1, 'getBoundingClientRect').mockReturnValue({ top: -905 } as DOMRect);
+            vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: -5 } as DOMRect);
+            pagesEl.dispatchEvent(new Event('scroll'));
+            await new Promise((resolve) => window.requestAnimationFrame(resolve));
+            expect(thumb1.classList.contains('is-active')).toBe(false);
+            expect(thumb2.classList.contains('is-active')).toBe(true);
+        });
+
+        it('opening the find bar repositions the sidebar without throwing', async () => {
+            const el = await createLoadedViewer();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle page thumbnails"]')!.click();
+            const findBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Find in note"]')!;
+            expect(() => findBtn.click()).not.toThrow();
+            expect(el.shadowRoot!.querySelector('.thumb-sidebar')).toBeTruthy();
+        });
+
+        it('has no toolbar/thumbnail sidebar for a single-page note', async () => {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('rtr.note'); // 1 page
+            await loaded;
+
+            expect(el.shadowRoot!.querySelector('button[aria-label="Toggle page thumbnails"]')).toBeNull();
+            expect(el.shadowRoot!.querySelector('.thumb-sidebar')).toBeNull();
+        });
+
+        it('has no toolbar/thumbnail sidebar in single-page (attribute) mode', async () => {
+            const el = createViewer();
+            el.setAttribute('single-page', '');
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            await loaded;
+
+            expect(el.shadowRoot!.querySelector('button[aria-label="Toggle page thumbnails"]')).toBeNull();
+            expect(el.shadowRoot!.querySelector('.thumb-sidebar')).toBeNull();
+        });
+    });
+
     it('shows recognized text in text mode, unrasterized', async () => {
         const el = createViewer();
         document.body.appendChild(el);
