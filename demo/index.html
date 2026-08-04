@@ -28,7 +28,8 @@
     Standalone build of the <code>&lt;supernote-viewer&gt;</code> custom element from the
     <a href="https://github.com/philips/supernote-obsidian-plugin">supernote-obsidian-plugin</a> project
     (<a href="https://github.com/philips/supernote-obsidian-plugin/issues/183">issue #183</a>) - runs entirely in
-    this page, with no Obsidian involved. Pick a <code>.note</code> file from your Supernote device to view it.
+    this page, with no Obsidian involved. Pick a <code>.note</code> file from your Supernote device to view it, or
+    click "Load sample note" to try it with a bundled example.
 </p>
 <p>
     <strong>Build the bundle first:</strong> this page loads
@@ -39,6 +40,7 @@
     <code>/demo/</code>.
 </p>
 <input id="file-input" type="file" accept=".note">
+<button id="load-sample" type="button">Load sample note</button>
 <p id="status"></p>
 <supernote-viewer id="viewer"></supernote-viewer>
 
@@ -52,6 +54,17 @@
         if (!file) return;
         status.textContent = `Reading ${file.name}…`;
         viewer.noteData = await file.arrayBuffer();
+    });
+
+    document.getElementById('load-sample').addEventListener('click', async () => {
+        status.textContent = 'Loading sample note…';
+        try {
+            const response = await fetch('./rtr.note');
+            if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+            viewer.noteData = await response.arrayBuffer();
+        } catch (err) {
+            status.textContent = `Error loading sample note: ${err.message ?? err}`;
+        }
     });
 
     viewer.addEventListener('supernote-load', (event) => {
