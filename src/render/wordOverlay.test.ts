@@ -25,7 +25,7 @@ describe('buildWordOverlay', () => {
         ]);
         const container = document.createElement('div');
 
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, 1920);
 
         expect(entries).toHaveLength(1);
         expect(entries[0].label).toBe('Real');
@@ -35,18 +35,38 @@ describe('buildWordOverlay', () => {
         expect(entries[0].el!.textContent).toBe('Real');
     });
 
-    it('scales native bounding-box units by RECOGNITION_COORDINATE_SCALE (11.9)', () => {
+    it('scales native bounding-box units by 11.9 at the 1920px reference page width', () => {
         const page = fakePage([
             { label: 'x', type: 'Text', words: [{ label: 'x', 'bounding-box': { x: 10, y: 20, width: 30, height: 40 } }] },
         ]);
         const container = document.createElement('div');
 
-        const [entry] = buildWordOverlay(page, container, 1);
+        const [entry] = buildWordOverlay(page, container, 1, 1920);
 
         expect(entry.nativeX).toBeCloseTo(10 * 11.9);
         expect(entry.nativeY).toBeCloseTo(20 * 11.9);
         expect(entry.nativeWidth).toBeCloseTo(30 * 11.9);
         expect(entry.nativeHeight).toBeCloseTo(40 * 11.9);
+    });
+
+    it('scales proportionally to pageWidth, not a fixed 11.9, for narrower (non-Manta) devices (issue #204)', () => {
+        // Real, reported bug: notes from the far more common non-Manta
+        // device family (pageWidth 1404, e.g. an A5X) used the same fixed
+        // 11.9 scale tuned for Manta's 1920px-wide pages, landing
+        // recognized-word highlights increasingly far below the actual
+        // pen strokes the further down the page a word sat - confirmed by
+        // cropping the actual rendered page image at both the old and
+        // corrected positions against a real A5X note fixture.
+        const page = fakePage([
+            { label: 'x', type: 'Text', words: [{ label: 'x', 'bounding-box': { x: 10, y: 20, width: 30, height: 40 } }] },
+        ]);
+        const container = document.createElement('div');
+
+        const [entry] = buildWordOverlay(page, container, 1, 1404);
+
+        const expectedScale = (1404 * 11.9) / 1920;
+        expect(entry.nativeX).toBeCloseTo(10 * expectedScale);
+        expect(entry.nativeY).toBeCloseTo(20 * expectedScale);
     });
 
     it('keeps a word without a bounding box as a null-el entry rather than dropping it', () => {
@@ -62,7 +82,7 @@ describe('buildWordOverlay', () => {
         ]);
         const container = document.createElement('div');
 
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, 1920);
 
         expect(entries.map((e) => e.label)).toEqual(['paragraph', ' ', 'test']);
         expect(entries[1].el).toBeNull();
@@ -75,7 +95,7 @@ describe('buildWordOverlay', () => {
         ]);
         const container = document.createElement('div');
 
-        expect(buildWordOverlay(page, container, 1)).toHaveLength(0);
+        expect(buildWordOverlay(page, container, 1, 1920)).toHaveLength(0);
     });
 });
 
@@ -93,7 +113,7 @@ describe('buildWordSearchText', () => {
                 ],
             },
         ]);
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, 1920);
 
         const { text } = buildWordSearchText(entries);
 
@@ -113,7 +133,7 @@ describe('buildWordSearchText', () => {
                 ],
             },
         ]);
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, 1920);
 
         const { text, entryAt } = buildWordSearchText(entries);
         expect(text).toBe('Real time');
@@ -155,7 +175,7 @@ describe('buildWordSearchText', () => {
                     ],
                 },
             ]);
-            const entries = buildWordOverlay(page, container, 1);
+            const entries = buildWordOverlay(page, container, 1, 1920);
             const { text, entriesInRange } = buildWordSearchText(entries);
             expect(text).toBe('With enough space');
 
@@ -175,7 +195,7 @@ describe('repositionWordOverlay', () => {
     it('scales native rects into the currently rendered CSS pixel size', () => {
         const container = document.createElement('div');
         const page = fakePage([{ label: 'x', type: 'Text', words: [{ label: 'x', 'bounding-box': { x: 10, y: 10, width: 10, height: 10 } }] }]);
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, 1920);
         // native x/y/w/h are all 10 * 11.9 = 119
 
         repositionWordOverlay(entries, 238, 238, 238, 238); // rendered == native -> scale 1
@@ -206,7 +226,7 @@ describe('against a real .note fixture', () => {
         const page = sn.pages[0];
         const container = document.createElement('div');
 
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, sn.pageWidth);
         expect(entries.length).toBeGreaterThan(0);
 
         const boxed = entries.filter((e) => e.el !== null);
@@ -240,9 +260,34 @@ describe('against a real .note fixture', () => {
         const page = sn.pages[0];
         const container = document.createElement('div');
 
-        const entries = buildWordOverlay(page, container, 1);
+        const entries = buildWordOverlay(page, container, 1, sn.pageWidth);
         const { text } = buildWordSearchText(entries);
 
         expect(text).toBe(page.text);
+    });
+
+    it('positions "Subject" within its own line on a real narrower (non-Manta, pageWidth 1404) note (issue #204)', () => {
+        // rtr.note above is a Manta-family capture (pageWidth 1920, where
+        // the 11.9 reference scale applies directly) - this fixture is the
+        // far more common non-Manta case (pageWidth 1404, e.g. an A5X)
+        // that exposed the bug: pixel-cropping the actual rendered page
+        // confirmed "Subject" (the note's first recognized word) should
+        // land at native y ~114-115 (13.224 native units * the correct
+        // ~8.70 scale for this pageWidth), not ~157 (the same native units
+        // * the wrong, Manta-tuned 11.9) - a difference that compounds
+        // with every line further down the page.
+        const a5xPath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'a5x-2.14.28.note');
+        const buffer = fs.readFileSync(a5xPath);
+        const sn = new SupernoteX(new Uint8Array(buffer));
+        const page = sn.pages[0];
+        const container = document.createElement('div');
+
+        expect(sn.pageWidth).toBe(1404);
+        const entries = buildWordOverlay(page, container, 1, sn.pageWidth);
+        const subject = entries.find((e) => e.label === 'Subject');
+
+        expect(subject).toBeDefined();
+        const expectedScale = (1404 * 11.9) / 1920;
+        expect(subject!.nativeY).toBeCloseTo(13.224001 * expectedScale, 0);
     });
 });
