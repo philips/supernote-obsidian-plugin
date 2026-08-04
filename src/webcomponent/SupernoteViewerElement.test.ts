@@ -163,12 +163,18 @@ describe('<supernote-viewer>', () => {
         expect(el.rasterizePage).toHaveBeenCalledTimes(1);
         expect(el.rasterizePage).toHaveBeenCalledWith(expect.anything(), 2);
 
-        const page2Img = el.shadowRoot!.querySelectorAll('.page-container')[1].querySelector('img');
+        const page2Container = el.shadowRoot!.querySelectorAll('.page-container')[1];
+        const page2Img = page2Container.querySelector('img');
         expect(page2Img?.src).toBe('data:image/png;base64,page2');
-        // The placeholder's inline sizing overrides (see
-        // buildNotePagePlaceholders()) should be cleared once real content
-        // loads in.
-        expect(page2Img?.style.width).toBe('');
+        // fillNotePagePlaceholder()'s own inline sizing overrides (see
+        // buildNotePagePlaceholders()) get cleared once real content loads
+        // in, but ensurePageImageLoaded() immediately reapplies the
+        // current zoom (see applyZoomToPages()) on top - so the img ends
+        // up at width: 100% (of its own container, not the placeholder's
+        // aspect-ratio trick), and the container itself carries an
+        // explicit zoom-scaled pixel width, not the empty string either.
+        expect(page2Img?.style.width).toBe('100%');
+        expect((page2Container as HTMLElement).style.width).toMatch(/^\d+(\.\d+)?px$/);
 
         // Calling again shouldn't re-trigger a rasterization of an
         // already-loaded page.
@@ -312,6 +318,152 @@ describe('<supernote-viewer>', () => {
 
             expect(el.shadowRoot!.querySelector('button[aria-label="Toggle page thumbnails"]')).toBeNull();
             expect(el.shadowRoot!.querySelector('.thumb-sidebar')).toBeNull();
+        });
+    });
+
+    describe('zoom', () => {
+        async function createLoadedViewer() {
+            const el = createViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // pageWidth 1404, 2 pages
+            await loaded;
+            return el;
+        }
+
+        it('zoom in/out/reset buttons scale every page and update the label', async () => {
+            // happy-dom has no real layout engine (.pages' clientWidth
+            // defaults to 0 - see applyFitWidth()'s own early-return
+            // guard), so fit-width - on by default - never actually
+            // *applies* a computed width here at load time (the initial
+            // container width is still whatever noteRenderer.ts's own
+            // placeholder set, e.g. "100%" of .pages). A reset click below
+            // establishes a known, deterministic 100%/1404px baseline via
+            // setZoom(1) instead, which - being a manual action - always
+            // applies regardless of .pages' width.
+            const el = await createLoadedViewer();
+            const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
+            const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
+            const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
+            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const containers = el.shadowRoot!.querySelectorAll<HTMLElement>('.page-container');
+
+            resetBtn.click();
+            expect(label.textContent).toBe('100%');
+            expect(containers[0].style.width).toBe('1404px');
+            expect(containers[1].style.width).toBe('1404px');
+
+            zoomInBtn.click();
+            expect(label.textContent).toBe('125%');
+            expect(containers[0].style.width).toBe('1755px'); // 1404 * 1.25
+
+            zoomOutBtn.click();
+            zoomOutBtn.click();
+            expect(label.textContent).toBe('80%'); // 125% / 1.25 / 1.25
+
+            resetBtn.click();
+            expect(label.textContent).toBe('100%');
+            expect(containers[0].style.width).toBe('1404px');
+
+            // Every page's img stays at width: 100% of its own
+            // (explicitly, zoom-scaled) container - see applyZoomToPages().
+            for (const container of Array.from(containers)) {
+                expect(container.querySelector('img')?.style.width).toBe('100%');
+            }
+        });
+
+        it('clamps manual zoom to [5%, 500%]', async () => {
+            const el = await createLoadedViewer();
+            const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
+            const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
+            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+
+            for (let i = 0; i < 20; i++) zoomInBtn.click();
+            expect(label.textContent).toBe('500%');
+
+            for (let i = 0; i < 40; i++) zoomOutBtn.click();
+            expect(label.textContent).toBe('5%');
+        });
+
+        it('any manual zoom action turns off fit-width', async () => {
+            const el = await createLoadedViewer();
+            const fitWidthBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Fit page to viewport width"]')!;
+            const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
+            expect(fitWidthBtn.getAttribute('aria-pressed')).toBe('true');
+
+            zoomInBtn.click();
+
+            expect(fitWidthBtn.getAttribute('aria-pressed')).toBe('false');
+        });
+
+        it('ctrl+wheel zooms; a plain wheel does not', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+
+            const plainWheel = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
+            pagesEl.dispatchEvent(plainWheel);
+            expect(label.textContent).toBe('100%');
+            expect(plainWheel.defaultPrevented).toBe(false);
+
+            // happy-dom's WheelEvent constructor doesn't wire up ctrlKey
+            // from its init dict (confirmed directly: MouseEvent respects
+            // it, WheelEvent silently doesn't) - defineProperty is a
+            // reliable, if slightly unusual, workaround. Real ctrl+scroll/
+            // pinch-to-zoom input is verified separately in a real browser
+            // (see the Playwright verification for this feature).
+            const ctrlWheel = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
+            Object.defineProperty(ctrlWheel, 'ctrlKey', { value: true });
+            pagesEl.dispatchEvent(ctrlWheel);
+            expect(ctrlWheel.defaultPrevented).toBe(true);
+            expect(label.textContent).not.toBe('100%');
+            // deltaY -100 -> factor min(1.05, 1 - (-100)*0.01) = min(1.05, 2) = 1.05
+            expect(label.textContent).toBe('105%');
+        });
+
+        it('re-enabling fit-width recomputes from .pages\' current width', async () => {
+            const el = await createLoadedViewer();
+            const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
+            const fitWidthBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Fit page to viewport width"]')!;
+            const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
+            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
+
+            // happy-dom's clientWidth is always 0 by default - stub it to a
+            // real value to exercise applyFitWidth()'s actual computation.
+            Object.defineProperty(pagesEl, 'clientWidth', { value: 702, configurable: true });
+
+            zoomOutBtn.click(); // manual action -> turns fit-width off
+            expect(fitWidthBtn.getAttribute('aria-pressed')).toBe('false');
+
+            fitWidthBtn.click(); // re-enable -> recomputes immediately
+            expect(fitWidthBtn.getAttribute('aria-pressed')).toBe('true');
+            expect(label.textContent).toBe('50%'); // 702 / 1404
+            expect(container.style.width).toBe('702px');
+        });
+
+        it('has no toolbar/zoom controls in single-page mode, and stays capped by CSS instead of zoom', async () => {
+            const el = createViewer();
+            el.setAttribute('single-page', '');
+            document.body.appendChild(el);
+            const loaded = waitForEvent(el, 'supernote-load');
+            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // pageWidth 1404
+            await loaded;
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(el.shadowRoot!.querySelector('.toolbar')).toBeNull();
+            expect(el.shadowRoot!.querySelector('.zoom-label')).toBeNull();
+            // ensurePageImageLoaded() still calls applyZoomToPages() here
+            // (zoomScale never changes from its 1/100% default in this
+            // mode, since no controls exist to change it) - the container
+            // gets the same explicit native-pixel width a zoomed page
+            // would, but single-page mode's CSS (the plain, un-overridden
+            // max-width: 100% rule - see the :host(:not([single-page]))
+            // scoping) still caps it down to whatever's actually
+            // available, unlike normal mode where zoom can exceed it.
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
+            expect(container.style.width).toBe('1404px');
         });
     });
 

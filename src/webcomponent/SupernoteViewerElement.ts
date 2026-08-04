@@ -157,6 +157,12 @@ button[aria-pressed="true"] {
     color: var(--supernote-viewer-muted);
     font-size: 0.9em;
 }
+.zoom-label {
+    min-width: 3.5em;
+    text-align: center;
+    color: var(--supernote-viewer-muted);
+    font-size: 0.9em;
+}
 .find-bar {
     display: none;
     align-items: center;
@@ -260,6 +266,37 @@ button[aria-pressed="true"] {
 .pages .page-container {
     position: relative;
     max-width: 100%;
+    /* Centers a page narrower than .pages via auto-margin absorption
+       instead of relying on .pages' own align-items: center - real,
+       reported bug: a flex/grid item centered via the *container's* own
+       align-items, once zoomed in wide enough to overflow, only exposes
+       the *end*-side overflow to scrolling in Chromium/WebKit - the start
+       (left) side stays permanently unreachable no matter how far you
+       scroll, since align-items-driven centering shifts the item without
+       extending the scrollable area to cover its start-side overflow.
+       margin: auto on the item itself takes priority over the parent's
+       align-items for centering (per the flex spec's auto-margin
+       cross-axis absorption rule) and, critically, auto margins compute
+       to 0 rather than negative once the item is wider than its
+       container - so an overflowing page instead sits flush at the
+       start, restoring the ordinary, fully-reachable [0, scrollWidth -
+       clientWidth] scroll range. Confirmed directly: before this, even
+       scrollLeft = 0 (as far left as scrolling allowed) still left the
+       image's own left edge far off-screen. */
+    margin: 0 auto;
+}
+/* Zoom (see setZoom()/applyFitWidth()) needs a page to be able to render
+   wider than .pages' own available width - a manually zoomed-in page
+   should overflow (enabling .pages' own overflow: auto to scroll to it),
+   not get silently capped back down to "fit" regardless of the requested
+   zoom level. Single-page mode has no zoom controls at all (see
+   buildSinglePageViewer()) and still wants its one page capped to
+   whatever width is actually available, same as any other loaded,
+   non-zoomed page always was - so this override is scoped to normal
+   (non-single-page) mode only, leaving the plain max-width: 100% above as
+   single-page mode's only sizing rule. */
+:host(:not([single-page])) .pages .page-container {
+    max-width: none;
 }
 .pages .page-container > img {
     display: block;
@@ -466,6 +503,13 @@ export class SupernoteViewerElement extends HTMLElement {
     // Manual debugging aid only - see debugLoopEvictReload().
     private debugLoopTimer?: number;
     private resizeObserver: ResizeObserver | null = null;
+    // Separate from resizeObserver above (which watches each *page's own*
+    // rendered size, for word-overlay repositioning) - this one watches
+    // .pages itself, so fit-width can recompute when the *viewport*
+    // resizes (a split pane, a sidebar opening/closing, the window itself),
+    // not just when a page's own size happens to change.
+    private pagesResizeObserver: ResizeObserver | null = null;
+    private fitWidthDebounceTimer?: number;
     private pageStates: ViewerPageState[] = [];
     private currentPage = 0;
     private pageIndicatorScrollScheduled = false;
@@ -486,6 +530,15 @@ export class SupernoteViewerElement extends HTMLElement {
     private thumbItems: SidebarListItem[] = [];
     private thumbLoadObserver: IntersectionObserver | null = null;
     private thumbnailsVisible = false;
+    // "100%" is one rendered pixel per native rasterized page pixel
+    // (sn.pageWidth), not anything tied to the available viewport width -
+    // see applyFitWidth() for the mode that actually fills whatever space
+    // is available. Zoom/fit-width apply only in normal (non-single-page)
+    // mode - see the :host(:not([single-page])) CSS override above.
+    private zoomScale = 1;
+    private fitWidthEnabled = true;
+    private zoomLabelEl: HTMLElement | null = null;
+    private fitWidthBtn: HTMLButtonElement | null = null;
 
     constructor() {
         super();
@@ -523,6 +576,8 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbLoadObserver?.disconnect();
         window.clearTimeout(this.loadCheckDebounceTimer);
         window.clearInterval(this.debugLoopTimer);
+        this.pagesResizeObserver?.disconnect();
+        window.clearTimeout(this.fitWidthDebounceTimer);
     }
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -752,6 +807,9 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbLoadObserver = null;
         window.clearTimeout(this.loadCheckDebounceTimer);
         window.clearInterval(this.debugLoopTimer);
+        this.pagesResizeObserver?.disconnect();
+        this.pagesResizeObserver = null;
+        window.clearTimeout(this.fitWidthDebounceTimer);
         this.pageStates = [];
         this.pagesEl = null;
         this.toolbarEl = null;
@@ -772,6 +830,10 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbToggleBtn = null;
         this.thumbItems = [];
         this.thumbnailsVisible = false;
+        this.zoomScale = 1;
+        this.fitWidthEnabled = true;
+        this.zoomLabelEl = null;
+        this.fitWidthBtn = null;
         this.rootEl.innerHTML = '';
     }
 
@@ -821,6 +883,15 @@ export class SupernoteViewerElement extends HTMLElement {
             this.buildThumbSidebar(sn, pageCount);
         }
         this.setupOverlayResizing(sn, states);
+
+        // Matches SupernoteView's own onLoadFile() ordering: build pages,
+        // then apply whichever zoom state is active before first paint - no
+        // separate "flash of 100%/native size" in between, since nothing
+        // yields to the event loop here.
+        if (this.fitWidthEnabled) this.applyFitWidth();
+        else this.applyZoomToPages();
+        this.setupZoomWheelHandling();
+        this.setupFitWidthResizing();
     }
 
     // A single deep-linked page (the `page` attribute, clamped, defaulting
@@ -1175,6 +1246,143 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbItems.forEach((item, i) => item.itemEl.classList.toggle('is-active', i === index));
     }
 
+    // Sets zoomScale (clamped) and applies it. Mirrors SupernoteView's own
+    // setZoom() (main.ts), but considerably simpler: that one re-rasterizes
+    // each page's canvas at the target zoom (debounced, so rapid wheel/
+    // button input doesn't thrash it) for pixel-perfect crispness at any
+    // scale. This component only ever CSS-scales the same already-
+    // rasterized <img> (see applyZoomToPages()) - cheap enough to apply
+    // instantly and synchronously, no debounce/re-render step needed at
+    // all. The trade-off: zooming in well past 100% shows the same
+    // native-resolution image scaled up (blurrier), rather than a
+    // freshly-rasterized higher-resolution one.
+    private setZoom(newScale: number, opts: { manual?: boolean } = {}): void {
+        const isManual = opts.manual !== false;
+        if (isManual) {
+            // Any direct zoom action (buttons, wheel, reset) is the user
+            // taking manual control - stop auto-adjusting on resize until
+            // they ask for fit-width again. applyFitWidth() itself calls in
+            // with manual: false so it doesn't immediately cancel the mode
+            // it's trying to apply.
+            this.fitWidthEnabled = false;
+            this.updateFitWidthButton();
+        }
+
+        // Floor/ceiling mirror SupernoteView's own setZoom(): fit-width can
+        // legitimately need to go far outside a sane *manual* zoom range
+        // (a narrow mobile screen might need under 25%; a small native
+        // page resolution on a large/high-DPI display might need well over
+        // 500% just to fill the available width) - the wider ceiling there
+        // is purely a guard against a pathological render (e.g. a
+        // zero-width native page), not a real intended limit the way
+        // manual zoom's 500% cap is.
+        const ceiling = isManual ? 5 : 20;
+        this.zoomScale = Math.min(ceiling, Math.max(0.05, newScale));
+        this.applyZoomToPages();
+    }
+
+    // Applies the current zoomScale to every page's container - explicit
+    // pixel width, not a CSS transform, so .pages' own scrollable content
+    // size (and thus scrollbar/overflow behavior) actually reflects the
+    // zoomed size, the same way a real image resize would. Each page's
+    // <img> stays at width: 100% (of its own now explicitly-sized
+    // container, set by noteRenderer.ts for both the still-loading
+    // placeholder and, once ensurePageImageLoaded() calls this again, the
+    // real loaded image) - keeping the width source in one place (the
+    // container) rather than duplicating this same computation onto every
+    // img too.
+    private applyZoomToPages(): void {
+        if (!this.sn) return;
+        const width = `${this.sn.pageWidth * this.zoomScale}px`;
+        for (const state of this.pageStates) {
+            state.containerEl.style.width = width;
+            state.imageEl.style.width = '100%';
+        }
+        if (this.zoomLabelEl) this.zoomLabelEl.textContent = `${Math.round(this.zoomScale * 100)}%`;
+    }
+
+    // Scales every page so its rendered width matches however much
+    // horizontal space is actually available (.pages' own content box,
+    // minus its first page-container's own horizontal margin, if any -
+    // mirrors SupernoteView's own applyFitWidth() exactly, including
+    // reading that margin from computed style rather than assuming it's
+    // zero: page-container now sets margin: 0 auto (see that rule's own
+    // comment - centering via auto-margin absorption rather than .pages'
+    // align-items, so a zoomed-in, overflowing page stays fully
+    // scrollable to its start edge), and an *unresolved* auto margin -
+    // getComputedStyle() returning the literal string "auto" rather than
+    // a resolved pixel value, which real layout engines normally avoid
+    // but this project's own happy-dom test environment doesn't - would
+    // otherwise silently corrupt this whole computation into NaN
+    // (parseFloat('auto') is NaN, and NaN propagates through every
+    // arithmetic operation after it). The `|| 0` fallbacks below guard
+    // against exactly that, in any environment, not just tests.
+    private applyFitWidth(): void {
+        if (!this.sn || !this.pagesEl || this.sn.pageWidth <= 0) return;
+
+        const availableWidth = this.pagesEl.clientWidth;
+        if (availableWidth <= 0) return;
+
+        const state = this.pageStates[0];
+        const containerStyle = state ? getComputedStyle(state.containerEl) : null;
+        const horizontalMargin = containerStyle
+            ? (parseFloat(containerStyle.marginLeft) || 0) + (parseFloat(containerStyle.marginRight) || 0)
+            : 0;
+        const targetWidth = Math.max(availableWidth - horizontalMargin, 1);
+
+        this.setZoom(targetWidth / this.sn.pageWidth, { manual: false });
+    }
+
+    private updateFitWidthButton(): void {
+        this.fitWidthBtn?.setAttribute('aria-pressed', String(this.fitWidthEnabled));
+    }
+
+    // Ctrl+scroll to zoom (trackpad pinch-to-zoom is reported as a wheel
+    // event with ctrlKey set, on every platform) - mirrors SupernoteView's
+    // own registerDomEvent(this.contentEl, 'wheel', ...) handler in
+    // main.ts, deliberately NOT metaKey (Cmd on macOS): Cmd is also the
+    // modifier held down through a whole Cmd+Tab app switch, and a wheel
+    // event from scroll momentum/inertia that happens to fire mid-switch -
+    // nothing to do with zooming - would still carry metaKey: true and get
+    // treated as a zoom gesture. Trackpad pinch never sets metaKey, only
+    // ctrlKey.
+    private setupZoomWheelHandling(): void {
+        if (!this.pagesEl) return;
+        this.pagesEl.addEventListener('wheel', (evt: WheelEvent) => {
+            if (!evt.ctrlKey) return;
+            evt.preventDefault();
+
+            // Trackpads report a pinch-to-zoom gesture as a wheel event
+            // with ctrlKey set - the same flag an ordinary two-finger
+            // scroll can spuriously carry for a stray event or two right
+            // as the scroll hits a boundary. A fixed per-event zoom step
+            // let a short burst of those misfires snowball straight to the
+            // zoom cap; scaling the step by the event's own deltaY keeps a
+            // real, sustained pinch feeling responsive while capping how
+            // much a single misfired event can do.
+            const factor = Math.min(1.05, Math.max(0.95, 1 - evt.deltaY * 0.01));
+            this.setZoom(this.zoomScale * factor);
+        }, { passive: false });
+    }
+
+    // While "Fit width" is on, keeps every page matched to however much
+    // room is actually available as .pages itself resizes (a split pane, a
+    // sidebar opening/closing, the window itself) - not just at the moment
+    // it was turned on. Debounced since resize fires continuously while
+    // dragging. Separate from resizeObserver (see setupOverlayResizing())
+    // - that one watches each page's own size for word/link overlay
+    // repositioning; this one watches .pages itself, the viewport
+    // fit-width computes against.
+    private setupFitWidthResizing(): void {
+        if (!this.pagesEl || typeof ResizeObserver === 'undefined') return;
+        this.pagesResizeObserver = new ResizeObserver(() => {
+            if (!this.fitWidthEnabled) return;
+            window.clearTimeout(this.fitWidthDebounceTimer);
+            this.fitWidthDebounceTimer = window.setTimeout(() => this.applyFitWidth(), 150);
+        });
+        this.pagesResizeObserver.observe(this.pagesEl);
+    }
+
     // Idempotent and safe to call speculatively - `loaded` is set eagerly so
     // a slow rasterization can't be triggered twice for the same page.
     private async ensurePageImageLoaded(sn: SupernoteX, state: ViewerPageState): Promise<void> {
@@ -1205,6 +1413,17 @@ export class SupernoteViewerElement extends HTMLElement {
             }
             fillNotePagePlaceholder(state, imageDataUrl);
             console.debug(`supernote-viewer: page ${state.pageNumber} loaded, img.src set (length ${imageDataUrl.length})`);
+            // fillNotePagePlaceholder() clears this page's width overrides
+            // back to noteRenderer.ts's own loaded-image default (native
+            // size, capped down by CSS if too big - see the img's own
+            // max-width: 100% rule) - fine for single-page mode, which has
+            // no zoom concept at all, but not sufficient once zoomed *in*
+            // past 100%: CSS max-width only ever shrinks, never stretches a
+            // loaded image past its own native pixel size. Reapplying the
+            // current zoom here (cheap - just a style-string assignment per
+            // page) keeps a page that finishes loading mid-zoom sized the
+            // same as every already-loaded one.
+            this.applyZoomToPages();
         } catch (err) {
             // Allows a retry on the next intersection - a transient
             // rasterization failure shouldn't permanently blank this page.
@@ -1271,6 +1490,54 @@ export class SupernoteViewerElement extends HTMLElement {
             nextBtn.addEventListener('click', () => this.goToPage(this.currentPage + 2));
             toolbar.appendChild(nextBtn);
         }
+
+        // Zoom - worth having regardless of page count (even a single-page
+        // document can have detail worth zooming in on), so unlike the
+        // page-nav block above, not conditioned on pageCount > 1.
+        const zoomOutBtn = document.createElement('button');
+        zoomOutBtn.type = 'button';
+        zoomOutBtn.setAttribute('part', 'button');
+        zoomOutBtn.setAttribute('aria-label', 'Zoom out');
+        zoomOutBtn.textContent = '−';
+        zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
+        toolbar.appendChild(zoomOutBtn);
+
+        const zoomLabel = document.createElement('span');
+        zoomLabel.className = 'zoom-label';
+        zoomLabel.setAttribute('part', 'zoom-label');
+        zoomLabel.textContent = '100%';
+        toolbar.appendChild(zoomLabel);
+        this.zoomLabelEl = zoomLabel;
+
+        const zoomInBtn = document.createElement('button');
+        zoomInBtn.type = 'button';
+        zoomInBtn.setAttribute('part', 'button');
+        zoomInBtn.setAttribute('aria-label', 'Zoom in');
+        zoomInBtn.textContent = '+';
+        zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
+        toolbar.appendChild(zoomInBtn);
+
+        const zoomResetBtn = document.createElement('button');
+        zoomResetBtn.type = 'button';
+        zoomResetBtn.setAttribute('part', 'button');
+        zoomResetBtn.setAttribute('aria-label', 'Reset zoom');
+        zoomResetBtn.textContent = '↺';
+        zoomResetBtn.addEventListener('click', () => this.setZoom(1));
+        toolbar.appendChild(zoomResetBtn);
+
+        const fitWidthBtn = document.createElement('button');
+        fitWidthBtn.type = 'button';
+        fitWidthBtn.setAttribute('part', 'button');
+        fitWidthBtn.setAttribute('aria-label', 'Fit page to viewport width');
+        fitWidthBtn.setAttribute('aria-pressed', 'true'); // fitWidthEnabled defaults to true
+        fitWidthBtn.textContent = 'Fit';
+        fitWidthBtn.addEventListener('click', () => {
+            this.fitWidthEnabled = !this.fitWidthEnabled;
+            if (this.fitWidthEnabled) this.applyFitWidth();
+            this.updateFitWidthButton();
+        });
+        toolbar.appendChild(fitWidthBtn);
+        this.fitWidthBtn = fitWidthBtn;
 
         const modeBtn = document.createElement('button');
         modeBtn.type = 'button';
