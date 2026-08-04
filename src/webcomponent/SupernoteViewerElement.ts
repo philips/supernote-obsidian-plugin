@@ -340,6 +340,23 @@ button[aria-pressed="true"] {
     color: var(--supernote-viewer-muted);
     font-size: 0.9em;
 }
+/* Narrow phones (issue #202, reported on iOS 13) don't have room for every
+   toolbar control at once - the full set (thumbnails, "Page" label + jump
+   box + total, zoom out/in/reset + fit-width, mode toggle, find) reliably
+   overflows/wraps on a small screen. Drops the "Page" text label (the
+   jump box and "/ N" total next to it already carry the same meaning) and
+   the zoom step buttons specifically - setupZoomTouchHandling() above
+   gives pinch-to-zoom as the natural replacement for stepping zoom by
+   button on a touch device, and reset/fit-width remain for a quick way
+   back to a known scale. A plain viewport media query, not a container
+   query: @container needs Safari 16+, well past iOS 13, the platform this
+   is fixing for. */
+@media (max-width: 480px) {
+    .page-jump-label,
+    .zoom-step-btn {
+        display: none;
+    }
+}
 .find-bar {
     display: none;
     align-items: center;
@@ -433,6 +450,17 @@ button[aria-pressed="true"] {
 .pages {
     flex: 1;
     overflow: auto;
+    /* Without this, scrolling past this container's own top/bottom
+       boundary chains the overscroll to whatever's outside it - inside
+       Obsidian's mobile app shell (issue #202), that's enough for a
+       continued upward "pull" at the top to be picked up by the shell's
+       own swipe-down gesture recognizer and open the command palette
+       mid-scroll. SupernoteEmbed never showed this: an embed's
+       <supernote-viewer> sits inside the note's own already-scrollable
+       reading view, which contains overscroll at that outer level already;
+       SupernoteView (main.ts) is a bare top-level leaf with nothing else
+       to contain it, so this container needs to do it itself. */
+    overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1137,6 +1165,8 @@ export class SupernoteViewerElement extends HTMLElement {
         if (this.fitWidthEnabled) this.applyFitWidth();
         else this.applyZoomToPages();
         this.setupZoomWheelHandling();
+        this.setupZoomTouchHandling();
+        this.setupScrollBoundaryContainment();
         this.setupFitWidthResizing();
     }
 
@@ -1176,6 +1206,7 @@ export class SupernoteViewerElement extends HTMLElement {
         // become irrelevant.
         state.visible = true;
         void this.ensurePageImageLoaded(sn, state);
+        this.setupScrollBoundaryContainment();
     }
 
     // Builds each placeholder's recognized-text sibling and the rest of its
@@ -1630,6 +1661,87 @@ export class SupernoteViewerElement extends HTMLElement {
         }, { passive: false });
     }
 
+    // Two-finger pinch-to-zoom (issue #202) - ctrl+wheel above only ever
+    // covers a trackpad's pinch gesture (reported as a synthetic wheel
+    // event by the OS); a touchscreen's own pinch never fires wheel events
+    // at all, so without this, pinching on a phone/tablet silently did
+    // nothing. Tracks the on-screen distance between the two touch points
+    // at gesture start, then scales zoomScale by however that distance has
+    // changed since - `initialZoom` (not a running multiply-by-delta) so
+    // the zoom level tracks the gesture's total extent directly and can't
+    // drift from accumulated rounding across many touchmove events.
+    private setupZoomTouchHandling(): void {
+        if (!this.pagesEl) return;
+        let initialDistance = 0;
+        let initialZoom = 1;
+
+        const touchDistance = (touches: TouchList): number => {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.hypot(dx, dy);
+        };
+
+        this.pagesEl.addEventListener('touchstart', (evt: TouchEvent) => {
+            if (evt.touches.length !== 2) return;
+            initialDistance = touchDistance(evt.touches);
+            initialZoom = this.zoomScale;
+        }, { passive: true });
+
+        this.pagesEl.addEventListener('touchmove', (evt: TouchEvent) => {
+            // Only ever intercepts an actual 2-finger gesture - an ordinary
+            // single-finger touchmove (scrolling) is never prevented here,
+            // so normal touch scrolling is untouched.
+            if (evt.touches.length !== 2 || initialDistance === 0) return;
+            evt.preventDefault();
+            this.setZoom(initialZoom * (touchDistance(evt.touches) / initialDistance));
+        }, { passive: false });
+
+        const endPinch = (evt: TouchEvent) => {
+            if (evt.touches.length < 2) initialDistance = 0;
+        };
+        this.pagesEl.addEventListener('touchend', endPinch);
+        this.pagesEl.addEventListener('touchcancel', endPinch);
+    }
+
+    // Blocks the scroll-boundary "rubber band" that would otherwise chain
+    // a pull gesture out to whatever's outside this element (issue #202):
+    // inside Obsidian's mobile app shell, continuing to pull up past
+    // .pages' own top is picked up by the shell's own swipe-down gesture
+    // recognizer and opens the command palette mid-scroll.
+    // `overscroll-behavior: contain` (see .pages' own CSS rule) is the
+    // modern fix for exactly this, but WebKit didn't implement that
+    // property at all until Safari 16 - iOS 13 (the platform actually
+    // reported) predates it entirely, so the CSS alone does nothing there.
+    // This is the traditional pre-overscroll-behavior technique: block the
+    // *default* touchmove behavior only for the single-finger touch that
+    // would scroll past a boundary already at its limit - every ordinary
+    // in-range touchmove (the vast majority) is left completely alone, so
+    // normal scrolling/pinch-zoom (see setupZoomTouchHandling() above,
+    // gated on a 2-touch gesture and thus never in conflict with this)
+    // still work exactly as before.
+    private setupScrollBoundaryContainment(): void {
+        if (!this.pagesEl) return;
+        let startY = 0;
+
+        this.pagesEl.addEventListener('touchstart', (evt: TouchEvent) => {
+            if (evt.touches.length !== 1) return;
+            startY = evt.touches[0].clientY;
+        }, { passive: true });
+
+        this.pagesEl.addEventListener('touchmove', (evt: TouchEvent) => {
+            const pagesEl = this.pagesEl;
+            if (!pagesEl || evt.touches.length !== 1) return;
+            const deltaY = evt.touches[0].clientY - startY;
+            const atTop = pagesEl.scrollTop <= 0;
+            const atBottom = pagesEl.scrollTop + pagesEl.clientHeight >= pagesEl.scrollHeight;
+            // A finger moving down (positive deltaY) while already at the
+            // top - or up (negative deltaY) while already at the bottom -
+            // is exactly the boundary-overscroll motion that would
+            // otherwise rubber-band/chain outward.
+            if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) evt.preventDefault();
+        }, { passive: false });
+    }
+
     // While "Fit width" is on, keeps every page matched to however much
     // room is actually available as .pages itself resizes (a split pane, a
     // sidebar opening/closing, the window itself) - not just at the moment
@@ -1800,6 +1912,7 @@ export class SupernoteViewerElement extends HTMLElement {
         // page-nav block above, not conditioned on pageCount > 1.
         const zoomOutBtn = document.createElement('button');
         zoomOutBtn.type = 'button';
+        zoomOutBtn.className = 'zoom-step-btn';
         zoomOutBtn.setAttribute('part', 'button');
         zoomOutBtn.setAttribute('aria-label', 'Zoom out');
         this.renderIcon('zoom-out', zoomOutBtn);
@@ -1815,6 +1928,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
         const zoomInBtn = document.createElement('button');
         zoomInBtn.type = 'button';
+        zoomInBtn.className = 'zoom-step-btn';
         zoomInBtn.setAttribute('part', 'button');
         zoomInBtn.setAttribute('aria-label', 'Zoom in');
         this.renderIcon('zoom-in', zoomInBtn);
