@@ -17,7 +17,7 @@ import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerEleme
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
-import { parseLinkRect, bucketLinksByPage } from './linkOverlay';
+import { parseLinkRect, bucketLinksByPage } from './render/linkOverlay';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
@@ -2241,6 +2241,13 @@ export class SupernoteEmbed extends Component {
 	private pageAspectRatio: number | null = null;
 	private minHeightObserver: ResizeObserver | null = null;
 	private lastMinHeightWidth = -1;
+	// This note's own pages' PAGEIDs, from the component's own supernote-load
+	// event - lets handleLinkClick() below resolve a link that names this
+	// same file explicitly (this.file.basename) without re-parsing bytes
+	// already parsed once inside the component. See that event's own detail
+	// comment (SupernoteViewerElement.ts) for why the component can't
+	// resolve this particular case itself.
+	private pageIds: string[] = [];
 
 	constructor(
 		private app: App,
@@ -2320,9 +2327,10 @@ export class SupernoteEmbed extends Component {
 		this.viewerEl = viewer;
 		this.updateDarkAttribute();
 
-		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageWidth: number; pageHeight: number }>) => {
+		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageWidth: number; pageHeight: number; pageIds: string[] }>) => {
 			this.pageAspectRatio = e.detail.pageHeight / e.detail.pageWidth;
 			this.setupMinHeightTracking();
+			this.pageIds = e.detail.pageIds;
 		}) as EventListener);
 		viewer.addEventListener('supernote-error', ((e: CustomEvent<{ error: unknown; pageNumber?: number }>) => {
 			// A single page failing to rasterize (pageNumber set) just
@@ -2330,6 +2338,9 @@ export class SupernoteEmbed extends Component {
 			// whole-note failure (fetch/parse, no pageNumber) should blow
 			// away the embed with an error message.
 			if (e.detail.pageNumber === undefined) this.renderError(e.detail.error);
+		}) as EventListener);
+		viewer.addEventListener('link-click', ((e: CustomEvent<{ link: ILink }>) => {
+			void this.handleLinkClick(e.detail.link);
 		}) as EventListener);
 
 		// createEl() above already appended (and thus connected) it - matters
@@ -2373,6 +2384,47 @@ export class SupernoteEmbed extends Component {
 			cls: 'supernote-embed-error',
 			text: `Failed to render Supernote file: ${err instanceof Error ? err.message : String(err)}`,
 		});
+	}
+
+	// Mirrors SupernoteView's own handleLinkClick() (same method name,
+	// same logic) - <supernote-viewer> only resolves a link-click itself
+	// when the link carries no filename at all (see that event's own
+	// dispatch comment), so every link-click this embed actually receives
+	// names some file explicitly; this replicates the one thing the
+	// component genuinely can't know on its own - whether that name
+	// happens to match the file *this* embed is currently showing - using
+	// pageIds captured from the component's own supernote-load event
+	// rather than re-parsing this.file's bytes a second time just to get
+	// that list.
+	private async handleLinkClick(link: ILink): Promise<void> {
+		const targetBasename = link.text.split('#')[0];
+		const pageid = link.PAGEID;
+
+		if (!targetBasename || targetBasename === this.file.basename) {
+			const pageIndex = this.pageIds.findIndex((id) => id === pageid);
+			if (pageIndex >= 0) this.viewerEl?.goToPage(pageIndex + 1);
+			return;
+		}
+
+		const targetFile = this.app.vault.getFiles().find((f) => f.extension === 'note' && f.basename === targetBasename);
+		if (!targetFile) {
+			new Notice(`Linked note "${targetBasename}.note" not found in vault.`);
+			return;
+		}
+
+		let subpath: string | undefined;
+		if (pageid && pageid !== '0' && pageid !== 'none') {
+			try {
+				const buffer = await this.app.vault.readBinary(targetFile);
+				const pageIndex = new SupernoteX(new Uint8Array(buffer)).pages.findIndex((p) => p.PAGEID === pageid);
+				if (pageIndex >= 0) subpath = `#page=${pageIndex + 1}`;
+			} catch {
+				// Malformed target file — fall through and open without a page anchor.
+			}
+		}
+
+		const leaf = this.app.workspace.getLeaf(false);
+		await leaf.openFile(targetFile, subpath ? { eState: { subpath } } : undefined);
 	}
 }
 
