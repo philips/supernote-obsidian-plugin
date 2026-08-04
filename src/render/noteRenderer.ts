@@ -127,6 +127,22 @@ export function buildNotePagePlaceholders(
         img.style.width = '100%';
         img.style.aspectRatio = `${options.pageWidth} / ${options.pageHeight}`;
         if (options.invertColorsWhenDark) img.classList.add('supernote-invert-dark');
+        // Diagnostic only - a real <img> load failure (a broken-image icon)
+        // always fires this event; logging it here catches the exact
+        // moment and raw state even if whatever caused it self-corrects
+        // again (a fresh load overwriting it) before anyone can inspect it
+        // by hand - confirmed as a real, reported difficulty debugging a
+        // transient broken-image report live. getAttribute() (the raw
+        // attribute), not the src IDL property (which normalizes a missing
+        // attribute and an explicit empty string to the same '' either
+        // way) - this is specifically to tell those two apart.
+        img.addEventListener('error', () => {
+            console.error(
+                `supernote-viewer: page ${img.closest<HTMLElement>('.page-container')?.dataset.pageNumber ?? '?'} ` +
+                `<img> error - getAttribute('src')=${JSON.stringify(img.getAttribute('src'))} ` +
+                `.src=${JSON.stringify(img.src)} naturalWidth=${img.naturalWidth} complete=${img.complete}`,
+            );
+        });
         pageContainer.appendChild(img);
         container.appendChild(pageContainer);
 
