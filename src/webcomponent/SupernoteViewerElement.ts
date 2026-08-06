@@ -17,6 +17,22 @@ import { LinkOverlayEntry, bucketLinksByPage, buildLinkOverlay, repositionLinkOv
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 import { svgIcon } from './icons';
 
+// How many pages either side of the currently-viewed page (see
+// setupPageLoadObserver()) get unconditionally preloaded, and protected from
+// eviction, regardless of exact scroll geometry - makes stepping through
+// nearby pages feel instant since the image is already decoded before it's
+// asked for.
+const PAGE_PRELOAD_DISTANCE = 2;
+
+// How far (as a percentage of the scroll container's own height) a page can
+// scroll out of view before its image is evicted (see setupPageLoadObserver()
+// and evictPageImage()) - approximates "how many page-heights of scroll
+// buffer to hold onto" on the (usual) assumption that a page's rendered
+// height is roughly one viewport. Large enough that scrolling a handful of
+// pages away and back finds everything still decoded, while still bounding
+// memory on a long scroll through a many-page document.
+const PAGE_EVICT_MARGIN_PERCENT = 400;
+
 // Inline SVG toolbar icons, not Obsidian's own icon font (setIcon()/Lucide) -
 // this component has no Obsidian dependency at all (see this file's own
 // header comment) and needs to look right in a standalone/embed context with
@@ -1280,8 +1296,9 @@ export class SupernoteViewerElement extends HTMLElement {
     // reported bug. A page-scoped debounce (checking only "has this one
     // page been near the viewport for 150ms", the same pattern
     // SupernoteView's own pageObserver in main.ts uses) doesn't actually
-    // fix that: state.visible reflects the *padded* rootMargin zone (100%
-    // of .pages' own height above/below the real viewport), so a page can
+    // fix that: state.visible reflects the *padded* rootMargin zone
+    // (PAGE_EVICT_MARGIN_PERCENT% of .pages' own height above/below the
+    // real viewport), so a page can
     // stay "within margin" for 150ms+ even while a fast, *continuous*
     // scroll carries it straight through and back out again - confirmed
     // directly, tightening that check to the real, unpadded viewport (or
@@ -1307,13 +1324,22 @@ export class SupernoteViewerElement extends HTMLElement {
         const scheduleLoadCheck = () => {
             window.clearTimeout(this.loadCheckDebounceTimer);
             this.loadCheckDebounceTimer = window.setTimeout(() => {
-                for (const state of states) {
-                    // A generous-but-not-huge buffer once settled (half a
-                    // viewport height) - enough to prime the very next
-                    // page ahead of actually reaching it, far short of the
-                    // observer's own 100% prefetch margin that only exists
-                    // to decide when a page is worth watching at all.
-                    if (state.visible && !state.loaded && this.isPageNearScreen(state, 0.5)) {
+                for (let i = 0; i < states.length; i++) {
+                    const state = states[i];
+                    if (state.loaded) continue;
+                    // Unconditionally prime a fixed window of pages around
+                    // wherever the user actually is (PAGE_PRELOAD_DISTANCE
+                    // pages either side), independent of geometry - this is
+                    // what makes scrolling *through* that window snappy,
+                    // since the image is already decoded before it's ever
+                    // asked for. Falls back to the geometry-based check
+                    // (state visible within the observer's own padded
+                    // rootMargin zone, and within half a viewport of the
+                    // real screen) for pages further out that the index
+                    // window doesn't cover yet - e.g. a fast scroll that
+                    // outruns currentPageIndex's own rAF-scheduled update.
+                    const nearCurrentPage = Math.abs(i - this.currentPageIndex) <= PAGE_PRELOAD_DISTANCE;
+                    if (nearCurrentPage || (state.visible && this.isPageNearScreen(state, 0.5))) {
                         void this.ensurePageImageLoaded(sn, state);
                     }
                 }
@@ -1322,13 +1348,21 @@ export class SupernoteViewerElement extends HTMLElement {
 
         this.pageLoadObserver = new IntersectionObserver((entries) => {
             for (const entry of entries) {
-                const state = states.find((s) => s.containerEl === entry.target);
-                if (!state) continue;
+                const i = states.findIndex((s) => s.containerEl === entry.target);
+                if (i === -1) continue;
+                const state = states[i];
                 state.visible = entry.isIntersecting;
-                if (!entry.isIntersecting) this.evictPageImage(sn, state);
+                // Never evict a page inside the preload window itself, even
+                // if a stray intersection transition (e.g. a large
+                // programmatic goToPage() jump) reports it as having left
+                // the padded rootMargin zone - otherwise the very pages
+                // this preload exists to keep warm could be evicted the
+                // instant they're loaded.
+                const nearCurrentPage = Math.abs(i - this.currentPageIndex) <= PAGE_PRELOAD_DISTANCE;
+                if (!entry.isIntersecting && !nearCurrentPage) this.evictPageImage(sn, state);
             }
             scheduleLoadCheck();
-        }, { root: this.pagesEl, rootMargin: '100% 0px' });
+        }, { root: this.pagesEl, rootMargin: `${PAGE_EVICT_MARGIN_PERCENT}% 0px` });
 
         for (const state of states) this.pageLoadObserver.observe(state.containerEl);
 
@@ -1342,10 +1376,11 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     // Real intersection with .pages' own visible bounds, padded by only
-    // `marginRatio` x .pages' own height - unlike the pageLoadObserver's
-    // own rootMargin: '100% 0px', which deliberately pads a much more
-    // generous zone around the real viewport just to decide when a page is
-    // worth starting to watch at all. See setupPageLoadObserver()'s own
+    // `marginRatio` x .pages' own height - unlike the pageLoadObserver's own
+    // rootMargin (PAGE_EVICT_MARGIN_PERCENT% 0px), which deliberately pads a
+    // much more generous zone around the real viewport just to decide when a
+    // page is worth starting to watch, and how far it can scroll out before
+    // its image is evicted. See setupPageLoadObserver()'s own
     // comment for why the two need to be different checks.
     private isPageNearScreen(state: ViewerPageState, marginRatio: number): boolean {
         if (!this.pagesEl) return false;
