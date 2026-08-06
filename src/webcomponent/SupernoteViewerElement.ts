@@ -80,9 +80,8 @@ const FALLBACK_ICONS: Record<IconName, () => SVGSVGElement> = {
         ['line', { x1: '9', y1: '3', x2: '9', y2: '21' }],
     ]),
     'type': () => svgIcon([
-        ['line', { x1: '4', y1: '6', x2: '20', y2: '6' }],
-        ['line', { x1: '4', y1: '12', x2: '16', y2: '12' }],
-        ['line', { x1: '4', y1: '18', x2: '12', y2: '18' }],
+        ['path', { d: 'M6 20 12 4l6 16' }],
+        ['line', { x1: '8.5', y1: '14', x2: '15.5', y2: '14' }],
     ]),
     'search': () => svgIcon([
         ['circle', { cx: '11', cy: '11', r: '8' }],
