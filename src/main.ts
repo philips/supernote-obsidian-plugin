@@ -1086,10 +1086,10 @@ export default class SupernotePlugin extends Plugin {
 		);
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
 
-		// Prototype: `.spd` files (Supernote Atelier app) — see atelierView.ts.
+		// `.spd` files (Supernote Atelier app) — see atelierView.ts.
 		this.registerView(
 			VIEW_TYPE_SUPERNOTE_ATELIER,
-			(leaf) => new SupernoteAtelierView(leaf)
+			(leaf) => new SupernoteAtelierView(leaf, this.settings)
 		);
 		this.registerExtensions(['spd'], VIEW_TYPE_SUPERNOTE_ATELIER);
 
@@ -1107,7 +1107,7 @@ export default class SupernotePlugin extends Plugin {
 			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
 
 			this.app.embedRegistry.registerExtension('spd', (context, file) =>
-				new SupernoteAtelierEmbed(this.app, context.containerEl, file)
+				new SupernoteAtelierEmbed(this.app, this.settings, context.containerEl, file)
 			);
 			this.register(() => this.app.embedRegistry?.unregisterExtension('spd'));
 		}

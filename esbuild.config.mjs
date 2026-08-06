@@ -37,7 +37,14 @@ const context = await esbuild.context({
 		// mobile (browser) Obsidian without a locateFile() callback.
 		'.wasm': 'binary',
 	},
-	plugins: [inlineWorkerPlugin()],
+	// inlineWorkerPlugin() runs a wholly separate, nested esbuild.build()
+	// call for every *.worker.ts file (see its own README/source) - that
+	// nested build does NOT inherit this config's own `loader` above, only
+	// whatever's passed as its own argument here, so atelierComposite
+	// .worker.ts's identical sql.js wasm import (via render/atelierRenderer
+	// .ts's openAtelierBuffer()) needs the same loader entry repeated
+	// explicitly.
+	plugins: [inlineWorkerPlugin({ loader: { '.wasm': 'binary' } })],
 	external: [
 		"obsidian",
 		"electron",

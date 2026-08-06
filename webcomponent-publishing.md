@@ -4,6 +4,12 @@ This covers how to actually ship the standalone web component (see
 [`webcomponent-usage.md`](webcomponent-usage.md) for how consumers use it once it's out there) somewhere
 people can depend on with a stable URL/version. Background: [issue #183](https://github.com/philips/supernote-obsidian-plugin/issues/183).
 
+Written against `<supernote-viewer>`, but the same steps apply unchanged to its `.spd` sibling
+`<supernote-atelier-viewer>` (`npm run build:atelier-webcomponent`, writing
+`dist/supernote-atelier-viewer.js`) - treat it as its own separately-versioned package under its own name
+(e.g. `supernote-atelier-viewer`), published independently of `<supernote-viewer>`'s own version, following
+the same steps below with that name/output substituted in.
+
 ## Nothing is published yet - don't point production code at the demo
 
 Today, the only two things that exist are:

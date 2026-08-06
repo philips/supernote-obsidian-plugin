@@ -142,54 +142,49 @@
     padding: 0.5em;
 }
 
-/* .spd (Supernote Atelier) viewer/embed, see src/atelierView.ts */
+/* <supernote-atelier-viewer>'s own wrapper, see src/atelierView.ts and
+   src/webcomponent/SupernoteAtelierViewerElement.ts - the .spd (Supernote
+   Atelier) equivalent of .supernote-view-content above. Same flex-column +
+   overflow: hidden fix, same reason: without it, the element renders at its
+   own full content height instead of being clipped/scrollable at the
+   pane's own height, since all of its actual scrolling now happens inside
+   its own shadow root (.image-wrapper - see that file's own STYLE
+   constant), not here. */
 .supernote-atelier-view-content {
-    padding: 1em;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
+.supernote-atelier-view-content supernote-atelier-viewer {
+    flex: 1;
+    min-height: 0;
+}
+
+/* SupernoteAtelierEmbed (atelierView.ts) renders a <supernote-atelier-viewer>
+   as this container's own only child, with its own `bare` attribute set so
+   its internal chrome doesn't double up with the border/background here -
+   same relationship .supernote-embed above has to <supernote-viewer>, but
+   with a simpler fixed max-height/resize frame instead of that sibling's
+   per-note "always show one full page" ResizeObserver tracking (see
+   SupernoteAtelierEmbed's own comment for why: `.spd` files are usually one
+   small canvas, not a multi-page document, so this was never a reported
+   problem worth the extra machinery). */
 .supernote-atelier-embed {
     display: flex;
     flex-direction: column;
     max-height: 800px;
-    overflow: auto;
+    min-height: 200px;
+    resize: vertical;
+    overflow: hidden;
     border: 1px solid var(--background-modifier-border);
     border-radius: var(--radius-s);
-    padding: 1em;
 }
 
-.supernote-atelier-image {
+.supernote-atelier-embed supernote-atelier-viewer {
     display: block;
-    max-width: 100%;
-}
-
-.supernote-atelier-layers {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 1em;
-    margin-bottom: 1em;
-    padding: 0.5em 0.8em;
-    background: var(--background-secondary);
-    border-radius: var(--radius-s);
-}
-
-.supernote-atelier-layers-label {
-    color: var(--text-muted);
-    font-size: var(--font-smaller);
-    font-weight: var(--font-semibold);
-}
-
-.supernote-atelier-layer-item {
-    display: flex;
-    align-items: center;
-    gap: 0.4em;
-    cursor: pointer;
-}
-
-.supernote-atelier-empty {
-    color: var(--text-muted);
-    padding: 1em;
+    flex: 1;
+    min-height: 0;
 }
 
 /* Custom dictionary settings styles */
