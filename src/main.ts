@@ -1136,13 +1136,9 @@ export default class SupernotePlugin extends Plugin {
 					// its own. fetchMirrorFrameViaRange works around that with a Range
 					// header asking the device for just a bounded slice of the stream;
 					// see its own comment for what happens if the device ignores it.
-					//
-					// TEMPORARY (issue #186 testing): forced to always take the Range
-					// path, even on desktop, so it can be exercised against a real
-					// device from desktop instead of a mobile build. Revert to
-					// `Platform.isMobile ? ... : ...` once the Range approach is
-					// confirmed to work against real hardware.
-					const image = await fetchMirrorFrameViaRange(this.settings.directConnectIP);
+					const image = Platform.isMobile
+						? await fetchMirrorFrameViaRange(this.settings.directConnectIP)
+						: await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
 
 					const file = await this.app.vault.createBinary(filename, encode(image).buffer as ArrayBuffer);
 					const path = this.app.workspace.activeEditor?.file?.path;
