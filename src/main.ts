@@ -9,6 +9,7 @@ import { ErrorModal } from './ErrorModal';
 import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
 import PdfBuildWorker from 'pdfBuild.worker';
 import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
+import { fetchMirrorFrameViaRange } from './mirrorFetch';
 // Side-effect import: registers <supernote-viewer> (customElements.define)
 // - see SupernoteEmbed below, which is now a thin wrapper around it rather
 // than its own separate rendering implementation.
@@ -1116,23 +1117,6 @@ export default class SupernotePlugin extends Plugin {
 			id: 'insert-screen-mirror-image',
 			name: 'Insert a screen mirroring image as attachment',
 			editorCallback: async (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
-				// Screen mirroring is an indefinitely-open multipart MJPEG stream read
-				// with a raw `fetch()` + ReadableStream reader (see fetchMirrorFrame in
-				// supernote-typescript). Mobile Obsidian runs in a WKWebView, which
-				// blocks cross-origin fetch() to a plain-HTTP LAN device, and
-				// Obsidian's mobile-safe `requestUrl` alternative can't substitute here
-				// because it only resolves once the whole response body finishes -
-				// which for this stream never happens. Fail fast with an actionable
-				// message instead of attempting (and mysteriously failing) the request.
-				if (Platform.isMobile) {
-					new ErrorModal(this.app, new Error(
-						"Screen mirroring insert isn't supported on Obsidian mobile: it needs a continuous network "
-						+ "stream that mobile's WebView can't read. Use \"Browse and Access\" to insert a file "
-						+ "instead, or run this command on desktop."
-					)).open();
-					return;
-				}
-
 				// generate a unique filename for the mirror based on the current note path
 				const ts = generateTimestamp();
 				const f = this.app.workspace.activeEditor?.file?.basename || '';
@@ -1142,7 +1126,19 @@ export default class SupernotePlugin extends Plugin {
 					if (this.settings.directConnectIP.length == 0) {
 						throw new Error("IP is unset, please set in Supernote plugin settings")
 					}
-					const image = await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
+					// Screen mirroring is normally an indefinitely-open multipart MJPEG
+					// stream read with a raw `fetch()` + ReadableStream reader (see
+					// fetchMirrorFrame in supernote-typescript). Mobile Obsidian runs in
+					// a WKWebView, which blocks cross-origin fetch() to a plain-HTTP LAN
+					// device, and Obsidian's mobile-safe `requestUrl` alternative can't
+					// substitute directly because it only resolves once the whole
+					// response body finishes - which for this stream never happens on
+					// its own. fetchMirrorFrameViaRange works around that with a Range
+					// header asking the device for just a bounded slice of the stream;
+					// see its own comment for what happens if the device ignores it.
+					const image = Platform.isMobile
+						? await fetchMirrorFrameViaRange(this.settings.directConnectIP)
+						: await fetchMirrorFrame(`${this.settings.directConnectIP}:8080`);
 
 					const file = await this.app.vault.createBinary(filename, encode(image).buffer as ArrayBuffer);
 					const path = this.app.workspace.activeEditor?.file?.path;
