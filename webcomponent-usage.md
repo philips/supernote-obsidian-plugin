@@ -1,10 +1,18 @@
-# Using `<supernote-viewer>` in your own web app
+# Using `<supernote-viewer>`/`<supernote-atelier-viewer>` in your own web app
 
-`<supernote-viewer>` is a standalone custom element that renders a Supernote `.note` file's pages in a
-browser — no Obsidian, no plugin install, just a `<script>` tag. See
-[issue #183](https://github.com/philips/supernote-obsidian-plugin/issues/183) for the background, and
-[`src/webcomponent/SupernoteViewerElement.ts`](src/webcomponent/SupernoteViewerElement.ts) for the actual
-implementation this doc describes.
+This project ships two standalone custom elements — no Obsidian, no plugin install, just a `<script>` tag:
+
+- `<supernote-viewer>` renders a Supernote `.note` file's pages. See
+  [issue #183](https://github.com/philips/supernote-obsidian-plugin/issues/183) for the background, and
+  [`src/webcomponent/SupernoteViewerElement.ts`](src/webcomponent/SupernoteViewerElement.ts) for the actual
+  implementation most of this doc describes.
+- `<supernote-atelier-viewer>` renders a Supernote Atelier `.spd` file's layered canvas, with a
+  layer-visibility toggle sidebar in place of `.note`'s page-thumbnail one. See
+  [`src/webcomponent/SupernoteAtelierViewerElement.ts`](src/webcomponent/SupernoteAtelierViewerElement.ts)
+  and its own section near the end of this doc.
+
+Everything below through "Current limitations" describes `<supernote-viewer>`; jump to
+["`<supernote-atelier-viewer>`"](#supernote-atelier-viewer) for its `.spd` sibling.
 
 **Is this stable?** No — it's marked experimental for a reason (see the main README). It hasn't shipped a
 1.0 yet, and the attribute/property/event names below can still change. Pin an exact version once it's
@@ -159,3 +167,82 @@ return <supernote-viewer ref={ref} />;
   this bundle.
 - **No built-in loading skeleton beyond a text status message** ("Loading…") while a note is being
   fetched/parsed.
+
+## `<supernote-atelier-viewer>`
+
+`<supernote-atelier-viewer>` is the `.spd` (Supernote Atelier app) equivalent of everything above -
+standalone, no Obsidian dependency, same experimental/unstable status (attribute/property/event names can
+still change; pin an exact version once published). Simpler than `<supernote-viewer>` in one respect: a
+`.spd` file has no page concept, just layered tiles flattened onto one canvas, so there's no page-jump
+toolbar, no find bar, no text mode - and a layer-visibility toggle sidebar where `<supernote-viewer>` has a
+page-thumbnail one. Obsidian's own `![[file.spd]]` embed (`SupernoteAtelierEmbed` in `src/atelierView.ts`)
+is a thin wrapper around this exact element, the same relationship `SupernoteEmbed` has to
+`<supernote-viewer>`.
+
+### Getting it into your page
+
+```
+git clone --recurse-submodules https://github.com/philips/supernote-obsidian-plugin
+cd supernote-obsidian-plugin
+npm run build:atelier-webcomponent   # writes dist/supernote-atelier-viewer.js
+```
+
+```html
+<script type="module" src="/path/to/supernote-atelier-viewer.js"></script>
+```
+
+### Minimal example
+
+```html
+<supernote-atelier-viewer src="path/to/file.spd" style="height: 600px; display: block;"></supernote-atelier-viewer>
+```
+
+Same `noteData` property (in place of `src`) for bytes you already have in memory - see the `.note`
+example above; it applies here unchanged, just with a `.spd` file's bytes instead.
+
+### Attributes / properties
+
+| Name | Type | Notes |
+|---|---|---|
+| `src` | attribute, string (URL) | Fetched via `fetch()`. Ignored if `noteData` is also set. |
+| `invert-dark` | boolean attribute | Same "opt in to inversion, not always invert" contract as `<supernote-viewer>`'s identical attribute - see that entry above. |
+| `dark` | tri-state attribute | Same override-not-OR contract as `<supernote-viewer>`'s identical attribute - see that entry above for the full explanation. |
+| `bare` | boolean attribute | Drops this element's own border/background/rounded corners, for embedding inside a host that already provides its own frame - this is what `SupernoteAtelierEmbed` sets. |
+| `.noteData` | property, `ArrayBuffer \| Uint8Array \| null` | Set the file's bytes directly. JS-only, same reason as `<supernote-viewer>`'s identical property. |
+
+Setting `src`/`noteData`/`invert-dark` after the element is already showing a file tears down and rebuilds
+the whole thing from scratch. `dark`/`bare` toggle live via plain CSS attribute selectors, no rebuild.
+
+### Events
+
+| Event | `detail` | Fires |
+|---|---|---|
+| `supernote-atelier-load` | `{ width: number, height: number, layerCount: number }` | Once a `.spd` file has been fetched and parsed successfully (`width`/`height` are the composited image's native pixel size). |
+| `supernote-atelier-error` | `{ error: unknown, recomposite?: boolean }` | On a fetch/parse failure (no `recomposite`), or when a layer-toggle re-composite fails (`recomposite: true` - the image just stays at its last-good state). |
+
+```js
+viewer.addEventListener('supernote-atelier-load', (e) => console.log(`${e.detail.width}x${e.detail.height}, ${e.detail.layerCount} layer(s)`));
+viewer.addEventListener('supernote-atelier-error', (e) => console.error(e.detail.error));
+```
+
+### Styling
+
+Same shadow-root encapsulation as `<supernote-viewer>`, and deliberately the *same* CSS custom property
+names (`--supernote-viewer-border`/`-bg`/`-fg`/`-muted`) - reusing them means one set of theme overrides
+covers both elements:
+
+```css
+supernote-viewer, supernote-atelier-viewer {
+    --supernote-viewer-border: #888;
+    --supernote-viewer-bg: #fafafa;
+    --supernote-viewer-fg: #111;
+    --supernote-viewer-muted: #777;
+}
+```
+
+`::part()` targets: `root`, `toolbar`, `button`, `image-wrapper`, `layer-sidebar`.
+
+### Current limitations
+
+Same as `<supernote-viewer>`'s own list above (read-only, no built-in loading skeleton beyond a text
+status), minus the recognized-text item - `.spd` has no recognized/OCR text at all.

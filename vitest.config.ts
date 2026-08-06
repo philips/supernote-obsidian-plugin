@@ -15,6 +15,18 @@ export default defineConfig({
             // assumes an actual Worker global scope anyway (see
             // rasterize.worker.test-stub.ts).
             'rasterize.worker': path.resolve(__dirname, 'src/rasterize.worker.test-stub.ts'),
+            // Same reasoning as rasterize.worker above, for
+            // atelierWorkerClient.ts's identical bare-specifier `import
+            // Worker from 'atelierComposite.worker'` - see
+            // atelierComposite.worker.test-stub.ts's own comment for why
+            // this one's never actually exercised in tests either.
+            'atelierComposite.worker': path.resolve(__dirname, 'src/atelierComposite.worker.test-stub.ts'),
+            // esbuild's `binary` loader turns this into a Uint8Array at
+            // bundle time (see esbuild.config.mjs); Vite/vitest has no
+            // equivalent for a bare `.wasm` import and fails outright (see
+            // sql-wasm.test-stub.ts's own comment) - alias it to a stub that
+            // reads the same real file via Node's fs instead.
+            'sql.js/dist/sql-wasm.wasm': path.resolve(__dirname, 'src/sql-wasm.test-stub.ts'),
         },
     },
     test: {

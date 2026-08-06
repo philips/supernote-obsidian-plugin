@@ -7,15 +7,15 @@
 // buildThumbSidebar()) - the same debounced load-on-approach pattern that
 // fixed a real out-of-memory crash scrolling a long document's sidebar
 // quickly (issue #154) - so <supernote-viewer>'s own page-thumbnail
-// sidebar (SupernoteViewerElement.ts) and a future, similarly-shaped list
-// can share it instead of each reimplementing the same lazy-load/debounce
-// machinery from scratch. The checkbox option exists specifically for
-// that future case: a Supernote Atelier (.spd) file's layer toggle (see
-// atelierView.ts's own buildLayerToggle(), today a plain, non-portable,
-// non-lazy checkbox list with no thumbnail preview at all - a .spd file
-// only ever has a handful of layers, so it's never needed lazy loading,
-// but a thumbnail preview per layer would be a genuine improvement it
-// could get for free by building on this module instead).
+// sidebar (SupernoteViewerElement.ts) and a similarly-shaped list could
+// share it instead of each reimplementing the same lazy-load/debounce
+// machinery from scratch. The checkbox option exists for exactly that
+// second case: <supernote-atelier-viewer>'s own layer-visibility sidebar
+// (SupernoteAtelierViewerElement.ts's buildLayerSidebarRows()) - though
+// that one deliberately skips setupLazyListLoading() below (see its own
+// comment): a .spd file only ever has a handful of layers, so there's
+// nothing worth lazy-loading, and every layer's thumbnail is composited
+// eagerly instead.
 export interface SidebarListItemSpec {
     label: string;
     // Rendered as a checkbox before the label if provided (the

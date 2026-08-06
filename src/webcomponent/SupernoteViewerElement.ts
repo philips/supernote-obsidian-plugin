@@ -15,6 +15,7 @@ import { RenderedNotePage, buildNotePagePlaceholders, evictNotePageImage, fillNo
 import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
 import { LinkOverlayEntry, bucketLinksByPage, buildLinkOverlay, repositionLinkOverlay } from '../render/linkOverlay';
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
+import { svgIcon } from './icons';
 
 // Inline SVG toolbar icons, not Obsidian's own icon font (setIcon()/Lucide) -
 // this component has no Obsidian dependency at all (see this file's own
@@ -29,32 +30,14 @@ import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListL
 // currentColor, not a fixed color, so each button's own text color (already
 // themed correctly - see the :host color-scheme rules) drives the icon too.
 //
-// Built via createElementNS(), not innerHTML/a parsed template - a static,
-// hardcoded string would be perfectly safe here in practice, but this
-// project's lint config flags any innerHTML/outerHTML write unconditionally
-// (no-unsanitized/property, @microsoft/sdl/no-inner-html), and real DOM
-// construction is only a little more verbose for icons this simple. Each
-// icon* function below builds a fresh <svg> per call - called once per
-// button at toolbar-build time, not cached/cloned, since nothing here is
-// hot enough to matter.
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-function svgIcon(children: [string, Record<string, string>][]): SVGSVGElement {
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
-    svg.setAttribute('aria-hidden', 'true');
-    for (const [tag, attrs] of children) {
-        const el = document.createElementNS(SVG_NS, tag);
-        for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
-        svg.appendChild(el);
-    }
-    return svg;
-}
+// Built via createElementNS() (see svgIcon() in ./icons), not innerHTML/a
+// parsed template - a static, hardcoded string would be perfectly safe here
+// in practice, but this project's lint config flags any innerHTML/outerHTML
+// write unconditionally (no-unsanitized/property, @microsoft/sdl/no-inner-
+// html), and real DOM construction is only a little more verbose for icons
+// this simple. Each icon* function below builds a fresh <svg> per call -
+// called once per button at toolbar-build time, not cached/cloned, since
+// nothing here is hot enough to matter.
 
 // Canonical names for every icon this component's own toolbar/find-bar
 // ever needs - chosen to equal real Lucide icon names (confirmed against

@@ -14,6 +14,7 @@ export default defineConfig(
 		'.claude',
 		'esbuild.config.mjs',
 		'esbuild.webcomponent.config.mjs',
+		'esbuild.atelier-webcomponent.config.mjs',
 		'dist',
 		'version-bump.mjs',
 		'versions.json',
@@ -47,7 +48,7 @@ export default defineConfig(
 		// (mobile has no Node APIs) doesn't apply here either — test files run
 		// under Vitest's real Node process and are never bundled into the
 		// plugin (see linkOverlay.test.ts's fs-based fixture read).
-		files: ['**/*.test.ts'],
+		files: ['**/*.test.ts', '**/*.test-stub.ts'],
 		rules: {
 			'obsidianmd/no-global-this': 'off',
 			'obsidianmd/no-nodejs-modules': 'off',

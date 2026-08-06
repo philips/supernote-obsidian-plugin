@@ -8,6 +8,8 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"dev:webcomponent": "node esbuild.webcomponent.config.mjs",
 		"build:webcomponent": "tsc -noEmit -skipLibCheck && node esbuild.webcomponent.config.mjs production",
+		"dev:atelier-webcomponent": "node esbuild.atelier-webcomponent.config.mjs",
+		"build:atelier-webcomponent": "tsc -noEmit -skipLibCheck && node esbuild.atelier-webcomponent.config.mjs production",
 		"lint": "eslint .",
 		"test": "vitest run",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",

@@ -72,8 +72,8 @@ I personally don't accept funding or donations for this project. However, if you
 
 - Building a custom AI/OCR companion plugin? See [`ocr-plugins.md`](ocr-plugins.md)
   for the `registerPageTextProcessor` hook and a working example.
-- Using the `<supernote-viewer>` web component in your own app? See
-  [`webcomponent-usage.md`](webcomponent-usage.md). Publishing a new version of it? See
+- Using the `<supernote-viewer>` or `<supernote-atelier-viewer>` web components in your own app? See
+  [`webcomponent-usage.md`](webcomponent-usage.md). Publishing a new version of one? See
   [`webcomponent-publishing.md`](webcomponent-publishing.md).
 - Make sure your NodeJS is at least v16 (`node --version`).
 - Clone this repo.
@@ -114,6 +114,22 @@ and strips `<script>` tags and custom elements, so there's no way to load a live
 directly on a GitHub-rendered page. A hosted demo (e.g. GitHub Pages) linked from here would work; that's
 left for a future pass once the component is further along (it's read-only for now - no save/export, see
 the issue for why that's a separate piece of work).
+
+### `<supernote-atelier-viewer>` web component (experimental)
+
+The `.spd` (Supernote Atelier app) equivalent of `<supernote-viewer>` above - same standalone, no-Obsidian
+custom element, this time for Atelier's layered-canvas files instead of `.note`'s paged ones, with a
+layer-visibility toggle sidebar instead of a page-thumbnail one. Same experimental/unstable status as its
+`.note` sibling. Build and try it the same way:
+
+```
+npm run build:atelier-webcomponent   # writes dist/supernote-atelier-viewer.js (gitignored)
+npx serve .
+```
+
+Then open `/demo/atelier.html` and pick a `.spd` file. See [`webcomponent-usage.md`](webcomponent-usage.md)
+for its full API and [`webcomponent-publishing.md`](webcomponent-publishing.md) for publishing - both docs
+now cover this component alongside `<supernote-viewer>`.
 
 - `npm i` or `yarn` to install dependencies.
 - `npm run dev` to start compilation in watch mode.
