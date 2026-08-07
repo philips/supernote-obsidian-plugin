@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
-import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData } from 'supernote-typescript';
+import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -50,6 +50,18 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
 // "data:image/png;base64,..." -> "image/png"
 function dataUrlMimeType(dataUrl: string): string {
     return dataUrl.slice('data:'.length, dataUrl.indexOf(';'));
+}
+
+// Builds one standalone SVG document for a single already-rasterized page,
+// reusing the same PNG bytes ImageConverter produced (rather than
+// re-rasterizing via supernote-typescript's own toSvg(), which would decode
+// the page a second time) and extractPdfPageData() for the recognized-text
+// overlay, the same source addPdfPage()/buildPdfInWorker() draw their own
+// invisible text layer from.
+function buildSvgForPage(sn: SupernoteX, pageNumber: number, imageDataUrl: string): string {
+    const { pageWidth, pageHeight, pages } = extractPdfPageData(sn, pageNumber);
+    const pngBytes = new Uint8Array(dataUrlToBuffer(imageDataUrl));
+    return addSvgPage(pages[0], pngBytes, pageWidth, pageHeight);
 }
 
 // app.fileManager.generateMarkdownLink() follows the vault's "Use Wikilinks"
@@ -361,6 +373,20 @@ class VaultWriter {
 		return imgs;
 	}
 
+	// SVG equivalent of writeImageFiles() — same already-rasterized `images`
+	// input, but each page is wrapped into a standalone SVG document (see
+	// buildSvgForPage()) rather than saved as a raw PNG. SVG is text, not
+	// binary, so this uses vault.create() rather than createBinary().
+	async writeSvgFiles(basename: string, sn: SupernoteX, images: string[]): Promise<TFile[]> {
+		const imgs: TFile[] = [];
+		for (let i = 0; i < images.length; i++) {
+			const svg = buildSvgForPage(sn, i + 1, images[i]);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i + 1}.svg`);
+			imgs.push(await this.app.vault.create(filename, svg));
+		}
+		return imgs;
+	}
+
 	async attachMarkdownFile(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
@@ -379,6 +405,17 @@ class VaultWriter {
 
 		const images = await this.rasterizePages(sn);
 		const imgs = await this.writeImageFiles(file.basename, images);
+		const mdFile = await this.writeMarkdownFile(file, sn, imgs, images);
+		this.notifyExportComplete(mdFile);
+	}
+
+	// SVG equivalent of attachNoteFiles() — see writeSvgFiles().
+	async attachNoteFilesAsSvg(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		const sn = new SupernoteX(new Uint8Array(note));
+
+		const images = await this.rasterizePages(sn);
+		const imgs = await this.writeSvgFiles(file.basename, sn, images);
 		const mdFile = await this.writeMarkdownFile(file, sn, imgs, images);
 		this.notifyExportComplete(mdFile);
 	}
@@ -706,7 +743,7 @@ export class SupernoteView extends FileView {
 		});
 		setIcon(exportPageBtn, 'download');
 		exportPageBtn.addEventListener('click', () => {
-			this.exportCurrentPageAsImage().catch((err: unknown) => {
+			this.exportCurrentPageAsImage(this.settings.pageExportImageFormat).catch((err: unknown) => {
 				new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
 			});
 		});
@@ -746,16 +783,18 @@ export class SupernoteView extends FileView {
 	}
 
 	// Exports the page currently on screen (viewerEl.currentPage, kept up to
-	// date by the component's own scroll-driven page indicator) as a PNG
-	// attachment - the single-page equivalent of the whole-note export
+	// date by the component's own scroll-driven page indicator) as a PNG or
+	// SVG attachment - the single-page equivalent of the whole-note export
 	// buttons above, for when the user only wants the page they're looking
-	// at right now rather than the whole note. Exposed as a command (see
-	// 'export-current-page-as-image') and the toolbar button above.
+	// at right now rather than the whole note. Exposed as commands (see
+	// 'export-current-page-as-image'/'export-current-page-as-svg') and the
+	// toolbar button above, which passes settings.pageExportImageFormat
+	// rather than a hardcoded format.
 	// Independently re-reads and rasterizes just this one page rather than
 	// reaching into the live <supernote-viewer>'s own internal state -
 	// mirrors how VaultWriter's own export methods already read+convert
 	// independently of whatever's currently displayed.
-	async exportCurrentPageAsImage(): Promise<void> {
+	async exportCurrentPageAsImage(format: PageExportImageFormat = 'png'): Promise<void> {
 		if (!this.viewerEl || this.viewerEl.currentPage === 0) return;
 		const pageNumber = this.viewerEl.currentPage;
 
@@ -763,8 +802,15 @@ export class SupernoteView extends FileView {
 		const sn = new SupernoteX(new Uint8Array(note));
 		const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber]);
 
-		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.png`);
-		const savedFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(imageDataUrl));
+		let savedFile: TFile;
+		if (format === 'svg') {
+			const svg = buildSvgForPage(sn, pageNumber, imageDataUrl);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.svg`);
+			savedFile = await this.app.vault.create(filename, svg);
+		} else {
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.png`);
+			savedFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(imageDataUrl));
+		}
 
 		// Same "click to open" completion notice as VaultWriter's exports
 		// (see notifyExportComplete(), issue #167 / PR #175).
@@ -1183,6 +1229,31 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'export-note-as-svg-files',
+			name: 'Export this note as a Markdown and SVG files as attachments',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "note") {
+					if (checking) {
+						return true
+					}
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.attachNoteFilesAsSvg(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
 			id: 'export-note-as-pdf',
 			name: 'Export this note as PDF',
 			checkCallback: (checking: boolean) => {
@@ -1291,6 +1362,21 @@ export default class SupernotePlugin extends Plugin {
 				if (checking) return true;
 
 				view.exportCurrentPageAsImage().catch((err: unknown) => {
+					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+				});
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-current-page-as-svg',
+			name: 'Export current page as SVG attachment',
+			checkCallback: (checking: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(SupernoteView);
+				if (!view) return false;
+				if (checking) return true;
+
+				view.exportCurrentPageAsImage('svg').catch((err: unknown) => {
 					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
 				});
 				return true;

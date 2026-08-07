@@ -12,7 +12,7 @@ This plugin has seven main features:
 
 - 🔗 Embed a note inline in another note with `![[example.note]]` (scrollable, with page nav), or just one page with `![[example.note#page=2]]`.
 
-- ➡️  Export Supernote `*.note` files as PNGs and/or markdown files and attach them to your Vault.
+- ➡️  Export Supernote `*.note` files as PNGs, SVGs, PDFs and/or markdown files and attach them to your Vault.
 
 - 🧠 Attach all of today's modified Supernote notes and text to the current Obsidian note with the "Import notes edited today" command (great when paired with [daily notes](https://obsidian.md/help/plugins/daily-notes))
 

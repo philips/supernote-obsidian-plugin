@@ -24,6 +24,13 @@ export const IMPORT_FORMAT_LABELS: Record<ImportFormat, string> = {
     'images-text': 'Images and text (text only available for .note)',
 };
 
+export type PageExportImageFormat = 'png' | 'svg';
+
+export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, string> = {
+    png: 'PNG',
+    svg: 'SVG',
+};
+
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
 // Not present in the `obsidian` devDependency's types (pinned pre-1.13, see CLAUDE.md on
 // why this repo can't casually bump it), so the shapes below are hand-typed to match the
@@ -67,6 +74,11 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     showExportButtons: boolean;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
+    /** Format the note viewer's toolbar "export current page" button writes
+     *  the page as. The command-palette "Export current page as PNG/SVG
+     *  attachment" commands are unaffected — each always writes its own
+     *  named format regardless of this setting. */
+    pageExportImageFormat: PageExportImageFormat;
     /** Vault folder that device sync writes into; never touches anything outside it. */
     syncFolder: string;
     /**
@@ -90,6 +102,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     showExportButtons: false,
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
+    pageExportImageFormat: 'png',
     syncFolder: 'Supernote sync',
     syncPathFiltersRaw: '',
     noteSyncState: {},
@@ -137,6 +150,15 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 control: {
                     type: 'toggle',
                     key: 'showExportButtons',
+                },
+            },
+            {
+                name: 'Export current page as',
+                desc: 'Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.',
+                control: {
+                    type: 'dropdown',
+                    key: 'pageExportImageFormat',
+                    options: PAGE_EXPORT_IMAGE_FORMAT_LABELS,
                 },
             },
             {
@@ -258,6 +280,18 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         this.plugin.settings.showExportButtons = value;
                         await this.plugin.saveSettings();
                     }),
+            );
+
+        new Setting(containerEl)
+            .setName('Export current page as')
+            .setDesc('Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(PAGE_EXPORT_IMAGE_FORMAT_LABELS)
+                .setValue(this.plugin.settings.pageExportImageFormat)
+                .onChange(async (value) => {
+                    this.plugin.settings.pageExportImageFormat = value as PageExportImageFormat;
+                    await this.plugin.saveSettings();
+                })
             );
 
         new Setting(containerEl)
