@@ -105,6 +105,11 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
         this.buildSortToolbar();
     }
 
+    onOpen() {
+        super.onOpen();
+        this.inputEl.focus();
+    }
+
     private buildSortToolbar() {
         const toolbarEl = createDiv({ cls: 'supernote-toolbar supernote-file-list-toolbar' });
         this.modalEl.prepend(toolbarEl);
