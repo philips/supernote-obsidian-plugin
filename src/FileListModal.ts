@@ -106,7 +106,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     }
 
     onOpen() {
-        super.onOpen();
+        void super.onOpen();
         this.inputEl.focus();
     }
 
