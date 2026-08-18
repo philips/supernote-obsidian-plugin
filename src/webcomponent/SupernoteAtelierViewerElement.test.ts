@@ -10,7 +10,7 @@
 // render/atelierRenderer.ts's real functions directly instead, the same
 // "fake just the part the test environment can't run" pattern
 // SupernoteViewerElement.test.ts's own createViewer() uses for
-// rasterizePage. Real fixtures throughout (the same sample.spd supernote-
+// rasterizePage. Real fixtures throughout (the same atelier-sample-synthetic.spd supernote-
 // typescript's own atelier.test.ts uses), backed by the real sql.js wasm
 // binary via sql-wasm.test-stub.ts (see vitest.config.ts's own alias and
 // that stub's header comment for why a bare `.wasm` import needs one under
@@ -26,7 +26,7 @@ import './SupernoteAtelierViewerElement';
 
 const FIXTURES_DIR = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input');
 
-// sample.spd's own known shape (see supernote-typescript/tests/atelier.test
+// atelier-sample-synthetic.spd's own known shape (see supernote-typescript/tests/atelier.test
 // .ts): 4 layers - "Layer 3" (id 3, surface_3, no tiles at all), "Layer 2"
 // (surface_2, has tiles), "Layer 1" (surface_1, has tiles), and a
 // background "Reference Layer" (id 9999, surface_9999, covers every tile -
@@ -81,7 +81,7 @@ describe('<supernote-atelier-viewer>', () => {
         const el = createAtelierViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent<{ width: number; height: number; layerCount: number }>(el, 'supernote-atelier-load');
-        el.noteData = readFixture('sample.spd');
+        el.noteData = readFixture('atelier-sample-synthetic.spd');
 
         const evt = await loaded;
         expect(evt.detail.width).toBe(1536);
@@ -103,7 +103,7 @@ describe('<supernote-atelier-viewer>', () => {
         const el = createAtelierViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-atelier-load');
-        el.noteData = readFixture('sample.spd');
+        el.noteData = readFixture('atelier-sample-synthetic.spd');
         await loaded;
 
         const toggleBtn = el.shadowRoot!.querySelector('button[aria-label="Toggle layers"]');
@@ -126,7 +126,7 @@ describe('<supernote-atelier-viewer>', () => {
         const el = createAtelierViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-atelier-load');
-        el.noteData = readFixture('sample.spd');
+        el.noteData = readFixture('atelier-sample-synthetic.spd');
         await loaded;
 
         const img = el.shadowRoot!.querySelector('.atelier-image') as HTMLImageElement;

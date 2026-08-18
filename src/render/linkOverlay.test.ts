@@ -89,7 +89,7 @@ describe('LINKRECT against a real .note fixture', () => {
     // uses (tests/main.test.ts, describe("links")) — confirms the coordinate
     // -space assumption positionLinkOverlay() in main.ts depends on: LINKRECT
     // is in the page's own native pixel space, not some other unit/origin.
-    const fixturePath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'nomad-3.26.40-link-tag-3p.note');
+    const fixturePath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'link-n6-3.26.40-partial-erase-3p.note');
 
     it('decodes to 4 numbers within [0, pageWidth] x [0, pageHeight]', () => {
         const buffer = fs.readFileSync(fixturePath);
