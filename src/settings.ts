@@ -72,6 +72,10 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
+    /** Draw exported-PDF pen strokes as crisp vector paths instead of
+     * rasterizing the ink layers. On by default; turn off if an exported
+     * PDF renders ink incorrectly or differently from the device. */
+    vectorInk: boolean;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
     /** Format the note viewer's toolbar "export current page" button writes
@@ -100,6 +104,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
     showExportButtons: false,
+    vectorInk: true,
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
     pageExportImageFormat: 'png',
@@ -150,6 +155,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 control: {
                     type: 'toggle',
                     key: 'showExportButtons',
+                },
+            },
+            {
+                name: 'Vector ink in PDF export',
+                desc: 'When on, an exported PDF draws pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if an exported PDF renders ink incorrectly or differently from the device.',
+                control: {
+                    type: 'toggle',
+                    key: 'vectorInk',
                 },
             },
             {
@@ -278,6 +291,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.showExportButtons)
                     .onChange(async (value) => {
                         this.plugin.settings.showExportButtons = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+
+        new Setting(containerEl)
+            .setName('Vector ink in PDF export')
+            .setDesc(
+                'When on, an exported PDF draws pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if an exported PDF renders ink incorrectly or differently from the device.',
+            )
+            .addToggle((text) =>
+                text
+                    .setValue(this.plugin.settings.vectorInk)
+                    .onChange(async (value) => {
+                        this.plugin.settings.vectorInk = value;
                         await this.plugin.saveSettings();
                     }),
             );
