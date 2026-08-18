@@ -26,7 +26,12 @@ import {
     buildRenderNoteForVectorInk,
 } from 'supernote-typescript';
 
-const FIXTURES_DIR = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input');
+// One '..' (not two like src/render/* and src/webcomponent/* tests use): this
+// test sits directly in src/, so a single '..' reaches the repo root where
+// the supernote-typescript submodule lives. Two would escape above the repo
+// to a sibling 'supernote-typescript' that exists locally (a leftover
+// clone) but not in CI, where it ENOENTs.
+const FIXTURES_DIR = path.join(import.meta.dirname, '..', 'supernote-typescript', 'tests', 'input');
 
 // A note with real decodable TOTALPATH ink - the same fixture the
 // submodule's pdf.test.ts uses to assert vector paths land in the PDF, i.e.
