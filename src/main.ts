@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildRenderNoteForVectorInk } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -102,9 +102,27 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 // serve them - a large export shouldn't compete with actually reading the
 // note. Terminated once done regardless of outcome; this is a one-shot,
 // long-running task, not something worth keeping warm for reuse.
-async function buildPdfInWorker(sn: SupernoteX): Promise<Uint8Array> {
+async function buildPdfInWorker(sn: SupernoteX, vectorInk: boolean): Promise<Uint8Array> {
     const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
-    const pages = pageNumbers.map((n) => extractPdfPageData(sn, n).pages[0]);
+    // When vectorInk is on, prepare the per-page vector strokes/styles on the
+    // main thread: the worker only receives structured-clone-safe IPdfPage
+    // slices (extractPdfPageData), which don't carry the TOTALPATH buffer or
+    // note.titles the vector-ink decode reads. buildRenderNoteForVectorInk
+    // returns a copy of `sn` with the bitmap ink layers stripped from every
+    // page whose ink the vectors replace, so extractPdfPageData slices that
+    // stripped note and the worker's toImage() rasterizes only the
+    // background for those pages - addPdfPage() then draws the strokes on top.
+    // Coordinates share toImage()'s native page-pixel space (this export never
+    // upscales). See supernote-typescript's README, "Vector ink from the
+    // parallel/Worker path".
+    const vectorInkPages = vectorInk ? prepareVectorInkPages(sn, pageNumbers, 1) : [];
+    const renderNote = vectorInk ? buildRenderNoteForVectorInk(sn, vectorInkPages) : sn;
+    const pages = pageNumbers.map((n) => extractPdfPageData(renderNote, n).pages[0]);
+    // Parallel to `pages` by position; undefined entries fall back to the
+    // raster the worker already embedded (addPdfPage no-ops on empty/absent
+    // strokes), so a page whose ink didn't decode keeps its rasterized ink.
+    const strokes = vectorInk ? vectorInkPages.map((vip) => (vip.useVectorInk ? vip.strokes : undefined)) : undefined;
+    const strokeStyles = vectorInk ? vectorInkPages.map((vip) => (vip.useVectorInk ? vip.styles : undefined)) : undefined;
 
     const worker = new PdfBuildWorker();
     try {
@@ -119,6 +137,8 @@ async function buildPdfInWorker(sn: SupernoteX): Promise<Uint8Array> {
                 pageWidth: sn.pageWidth,
                 pageHeight: sn.pageHeight,
                 pages,
+                strokes,
+                strokeStyles,
             };
             worker.postMessage(message);
         });
@@ -446,7 +466,7 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(noteBuffer));
 
 		if (format === 'pdf') {
-			const pdfBytes = await buildPdfInWorker(sn);
+			const pdfBytes = await buildPdfInWorker(sn, this.settings.vectorInk);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
@@ -526,7 +546,7 @@ class VaultWriter {
 		// Runs entirely inside a dedicated Worker (see buildPdfInWorker()) so
 		// pdf-lib's own considerable memory/CPU cost never blocks Obsidian's
 		// UI thread, regardless of note length.
-		const pdfBytes = await buildPdfInWorker(sn);
+		const pdfBytes = await buildPdfInWorker(sn, this.settings.vectorInk);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);

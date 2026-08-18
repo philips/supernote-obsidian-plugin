@@ -1,7 +1,7 @@
 import { installAtPolyfill } from 'polyfills';
 installAtPolyfill();
 
-import { IRenderableNote, IPdfPage, toImage, createPdfContext, addPdfPage, flattenToWhite } from 'supernote-typescript';
+import { IRenderableNote, IPdfPage, toImage, createPdfContext, addPdfPage, flattenToWhite, type IStroke, type StrokeStyle } from 'supernote-typescript';
 
 export { };
 
@@ -26,7 +26,7 @@ export type PdfBuildWorkerMessage =
     // now-removed assemblePdfFromNote() for the fuller trail). Doing all of
     // that here means Obsidian's own UI thread never carries any of that
     // cost, regardless of how large it is.
-    { type: 'buildPdf'; pageWidth: number; pageHeight: number; pages: IPdfPage[] };
+    { type: 'buildPdf'; pageWidth: number; pageHeight: number; pages: IPdfPage[]; strokes?: (IStroke[] | undefined)[]; strokeStyles?: (StrokeStyle[] | undefined)[] };
 
 export type PdfBuildWorkerResponse =
     | { type: 'pdfResult'; pdfBytes: Uint8Array }
@@ -94,7 +94,16 @@ self.onmessage = async (e: MessageEvent<PdfBuildWorkerMessage>) => {
                 // a black page background with the actual strokes
                 // barely visible on top). Actually blending each pixel
                 // toward white by its own alpha gives the right result.
-                await addPdfPage(ctx, batch[i], flattenToWhite(images[i]));
+                await addPdfPage(ctx, batch[i], flattenToWhite(images[i]), {
+                    // Per-page vector ink, indexed in lockstep with `pages`
+                    // (start + i is the global page position the parallel
+                    // strokes/strokeStyles arrays from buildPdfInWorker use).
+                    // Undefined here means vectorInk was off, or this page's
+                    // ink didn't decode and kept its raster - addPdfPage
+                    // no-ops on empty/absent strokes either way.
+                    strokes: data.strokes?.[start + i],
+                    strokeStyles: data.strokeStyles?.[start + i],
+                });
             }
             console.debug(
                 `Supernote: PDF export (worker) — embedded page ${start + batch.length}/${data.pages.length}, heap ~${currentHeapMB()}MB`,
