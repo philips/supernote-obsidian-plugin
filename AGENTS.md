@@ -82,6 +82,16 @@ npm test                              # vitest run
     (bundled via `esbuild-plugin-inline-worker`), split so the standalone
     web component's bundle (`src/webcomponent/`) doesn't pull in pdf-lib
     just for sharing a worker script with the plugin's PDF export feature.
+    `pdfBuild.worker.ts` also consumes vector ink when the `vectorInk`
+    setting is on: `buildPdfInWorker` (main thread) calls the submodule's
+    exported `prepareVectorInkPages` / `buildRenderNoteForVectorInk`,
+    slices the stripped note via `extractPdfPageData`, and posts the
+    per-page `strokes`/`strokeStyles` alongside the page slices; the
+    worker passes them through to `addPdfPage`, which draws them as vector
+    paths. On by default; turn off in settings if an export renders ink
+    wrong. The submodule exports those helpers from its public API
+    (philips/supernote-typescript PR #108) specifically so this batched-
+    worker path can reach vector ink without using the `toPdf` wrapper.
 - Don't commit build artifacts (`main.js`, `node_modules/`) — `main.js` is
   gitignored and shipped only via GitHub releases.
 
