@@ -58,9 +58,9 @@ Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for devel
 
 **A** Because the [Obsidian Outline](https://help.obsidian.md/Plugins/Outline) sidebar accomplishes this same feature.
 
-**Q** The exported PDF's ink looks different from the device / renders wrong. Can I turn vector ink off?
+**Q** The on-screen note's or exported PDF's ink looks different from the device / renders wrong. Can I turn vector ink off?
 
-**A** Yes. Exported PDFs draw pen strokes as crisp vector paths by default (instead of rasterizing the ink), so they stay sharp at any zoom. If an exported PDF renders ink incorrectly or differently from your device, disable **Settings → Supernote → Vector ink in PDF export** — the export then falls back to the original rasterized ink. The setting is on by default.
+**A** Yes. The note viewer and exported PDFs/SVGs draw pen strokes as crisp vector paths by default (instead of rasterizing the ink), so they stay sharp at any zoom. If ink renders incorrectly or differently from your device, disable **Settings → Supernote → Vector ink** — the view and exports then fall back to the original rasterized ink. The setting is on by default. (PNG export and the thumbnail sidebar stay rasterized either way, since a PNG is pixels and a tiny preview gains nothing from vector paths.)
 
 ## Relevant Resources
 
