@@ -72,9 +72,11 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
-    /** Draw exported-PDF pen strokes as crisp vector paths instead of
-     * rasterizing the ink layers. On by default; turn off if an exported
-     * PDF renders ink incorrectly or differently from the device. */
+    /** Draw pen strokes as crisp vector paths instead of rasterizing the
+     * ink layers — in the on-screen note view and exported PDFs. On by
+     * default; turn off if ink renders incorrectly or differently from the
+     * device. The persisted key stays `vectorInk` (originally PDF-only) so
+     * existing installs keep their toggle state. */
     vectorInk: boolean;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
@@ -158,8 +160,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
-                name: 'Vector ink in PDF export',
-                desc: 'When on, an exported PDF draws pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if an exported PDF renders ink incorrectly or differently from the device.',
+                name: 'Vector ink',
+                desc: 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
                 control: {
                     type: 'toggle',
                     key: 'vectorInk',
@@ -296,9 +298,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Vector ink in PDF export')
+            .setName('Vector ink')
             .setDesc(
-                'When on, an exported PDF draws pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if an exported PDF renders ink incorrectly or differently from the device.',
+                'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
             )
             .addToggle((text) =>
                 text
