@@ -707,12 +707,24 @@ export class SupernoteViewerElement extends HTMLElement {
         return ['src', 'page', 'single-page', 'invert-dark'];
     }
 
+    // Whether rasterizePage() below draws this page's pen strokes as crisp
+    // vector paths (an SVG data URL) instead of rasterizing the ink (a PNG
+    // data URL). Defaults false so the standalone web component — which has
+    // no settings UI of its own — keeps the simpler raster behavior a host
+    // that never asked for vector ink expects; a host with a vectorInk
+    // setting (SupernoteView/SupernoteEmbed in main.ts) sets this from its
+    // own settings. See imageConverter.ts's convertToImages() vectorInk flag
+    // for what this actually toggles downstream (the rasterize worker
+    // assembles an SVG via addSvgPage with the strokes drawn as vector
+    // <path>s on top of a background-only raster).
+    vectorInk = false;
+
     // Overridable so tests can substitute a fake rasterizer - the real
     // ImageConverter dispatches to a Web Worker (see imageConverter.ts),
     // which test environments without a real browser (e.g. happy-dom) don't
     // implement.
     rasterizePage: (sn: SupernoteX, pageNumber: number) => Promise<string> = async (sn, pageNumber) => {
-        const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber]);
+        const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber], undefined, this.vectorInk);
         return imageDataUrl;
     };
 

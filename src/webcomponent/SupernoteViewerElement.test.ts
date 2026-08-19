@@ -56,7 +56,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
 
         const evt = await loaded;
         expect(evt.detail.pageCount).toBe(2);
@@ -101,7 +101,7 @@ describe('<supernote-viewer>', () => {
         document.body.appendChild(el);
 
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
         await loaded;
 
         const slot = el.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="toolbar-extra"]');
@@ -114,7 +114,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // 2 pages
             await loaded;
 
             const findBtn = el.shadowRoot!.querySelector('button[aria-label="Find in note"]')!;
@@ -136,7 +136,7 @@ describe('<supernote-viewer>', () => {
             };
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
 
             const findBtn = el.shadowRoot!.querySelector('button[aria-label="Find in note"]')!;
@@ -162,7 +162,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent<{ pageIds: string[] }>(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+        el.noteData = readFixture('link-n6-3.26.40-partial-erase-3p.note');
 
         const evt = await loaded;
         expect(evt.detail.pageIds).toEqual([
@@ -194,7 +194,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // 2 pages
         await loaded;
 
         const pagesEl = el.shadowRoot!.querySelector('.pages')!;
@@ -238,7 +238,7 @@ describe('<supernote-viewer>', () => {
         el.textProcessor = (text) => text.toUpperCase();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('rtr.note');
+        el.noteData = readFixture('rtr-n5-20230015-recognition.note');
         await loaded;
 
         const textEl = el.shadowRoot!.querySelector('.page-text');
@@ -250,7 +250,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
         await loaded;
 
         el.goToPage(2);
@@ -293,7 +293,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
         await loaded;
 
         const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
@@ -311,7 +311,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // 2 pages
             await loaded;
 
             const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
@@ -333,7 +333,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
 
             const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
@@ -347,7 +347,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
 
             const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
@@ -364,7 +364,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
 
             const input = el.shadowRoot!.querySelector<HTMLInputElement>('.page-jump-input')!;
@@ -388,7 +388,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // pageWidth 1404, pageHeight 1872, 2 pages
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // pageWidth 1404, pageHeight 1872, 2 pages
             await loaded;
             return el;
         }
@@ -420,7 +420,7 @@ describe('<supernote-viewer>', () => {
             el.setAttribute('invert-dark', '');
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
 
             const thumbs = el.shadowRoot!.querySelectorAll<HTMLImageElement>('.sidebar-list-thumb');
@@ -495,7 +495,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('rtr.note'); // 1 page
+            el.noteData = readFixture('rtr-n5-20230015-recognition.note'); // 1 page
             await loaded;
 
             expect(el.shadowRoot!.querySelector('button[aria-label="Toggle page thumbnails"]')).toBeNull();
@@ -507,7 +507,7 @@ describe('<supernote-viewer>', () => {
             el.setAttribute('single-page', '');
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
 
             expect(el.shadowRoot!.querySelector('button[aria-label="Toggle page thumbnails"]')).toBeNull();
@@ -520,7 +520,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // pageWidth 1404, 2 pages
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // pageWidth 1404, 2 pages
             await loaded;
             return el;
         }
@@ -682,7 +682,7 @@ describe('<supernote-viewer>', () => {
             el.setAttribute('single-page', '');
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // pageWidth 1404
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // pageWidth 1404
             await loaded;
             await Promise.resolve();
             await Promise.resolve();
@@ -706,7 +706,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('rtr.note');
+        el.noteData = readFixture('rtr-n5-20230015-recognition.note');
         await loaded;
 
         const textEl = el.shadowRoot!.querySelector('.page-text');
@@ -723,7 +723,7 @@ describe('<supernote-viewer>', () => {
         el.setAttribute('page', '2');
         document.body.appendChild(el);
         const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
         await loaded;
         // ensurePageImageLoaded() is fired eagerly (no goToPage()/observer
         // needed) - give its microtasks a moment to settle.
@@ -746,7 +746,7 @@ describe('<supernote-viewer>', () => {
         el.setAttribute('page', '99');
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note'); // 2 pages
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note'); // 2 pages
         await loaded;
 
         expect(el.shadowRoot!.querySelector('.page-container')?.getAttribute('data-page-number')).toBe('2');
@@ -757,7 +757,7 @@ describe('<supernote-viewer>', () => {
         el.setAttribute('invert-dark', '');
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
         await loaded;
 
         const images = el.shadowRoot!.querySelectorAll('.page-container img');
@@ -771,7 +771,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
         await loaded;
 
         const img = el.shadowRoot!.querySelector('.page-container img');
@@ -782,7 +782,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('rtr.note');
+        el.noteData = readFixture('rtr-n5-20230015-recognition.note');
         await loaded;
 
         const spans = el.shadowRoot!.querySelectorAll('.word-overlay-span');
@@ -798,7 +798,7 @@ describe('<supernote-viewer>', () => {
         const el = createViewer();
         document.body.appendChild(el);
         const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('rtr.note'); // 1 page
+        el.noteData = readFixture('rtr-n5-20230015-recognition.note'); // 1 page
         await loaded;
 
         expect(el.shadowRoot!.querySelector('.toolbar')).toBeTruthy();
@@ -812,7 +812,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
             return el;
         }
@@ -879,7 +879,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-blank-2p.note');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
             await loaded;
             return el;
         }
@@ -971,7 +971,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('rtr.note');
+            el.noteData = readFixture('rtr-n5-20230015-recognition.note');
             await loaded;
             return el;
         }
@@ -1208,7 +1208,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+            el.noteData = readFixture('link-n6-3.26.40-partial-erase-3p.note');
             await loaded;
 
             const [page1, page2, page3] = Array.from(el.shadowRoot!.querySelectorAll('.page-container'));
@@ -1221,7 +1221,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+            el.noteData = readFixture('link-n6-3.26.40-partial-erase-3p.note');
             await loaded;
 
             const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];
@@ -1254,7 +1254,7 @@ describe('<supernote-viewer>', () => {
             const el = createViewer();
             document.body.appendChild(el);
             const loaded = waitForEvent(el, 'supernote-load');
-            el.noteData = readFixture('nomad-3.26.40-link-tag-3p.note');
+            el.noteData = readFixture('link-n6-3.26.40-partial-erase-3p.note');
             await loaded;
 
             const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];

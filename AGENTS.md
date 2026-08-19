@@ -82,6 +82,28 @@ npm test                              # vitest run
     (bundled via `esbuild-plugin-inline-worker`), split so the standalone
     web component's bundle (`src/webcomponent/`) doesn't pull in pdf-lib
     just for sharing a worker script with the plugin's PDF export feature.
+    Both consume vector ink when the `vectorInk` setting is on (on by
+    default; turn off in settings if a render renders ink wrong):
+    - `pdfBuild.worker.ts`: `buildPdfInWorker` (main thread) calls the
+      submodule's exported `prepareVectorInkPages` / `buildRenderNoteForVectorInk`,
+      slices the stripped note via `extractPdfPageData`, and posts the
+      per-page `strokes`/`strokeStyles` alongside the page slices; the worker
+      passes them through to `addPdfPage`, which draws them as vector paths.
+    - `rasterize.worker.ts` (the on-screen view + image export path,
+      shared with the standalone `<supernote-viewer>`): `convertToImages`
+      prepares `prepareVectorInkPages` on the main thread (the worker's
+      `IRenderableNote` slices lack the `TOTALPATH`/`titles` the decode
+      reads) and posts the per-page `VectorInkPage` alongside the slices;
+      the worker nulls the ink layers on each `useVectorInk` page's slice
+      (so `toImage` rasterizes only the background), then `addSvgPage`
+      draws the strokes as vector `<path>`s on top, returned as an
+      `image/svg+xml` data URL that drops into `<img src>` identically to
+      the PNG data URLs. Full-res renders only — thumbnails keep the
+      raster path (a `scale` downsample would corrupt vector coordinates).
+      The submodule exports those helpers from its public API
+      (philips/supernote-typescript PR #108) specifically so these
+      batched-worker paths can reach vector ink without the `toPdf`/`toSvg`
+      wrappers.
 - Don't commit build artifacts (`main.js`, `node_modules/`) — `main.js` is
   gitignored and shipped only via GitHub releases.
 

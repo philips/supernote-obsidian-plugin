@@ -72,6 +72,12 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
+    /** Draw pen strokes as crisp vector paths instead of rasterizing the
+     * ink layers — in the on-screen note view and exported PDFs. On by
+     * default; turn off if ink renders incorrectly or differently from the
+     * device. The persisted key stays `vectorInk` (originally PDF-only) so
+     * existing installs keep their toggle state. */
+    vectorInk: boolean;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
     /** Format the note viewer's toolbar "export current page" button writes
@@ -100,6 +106,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
     showExportButtons: false,
+    vectorInk: true,
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
     pageExportImageFormat: 'png',
@@ -150,6 +157,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 control: {
                     type: 'toggle',
                     key: 'showExportButtons',
+                },
+            },
+            {
+                name: 'Vector ink',
+                desc: 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
+                control: {
+                    type: 'toggle',
+                    key: 'vectorInk',
                 },
             },
             {
@@ -278,6 +293,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.showExportButtons)
                     .onChange(async (value) => {
                         this.plugin.settings.showExportButtons = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+
+        new Setting(containerEl)
+            .setName('Vector ink')
+            .setDesc(
+                'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
+            )
+            .addToggle((text) =>
+                text
+                    .setValue(this.plugin.settings.vectorInk)
+                    .onChange(async (value) => {
+                        this.plugin.settings.vectorInk = value;
                         await this.plugin.saveSettings();
                     }),
             );

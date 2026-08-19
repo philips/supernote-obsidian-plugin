@@ -218,7 +218,7 @@ describe('repositionWordOverlay', () => {
 describe('against a real .note fixture', () => {
     // Same fixture used elsewhere in this project for recognized-text
     // testing (has real English-language handwriting recognition data).
-    const fixturePath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'rtr.note');
+    const fixturePath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'rtr-n5-20230015-recognition.note');
 
     it('builds sensible, in-bounds overlay entries and search text from a real page', () => {
         const buffer = fs.readFileSync(fixturePath);
@@ -267,7 +267,7 @@ describe('against a real .note fixture', () => {
     });
 
     it('positions "Subject" within its own line on a real narrower (non-Manta, pageWidth 1404) note (issue #204)', () => {
-        // rtr.note above is a Manta-family capture (pageWidth 1920, where
+        // rtr-n5-20230015-recognition.note above is a Manta-family capture (pageWidth 1920, where
         // the 11.9 reference scale applies directly) - this fixture is the
         // far more common non-Manta case (pageWidth 1404, e.g. an A5X)
         // that exposed the bug: pixel-cropping the actual rendered page
@@ -276,7 +276,7 @@ describe('against a real .note fixture', () => {
         // ~8.70 scale for this pageWidth), not ~157 (the same native units
         // * the wrong, Manta-tuned 11.9) - a difference that compounds
         // with every line further down the page.
-        const a5xPath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'a5x-2.14.28.note');
+        const a5xPath = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input', 'ink-a5x-2.14.28-old-pen-width.note');
         const buffer = fs.readFileSync(a5xPath);
         const sn = new SupernoteX(new Uint8Array(buffer));
         const page = sn.pages[0];
