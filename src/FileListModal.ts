@@ -1,6 +1,6 @@
 import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
-import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from 'settings';
+import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from './settings';
 import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { ErrorModal } from './ErrorModal';
@@ -60,7 +60,7 @@ export async function scanDeviceSupernoteTree(ip: string, path = '/', visited: S
     for (const entry of entries) {
         if (entry.isDirectory) {
             results.push(...await scanDeviceSupernoteTree(ip, entry.uri, visited));
-        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && uriMatchesName(entry.uri, entry.name)) {
+        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && isTrustedListingEntry(entry)) {
             results.push(entry);
         }
     }
@@ -76,6 +76,26 @@ export async function scanDeviceSupernoteTree(ip: string, path = '/', visited: S
 function uriMatchesName(uri: string, name: string): boolean {
     const segments = uri.split('/').filter((s) => s.length > 0);
     return segments[segments.length - 1] === name;
+}
+
+// A "plain" filename: non-empty, not a dot segment, and containing no path
+// separators. Complements uriMatchesName (which can't see "\\" — device
+// uris are only ever split on "/"): a device-supplied name carrying "/",
+// "\\", or being "."/".." is the path-traversal primitive once it reaches
+// getAvailablePathForAttachment/vault.createBinary, because Obsidian's path
+// normalization turns "\\" into "/" and does not strip ".." segments
+// (same class of bug as GHSA-3gx3-r874-5pp4, which fixed the sync write
+// path; this guards every path that writes a device-supplied name).
+function isPlainFileName(name: string): boolean {
+    return name.length > 0 && name !== '.' && name !== '..'
+        && !name.includes('/') && !name.includes('\\');
+}
+
+// Guard for any consumer about to write a device-listing entry into the
+// vault under its own name: the entry must be self-consistent (name matches
+// the uri's final segment) *and* the name must be a plain filename.
+function isTrustedListingEntry(file: SupernoteFile): boolean {
+    return uriMatchesName(file.uri, file.name) && isPlainFileName(file.name);
 }
 
 function compareByDirectoryThenNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
@@ -250,6 +270,17 @@ export class DownloadListModal extends FileListModal {
                 this.open();
             } else {
                 try {
+                    // Unlike sync/import-today (whose files all pass through
+                    // scanDeviceSupernoteTree's isTrustedListingEntry gate),
+                    // this browse path hands the listing entry straight to
+                    // getAvailablePathForAttachment under its own name — refuse
+                    // entries that could smuggle a traversal segment through it
+                    // before fetching anything.
+                    if (!isTrustedListingEntry(file)) {
+                        throw new Error(
+                            `Device listing returned inconsistent data for "${file.name}" — refusing to download it.`
+                        );
+                    }
                     const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file', {
                         timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
                     });

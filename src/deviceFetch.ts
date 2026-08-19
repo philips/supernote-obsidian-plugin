@@ -66,6 +66,17 @@ export async function fetchFromDevice(
 ): Promise<DeviceResponse> {
     const { timeoutMs = DEVICE_REQUEST_TIMEOUT_MS, ...requestInit } = init;
 
+    // Pin the request to the device host: `path` comes from parsed device
+    // directory listings, so a hostile or impersonating device controls its
+    // contents. Without a leading "/", a crafted path like
+    // "@evil.example/x" would make the URL's authority parse as userinfo
+    // "ip:8089" plus host "evil.example" (WHATWG URL parsing treats
+    // everything up to the first "/", "\\", "?", or "#" as the authority).
+    // A leading "/" terminates the authority right after the port, so the
+    // host can never be escaped. Normalizing (prefixing) rather than
+    // rejecting keeps odd-but-benign listings from real devices working.
+    const safePath = path.startsWith('/') ? path : `/${path}`;
+
     let timeoutHandle: ReturnType<typeof window.setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
         timeoutHandle = window.setTimeout(
@@ -77,7 +88,7 @@ export async function fetchFromDevice(
     try {
         const response = await Promise.race([
             requestUrl({
-                url: `http://${ip}:8089${path}`,
+                url: `http://${ip}:8089${safePath}`,
                 throw: false,
                 ...requestInit,
             }),

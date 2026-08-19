@@ -121,6 +121,44 @@ describe('fetchFromDevice', () => {
             'Failed to load file list: could not reach Supernote at 192.168.1.50 (net::ERR_CONNECTION_REFUSED).'
         );
     });
+
+    describe('path normalization (host pinning)', () => {
+        // The path comes from parsed device directory listings, i.e. from a
+        // device an on-LAN attacker could impersonate. Without a leading "/",
+        // a crafted path reparsesthe URL so the request leaves the device
+        // host entirely — see fetchFromDevice's comment in deviceFetch.ts.
+        it('prefixes a missing leading slash so an "@"-led path cannot smuggle in another host', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '@evil.example/secret.note', 'Failed to download file');
+
+            // With the "/", "ip:8089" can only parse as the authority
+            // (host:port), never as userinfo of "evil.example".
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/@evil.example/secret.note' }),
+            );
+        });
+
+        it('prefixes a backslash-led path, which otherwise also terminates the URL authority', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '\\evil.example/x.note', 'Failed to download file');
+
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/\\evil.example/x.note' }),
+            );
+        });
+
+        it('leaves already-absolute paths untouched, including "@" in later segments', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '/Note/@mentions/x.note', 'Failed to load file list');
+
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/@mentions/x.note' }),
+            );
+        });
+    });
 });
 
 describe('buildMultipartBody', () => {

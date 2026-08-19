@@ -1,0 +1,120 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { scanDeviceSupernoteTree } from './FileListModal';
+import { fetchFromDevice } from './deviceFetch';
+
+vi.mock('obsidian', () => ({
+    // FileListModal (extends SuggestModal) and its transitive imports
+    // (ErrorModal extends Modal, settings.ts extends PluginSettingTab) need
+    // these at module scope; everything else is only referenced inside class
+    // methods that these tests never run.
+    SuggestModal: class { },
+    Modal: class { },
+    Notice: class { },
+    MarkdownView: class { },
+    PluginSettingTab: class { },
+}));
+
+vi.mock('./deviceFetch', () => ({
+    fetchFromDevice: vi.fn(),
+    buildMultipartBody: vi.fn(),
+    DEVICE_TRANSFER_TIMEOUT_MS: 120_000,
+}));
+
+// Builds one device "Browse and Access" directory-listing response whose
+// HTML embeds the given entries as JSON, in the exact shape
+// fetchSupernoteDirectory parses back out. (Avoid `'` in names — the device
+// embeds the JSON inside a single-quoted JS string.)
+function mockListing(entries: { name: string; uri?: string; isDirectory?: boolean }[]) {
+    const fileList = entries.map((e) => ({
+        name: e.name,
+        size: 1,
+        date: '2026/01/01 12:00',
+        uri: e.uri ?? `/${e.name}`,
+        extension: 'note',
+        isDirectory: e.isDirectory ?? false,
+    }));
+    const json = JSON.stringify({
+        deviceName: 'A5X',
+        fileList,
+        routeList: [],
+        totalByteSize: 0,
+        totalMemory: 0,
+        usedMemory: 0,
+    });
+    return {
+        ok: true,
+        status: 200,
+        text: async () => `const json = '${json}'`,
+        arrayBuffer: async () => new ArrayBuffer(0),
+    };
+}
+
+describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', () => {
+    beforeEach(() => {
+        vi.mocked(fetchFromDevice).mockReset();
+    });
+
+    it('keeps well-formed entries', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'diary.note' },
+            { name: 'sketch.spd' },
+        ]));
+
+        const files = await scanDeviceSupernoteTree('192.168.1.50');
+
+        expect(files.map((f) => f.name).sort()).toEqual(['diary.note', 'sketch.spd']);
+    });
+
+    it('drops entries whose name and uri disagree on the filename', async () => {
+        // name passes the .note filter; the uri it would actually be
+        // downloaded from points elsewhere (e.g. carries traversal segments).
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'innocent.note', uri: '/../../evil.note' },
+        ]));
+
+        expect(await scanDeviceSupernoteTree('192.168.1.50')).toEqual([]);
+    });
+
+    it('drops entries whose name contains a forward slash', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: '../../../etc/passwd.note', uri: '/Note/../../../etc/passwd.note' },
+        ]));
+
+        expect(await scanDeviceSupernoteTree('192.168.1.50')).toEqual([]);
+    });
+
+    it('drops entries whose name contains a backslash', async () => {
+        // uriMatchesName alone can't see this one: device uris are only split
+        // on "/", so a name with "\\" in it still "matches" the uri's final
+        // segment. Obsidian path normalization later turns "\\" into "/",
+        // making this a traversal once it reaches getAvailablePathForAttachment.
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: '..\\..\\evil.note', uri: '/Note/..\\..\\evil.note' },
+        ]));
+
+        expect(await scanDeviceSupernoteTree('192.168.1.50')).toEqual([]);
+    });
+
+    it('drops entries named "." or ".."', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: '..', uri: '/Note/..' },
+            { name: '.', uri: '/Note/.' },
+        ]));
+
+        expect(await scanDeviceSupernoteTree('192.168.1.50')).toEqual([]);
+    });
+
+    it('still recurses into directories the listing marks as such', async () => {
+        vi.mocked(fetchFromDevice)
+            .mockResolvedValueOnce(mockListing([
+                { name: 'EXPORT', isDirectory: true, uri: '/EXPORT' },
+            ]))
+            .mockResolvedValueOnce(mockListing([
+                { name: 'inside.note', uri: '/EXPORT/inside.note' },
+            ]));
+
+        const files = await scanDeviceSupernoteTree('192.168.1.50');
+
+        expect(files.map((f) => f.name)).toEqual(['inside.note']);
+    });
+});
