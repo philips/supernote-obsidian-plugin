@@ -61,7 +61,17 @@ function dataUrlMimeType(dataUrl: string): string {
 function buildSvgForPage(sn: SupernoteX, pageNumber: number, imageDataUrl: string): string {
     const { pageWidth, pageHeight, pages } = extractPdfPageData(sn, pageNumber);
     const pngBytes = new Uint8Array(dataUrlToBuffer(imageDataUrl));
-    return addSvgPage(pages[0], pngBytes, pageWidth, pageHeight);
+    // Pass the note's device family + native pageWidth so the invisible
+    // recognition-text overlay lands at the right position on every device
+    // (N6/A6X use their own pageWidth as the recognition canvas, not the
+    // 1920px reference A5X/Manta do — issue #219). nativePageWidth == the
+    // pageWidth here since this path never upscales; addSvgPage still needs
+    // it explicitly so a future caller rendering an upscaled image through
+    // here wouldn't silently regress.
+    return addSvgPage(pages[0], pngBytes, pageWidth, pageHeight, {
+        equipment: sn.header.APPLY_EQUIPMENT,
+        nativePageWidth: sn.pageWidth,
+    });
 }
 
 // app.fileManager.generateMarkdownLink() follows the vault's "Use Wikilinks"
@@ -139,6 +149,15 @@ async function buildPdfInWorker(sn: SupernoteX, vectorInk: boolean): Promise<Uin
                 pages,
                 strokes,
                 strokeStyles,
+                // The note's device family + native pageWidth drive the
+                // recognition-coordinate scale of the invisible text layer
+                // (N6/A6X use their own pageWidth as the recognition canvas,
+                // not the 1920px reference A5X/Manta do — issue #219).
+                // nativePageWidth == sn.pageWidth here since this path never
+                // upscales; addPdfPage still needs it explicitly so the
+                // canvas is recoverable if a future caller renders upscaled.
+                equipment: sn.header.APPLY_EQUIPMENT,
+                nativePageWidth: sn.pageWidth,
             };
             worker.postMessage(message);
         });

@@ -1255,7 +1255,7 @@ export class SupernoteViewerElement extends HTMLElement {
             // overlay is built and correctly positioned" a plain invariant
             // rather than something a caller needs to check the render mode
             // to reason about.
-            const wordEntries = notePage ? buildWordOverlay(notePage, page.containerEl, page.pageNumber, sn.pageWidth) : [];
+            const wordEntries = notePage ? buildWordOverlay(notePage, page.containerEl, page.pageNumber, sn.pageWidth, sn.header.APPLY_EQUIPMENT) : [];
 
             const linkEntries = buildLinkOverlay(linksByPage.get(page.pageNumber - 1) ?? [], page.containerEl);
             for (const entry of linkEntries) {

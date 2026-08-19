@@ -26,7 +26,22 @@ export type PdfBuildWorkerMessage =
     // now-removed assemblePdfFromNote() for the fuller trail). Doing all of
     // that here means Obsidian's own UI thread never carries any of that
     // cost, regardless of how large it is.
-    { type: 'buildPdf'; pageWidth: number; pageHeight: number; pages: IPdfPage[]; strokes?: (IStroke[] | undefined)[]; strokeStyles?: (StrokeStyle[] | undefined)[] };
+    {
+        type: 'buildPdf';
+        pageWidth: number;
+        pageHeight: number;
+        pages: IPdfPage[];
+        strokes?: (IStroke[] | undefined)[];
+        strokeStyles?: (StrokeStyle[] | undefined)[];
+        // Device family (`header.APPLY_EQUIPMENT`) and native pageWidth for
+        // the invisible recognition-text layer's coordinate scale — see
+        // recognitionCoordinateScale in supernote-typescript. N6/A6X use
+        // their own pageWidth as the recognition canvas, not the 1920px
+        // reference A5X/Manta do, so without these the exported PDF's
+        // searchable text drifts off the ink on those devices (issue #219).
+        equipment?: string;
+        nativePageWidth?: number;
+    };
 
 export type PdfBuildWorkerResponse =
     | { type: 'pdfResult'; pdfBytes: Uint8Array }
@@ -103,6 +118,8 @@ self.onmessage = async (e: MessageEvent<PdfBuildWorkerMessage>) => {
                     // no-ops on empty/absent strokes either way.
                     strokes: data.strokes?.[start + i],
                     strokeStyles: data.strokeStyles?.[start + i],
+                    equipment: data.equipment,
+                    nativePageWidth: data.nativePageWidth,
                 });
             }
             console.debug(

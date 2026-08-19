@@ -41,29 +41,46 @@ export interface WordOverlayEntry {
 }
 
 // Recognized word bounding boxes are stored in raster-pixel units divided by
-// a scale factor - NOT a universal constant, confirmed via real device
-// files: 11.9 (this constant's own long-standing value, and
-// supernote-typescript/src/pdf.ts's identical copy - see that constant's
-// own comment) only holds for notes from Manta-family devices
-// (SupernoteX's own `header.APPLY_EQUIPMENT === 'N5'` check, pageWidth
-// 1920) - real-world testing against an A5X-family note (pageWidth 1404,
-// the *default* for every device other than Manta) found recognized-word
-// highlights landing up to a full page-height below the actual pen
-// strokes (issue #204's second checkbox), the error compounding with
-// distance down the page in exactly the way a wrong *multiplicative*
-// factor would, not a fixed offset.
+// a scale factor that is NOT a universal constant - it depends on which
+// device family produced the note, confirmed via real device files.
 //
-// Cropping the actual rendered page image at the position each formula
-// predicts (not just eyeballing) confirmed the fix directly: 11.9 is
-// exactly right for a 1920px-wide page and only that page width -
-// scaling it down by the same ratio the actual page is narrower than
-// 1920 lines every word up tightly again on a 1404-wide (A5X) page.
-// I.e. the true constant is a *reference page width*, not a scale
-// factor: recognition coordinates are defined against a fixed
-// 1920/11.9 ≈ 161.34-unit-wide canvas, and need dividing by whatever
-// fraction of 1920px this particular note's own page actually is.
-function recognitionCoordinateScale(pageWidth: number): number {
-    return (pageWidth * 11.9) / 1920;
+// The recognition engine renders each page to a fixed-width "reference
+// canvas" before recognizing, and stores bounding boxes in that canvas's
+// pixel space divided by 11.9 (this constant's own long-standing value, and
+// supernote-typescript/src/pdf.ts's identical copy - see that constant's own
+// comment). So the universal part is: canvas_pixel = recognition_unit * 11.9.
+// What is *not* universal is the reference canvas width:
+//
+//   - A5X (pageWidth 1404) renders recognition against a 1920px-wide canvas
+//     - the same one Manta uses - so its boxes need scaling down to the
+//     narrower page: page_pixel = unit * 11.9 * (1404 / 1920) ≈ unit * 8.70.
+//     This was issue #204: a fixed 11.9 landed A5X highlights a full
+//     page-height below the actual pen strokes, the error compounding with
+//     distance down the page in exactly the way a wrong multiplicative
+//     factor would.
+//   - Every other device family with recognition data we have - Manta (N5,
+//     pageWidth 1920), Nomad (N6, pageWidth 1404), and A6X (pageWidth 1404) -
+//     renders recognition against a canvas *equal to its own pageWidth*, so
+//     the pageWidth/1920 shrink from #204 is a no-op for Manta (1920/1920)
+//     but actively WRONG for N6/A6X: it shrinks their boxes by 1404/1920 to
+//     a scale of ~8.70 when they already line up at the raw 11.9. Issue #219:
+//     the word-overlay spans lined up on A5X and N5 files but drifted off the
+//     ink on N6 files (and, by the same mechanism, A6X).
+//
+// I.e. #204's "recognition coordinates are defined against a fixed 1920-unit
+// canvas" model was over-generalized from a single A5X fixture: A5X really
+// is the only known device whose recognition canvas (1920) differs from its
+// pageWidth (1404). For every other device the canvas IS the pageWidth, so
+// the correct scale is just the raw 11.9 and the pageWidth/1920 factor must
+// NOT be applied. (A pre-X A5, if one exists, may also upsample to 1920 the
+// way A5X does - we have no fixture to confirm; only A5X is special-cased
+// here, deliberately, because it's the only one the data covers.)
+function recognitionCoordinateScale(pageWidth: number, equipment: string): number {
+    // A5X is the only known device whose recognition canvas (1920) differs
+    // from its own pageWidth. For everyone else the canvas equals pageWidth,
+    // so the pageWidth/1920 factor collapses to 1 and the raw 11.9 applies.
+    const referenceCanvasWidth = equipment === 'A5X' ? 1920 : pageWidth;
+    return (pageWidth * 11.9) / referenceCanvasWidth;
 }
 
 // Some recognition environments produce mojibake-looking labels that are
@@ -109,10 +126,11 @@ export function buildWordOverlay(
     container: HTMLElement,
     pageNumber: number,
     pageWidth: number,
+    equipment: string,
 ): WordOverlayEntry[] {
     const entries: WordOverlayEntry[] = [];
     const textElements = page.recognitionElements.filter((element) => element.type === 'Text');
-    const scale = recognitionCoordinateScale(pageWidth);
+    const scale = recognitionCoordinateScale(pageWidth, equipment);
 
     for (let elementIndex = 0; elementIndex < textElements.length; elementIndex++) {
         for (const word of textElements[elementIndex].words) {
