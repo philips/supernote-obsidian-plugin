@@ -25,6 +25,7 @@
 		"@types/node": "20.19.43",
 		"builtin-modules": "3.3.0",
 		"esbuild": "^0.28.2",
+		"esbuild-plugin-inline-worker": "^0.1.1",
 		"eslint": "^9.39.5",
 		"eslint-plugin-obsidianmd": "^0.4.1",
 		"globals": "^17.7.0",
@@ -37,7 +38,6 @@
 		"vitest": "4.1.10"
 	},
 	"dependencies": {
-		"esbuild-plugin-inline-worker": "^0.1.1",
 		"fast-png": "^7.0.1",
 		"image-js": "^1.7.0",
 		"pdf-lib": "^1.17.1",
