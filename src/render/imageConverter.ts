@@ -4,7 +4,8 @@
 // into a standalone web component). SupernoteEmbed/SupernoteView (main.ts)
 // are the Obsidian-side callers; this module itself only ever touches
 // standard Worker/DOM globals and supernote-typescript.
-import { SupernoteX, IRenderableNote, extractPageRenderData } from 'supernote-typescript';
+import { SupernoteX, IRenderableNote, extractPageRenderData, prepareVectorInkPages } from 'supernote-typescript';
+import type { VectorInkPage } from 'supernote-typescript';
 import { RasterizeWorkerMessage, RasterizeWorkerResponse } from '../rasterize.worker';
 import Worker from 'rasterize.worker';
 
@@ -122,7 +123,7 @@ export class WorkerPool {
     // request in flight) and round-robining across every call (so
     // concurrent single-page requests still spread across every worker,
     // instead of piling onto worker 0) fixes both.
-    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number): Promise<string[]> {
+    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[]): Promise<string[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
         const worker = this.workers[workerIndex];
@@ -150,6 +151,7 @@ export class WorkerPool {
                 type: 'convert',
                 note: renderableNote,
                 scale,
+                vectorInk: vectorInkPages,
             };
 
             worker.postMessage(message);
@@ -164,7 +166,7 @@ export class WorkerPool {
         return result;
     }
 
-    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number): Promise<string[]> {
+    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[]): Promise<string[]> {
         //console.time('Total processing time');
 
         const chunks = chunkPageNumbers(allPageNumbers);
@@ -173,9 +175,17 @@ export class WorkerPool {
 
         // Process chunks concurrently - safe now regardless of how many land
         // on the same worker, or how many separate processPages() calls are
-        // in flight at once (see processChunk()'s comment).
+        // in flight at once (see processChunk()'s comment). vectorInkPages,
+        // when present, is aligned by index with allPageNumbers, so slice it
+        // the same way each chunk slices the page numbers.
+        let offset = 0;
         const results = await Promise.all(
-            chunks.map((chunk) => this.processChunk(note, chunk, scale))
+            chunks.map((chunk) => {
+                const start = offset;
+                offset += chunk.length;
+                const vip = vectorInkPages?.slice(start, start + chunk.length);
+                return this.processChunk(note, chunk, scale, vip);
+            })
         );
 
         //console.timeEnd('Total processing time');
@@ -253,11 +263,18 @@ export class ImageConverter {
     // SupernoteView's thumbnail sidebar (see ensureThumbnail()), which
     // otherwise paid the same decode/memory cost as actually viewing the
     // page just to fill in a ~140px preview.
-    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number): Promise<string[]> {
+    async convertToImages(note: SupernoteX, pageNumbers?: number[], scale?: number, vectorInk?: boolean): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
         activeWorkerCalls++;
         try {
-            return await getSharedWorkerPool().processPages(note, pages, scale);
+            // Prepare vector ink on the main thread: the worker only
+            // receives structured-clone-safe IRenderableNote slices, which
+            // don't carry the TOTALPATH buffer or note.titles the
+            // vector-ink decode reads. Only for full-res renders (no
+            // downsample) — vector coordinates don't survive a downsample,
+            // so thumbnails keep the raster path.
+            const vectorInkPages = vectorInk && !scale ? prepareVectorInkPages(note, pages, 1) : undefined;
+            return await getSharedWorkerPool().processPages(note, pages, scale, vectorInkPages);
         } finally {
             activeWorkerCalls--;
             scheduleIdleTeardownIfIdle();
