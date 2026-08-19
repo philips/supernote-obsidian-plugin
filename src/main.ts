@@ -1,7 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildRenderNoteForVectorInk } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildRenderNoteForVectorInk, toSvg } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
@@ -718,6 +718,10 @@ export class SupernoteView extends FileView {
 		// textProcessor's own doc comment (SupernoteViewerElement.ts) for
 		// the narrow find-in-note inconsistency this leaves.
 		viewer.textProcessor = (text) => processSupernoteText(text, this.settings);
+		// Vector ink on by default (settings.vectorInk) — draws the on-screen
+		// page's pen strokes as crisp vector paths instead of the rasterized
+		// ink layers. See SupernoteViewerElement.vectorInk's doc comment.
+		viewer.vectorInk = this.settings.vectorInk;
 		// Obsidian's own icon set (setIcon()/Lucide) instead of the
 		// component's own baked-in inline SVGs - see iconRenderer's own
 		// doc comment (SupernoteViewerElement.ts) for why this is safe:
@@ -820,14 +824,26 @@ export class SupernoteView extends FileView {
 
 		const note = await this.app.vault.readBinary(this.file);
 		const sn = new SupernoteX(new Uint8Array(note));
-		const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber]);
 
 		let savedFile: TFile;
 		if (format === 'svg') {
-			const svg = buildSvgForPage(sn, pageNumber, imageDataUrl);
+			// When vectorInk is on, use the submodule's toSvg() directly — it
+			// draws strokes as vector <path>s and keeps the searchable text
+			// layer (includeText defaults true), which is exactly what an SVG
+			// export should produce. When off, fall back to the raster-embed
+			// path (buildSvgForPage), which wraps the rasterized PNG in an SVG
+			// with the same text layer.
+			const svg = this.settings.vectorInk
+				? (await toSvg(sn, { vectorInk: true, pageNumbers: [pageNumber] }))[0]
+				: buildSvgForPage(sn, pageNumber, (await new ImageConverter().convertToImages(sn, [pageNumber]))[0]);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.svg`);
 			savedFile = await this.app.vault.create(filename, svg);
 		} else {
+			// PNG stays raster regardless of vectorInk — a PNG is pixels, so
+			// vector ink's crisp-at-any-zoom benefit doesn't survive the
+			// format anyway, and this keeps the export matching the note's
+			// own rendered ink.
+			const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber]);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.png`);
 			savedFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(imageDataUrl));
 		}
@@ -1019,6 +1035,8 @@ export class SupernoteEmbed extends Component {
 		// identical assignment - see its own comment, and iconRenderer's
 		// doc comment in SupernoteViewerElement.ts, for why this is safe.
 		viewer.iconRenderer = (name, el) => setIcon(el, name);
+		// Same vectorInk opt-in as SupernoteView above.
+		viewer.vectorInk = this.settings.vectorInk;
 		this.viewerEl = viewer;
 		this.updateDarkAttribute();
 
