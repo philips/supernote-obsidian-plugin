@@ -2,7 +2,10 @@ import esbuild from "esbuild";
 import process from "process";
 import path from "path";
 import { fileURLToPath } from "url";
-import builtins from "builtin-modules";
+// Node's own builtin-module list - the community-plugin scan (issue
+// #228) flags the `builtin-modules` npm package, which on modern Node is
+// only a thin filter over this.
+import { builtinModules } from "node:module";
 import inlineWorkerPlugin from "esbuild-plugin-inline-worker";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,7 +62,7 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
-		...builtins],
+		...builtinModules],
 	format: "cjs",
 	target: "es2018",
 	logLevel: "info",
