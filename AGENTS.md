@@ -67,6 +67,55 @@ npm test                              # vitest run
   may not match what's actually loaded at runtime. Extend those interfaces if
   you touch more of the pdf.js surface — don't reach back for `any`.
 
+## Community scan
+
+Obsidian's automated community-plugin scan (runs for community-listing
+submissions; the raw output is archived in issue #228) checks the source and
+`styles.css` with `eslint-plugin-obsidianmd` plus its own checks. Findings
+that are intentionally left as-is, and why:
+
+- **`'any' overrides all other types in this union` / `'error'`-type members
+  ("acting as any")** — `src/atelierComposite.worker.ts`'s `spd` field and
+  `src/webcomponent/SupernoteViewerElement.ts`'s `sn` field. The scanner's
+  type-checker can't resolve `supernote-typescript`: it's a git submodule
+  wired up via esbuild/vitest/tsconfig aliases, not an npm dependency (the
+  setup `CLAUDE.md` documents not changing; the scanner clones without the
+  submodule checked out, so the mapped path is empty and those types collapse
+  to `any`/`error`). Local `tsc` (`npm run build`) is clean.
+- **`obsidianmd/prefer-create-el` and `obsidianmd/no-static-styles-assignment`
+  in `src/render/*` and `src/webcomponent/*`** — every flagged file is part of
+  the standalone web-component path (issue #183) and deliberately has zero
+  `obsidian` imports so it runs in a plain browser. `createEl`/
+  `setCssStyles` require importing `obsidian`, which would break the
+  standalone bundles (`esbuild.webcomponent*.mjs` intentionally carry no
+  obsidian alias/external). Many of the flagged style assignments are dynamic
+  runtime values (page `aspect-ratio`, thumbnail sizing, overlay positioning)
+  that can't be CSS classes.
+- **`fetch` in `src/webcomponent/`** — the standalone component fetches its
+  own `src` URL in plain browsers, where `requestUrl` doesn't exist. Same
+  rationale as the `deviceFetch.ts` entry in the Linting section above.
+- **Node built-ins in `src/sql-wasm.test-stub.ts`** — vitest-only alias
+  target, never bundled (esbuild resolves the real `.wasm` via its `binary`
+  loader); the imports are dynamic (issue #231).
+- **CSS findings in `styles.css`** — `display: contents` on the
+  `.supernote-embed` wrapper (the scanner's 1.7.4 baseline is below this
+  plugin's `minAppVersion` 1.8.7, so every supported Obsidian has it), the
+  single `!important` on `.internal-embed.supernote-embed` (the narrowest
+  robust way to beat Live Preview's own `!important` reset — documented in
+  `styles.css` itself), and the `supernote-viewer` / `supernote-atelier-viewer`
+  type selectors (the plugin's own custom elements, which the CSS linter can't
+  know about). Full triage: issue #232.
+
+Already fixed rather than argued with:
+
+- **The scan's one *error* — created/attached `<style>` elements in the two
+  web components.** False positive in spirit (the styles live in the shadow
+  root, where `styles.css` can't reach), but the scan is static and can't tell
+  the difference, so both components now use constructable stylesheets
+  (`adoptedStyleSheets`; issue #229).
+- **`builtin-modules` deprecated-package warning** — the esbuild configs now
+  use `node:module`'s own `builtinModules` list (issue #230).
+
 ## File & folder conventions
 
 - Source lives in `src/`, one concern per file:
