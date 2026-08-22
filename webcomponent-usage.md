@@ -159,6 +159,11 @@ return <supernote-viewer ref={ref} />;
 
 ## Current limitations
 
+- **Browser floor.** The component styles its shadow root with a constructable
+  stylesheet (`adoptedStyleSheets`, issue #229), which needs Chrome/Edge 99+ (Jan 2022),
+  Firefox 101+ (Aug 2022), or Safari 16.4+ (Mar 2023). Older WebViews (e.g. iOS 16.0–16.3)
+  won't render it styled - everything else it relies on (custom elements v1, `ResizeObserver`,
+  web workers, ES2020 modules) is older than that, so this is the binding requirement.
 - **Read-only.** No save/export/download UI - see issue #183 for why (needs a browser-native Blob/download
   story, not built yet).
 - **No selectable/searchable image text layer.** The recognized-text toggle shows the note's recognized

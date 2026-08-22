@@ -326,9 +326,14 @@ export class SupernoteAtelierViewerElement extends HTMLElement {
     constructor() {
         super();
         const shadow = this.attachShadow({ mode: 'open' });
-        const style = document.createElement('style');
-        style.textContent = STYLE;
-        shadow.appendChild(style);
+        // Constructable stylesheet rather than a <style> element - same
+        // reason as SupernoteViewerElement's own constructor (issue #229):
+        // Obsidian's community-plugin scan statically errors on any
+        // created/attached <style> element, even in a shadow root where
+        // styles.css can't reach.
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(STYLE);
+        shadow.adoptedStyleSheets = [sheet];
 
         this.rootEl = document.createElement('div');
         this.rootEl.className = 'root';
