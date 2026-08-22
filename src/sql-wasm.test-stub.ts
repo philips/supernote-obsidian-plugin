@@ -18,8 +18,13 @@
 // and sidesteps needing @types/node's "module" package typings (which,
 // unlike "fs"/"path", didn't resolve cleanly under this project's
 // moduleResolution: "bundler" setting).
-import * as fs from 'fs';
-import * as path from 'path';
+// Dynamic imports, not static ones - Obsidian's community-plugin scan
+// (issue #228) warns on any static Node built-in import (Node APIs aren't
+// available on mobile). This file is vitest-only and never bundled, so a
+// plain top-level dynamic import (vitest supports top-level await) is all
+// that's needed; the Platform.isDesktop guard the warning suggests would
+// be meaningless here, since the file only ever runs under Node's vitest.
+const [fs, path] = await Promise.all([import('fs'), import('path')]);
 
 const wasmPath = path.join(import.meta.dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
 const buf = fs.readFileSync(wasmPath);
