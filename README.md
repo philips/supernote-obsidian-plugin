@@ -26,7 +26,7 @@ See [`SCREENSHOTS.md`](SCREENSHOTS.md) for a screenshot gallery of each of these
 
 **Video Demo**
 
-[![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=tEoW35fYVew)
+[![Watch the video](https://img.youtube.com/vi/tEoW35fYVew/hqdefault.jpg)](https://www.youtube.com/watch?v=ihRh_F43-iQ)
 
 ## Install via Community Plugin Store
 
