@@ -8,7 +8,10 @@ import esbuild from "esbuild";
 import process from "process";
 import path from "path";
 import { fileURLToPath } from "url";
-import builtins from "builtin-modules";
+// Node's own builtin-module list - the community-plugin scan (issue
+// #228) flags the `builtin-modules` npm package, which on modern Node is
+// only a thin filter over this.
+import { builtinModules } from "node:module";
 import inlineWorkerPlugin from "esbuild-plugin-inline-worker";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +57,7 @@ const context = await esbuild.context({
 	// also has to be repeated into the plugin's nested build here, not just
 	// declared once at this level.
 	plugins: [inlineWorkerPlugin({ loader: { '.wasm': 'binary' } })],
-	external: [...builtins],
+	external: [...builtinModules],
 	format: "esm",
 	target: "es2020",
 	logLevel: "info",

@@ -23,7 +23,6 @@
 		"@types/color": "^3.0.6",
 		"@types/jest": "^29.5.12",
 		"@types/node": "20.19.43",
-		"builtin-modules": "3.3.0",
 		"esbuild": "^0.28.2",
 		"esbuild-plugin-inline-worker": "^0.1.1",
 		"eslint": "^9.39.5",
