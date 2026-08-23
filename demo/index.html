@@ -33,46 +33,70 @@
 </p>
 <p>
     <strong>Build the bundle first:</strong> this page loads
-    <code>../dist/supernote-viewer.js</code>, which isn't checked into the repo -
-    run <code>npm run build:webcomponent</code> from the project root, then serve this
-    directory over http(s) (module scripts can't load from a <code>file://</code> URL) - e.g.
-    <code>npx serve .</code> from the project root, then open
+    <code>supernote-viewer.js</code> from <code>../dist/</code> (serving the project
+    root), <code>./dist/</code>, or next to this page (serving this directory
+    on its own, bundle copied in) - whichever exists. It isn't checked into
+    the repo: run <code>npm run build:webcomponent</code> from the project root, then
+    serve over http(s) (module scripts can't load from a <code>file://</code> URL) -
+    e.g. <code>npx serve .</code> from the project root, then open
     <code>/demo/</code>.
 </p>
 <input id="file-input" type="file" accept=".note">
 <button id="load-sample" type="button">Load sample note</button>
+<label>
+    <input id="start-blank" type="checkbox"> open blank (write-on, waits for play)
+</label>
 <p id="status"></p>
 <supernote-viewer id="viewer"></supernote-viewer>
 
-<script type="module" src="../dist/supernote-viewer.js"></script>
 <script type="module">
-    const viewer = document.getElementById('viewer');
+    // The bundle lives in the project's dist/ when this directory is
+    // served from the project root, or in ./dist/ or next to this page
+    // when the directory is served on its own and the bundle was copied
+    // in - try each, and say it's missing instead of failing silently.
     const status = document.getElementById('status');
-
-    document.getElementById('file-input').addEventListener('change', async (event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        status.textContent = `Reading ${file.name}…`;
-        viewer.noteData = await file.arrayBuffer();
-    });
-
-    document.getElementById('load-sample').addEventListener('click', async () => {
-        status.textContent = 'Loading sample note…';
+    let bundle = null;
+    for (const src of ['../dist/supernote-viewer.js', './dist/supernote-viewer.js', './supernote-viewer.js']) {
         try {
-            const response = await fetch('./rtr.note');
-            if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-            viewer.noteData = await response.arrayBuffer();
+            bundle = await import(/* @vite-ignore */ src);
+            break;
         } catch (err) {
-            status.textContent = `Error loading sample note: ${err.message ?? err}`;
+            if (err instanceof SyntaxError) throw err;
         }
-    });
+    }
+    if (!bundle) {
+        status.textContent = 'Could not load supernote-viewer.js - run "npm run build:webcomponent" from the project root (then open /demo/), or copy dist/supernote-viewer.js next to this page.';
+    } else {
+        const viewer = document.getElementById('viewer');
+        const startBlankCheckbox = document.getElementById('start-blank');
 
-    viewer.addEventListener('supernote-load', (event) => {
-        status.textContent = `Loaded ${event.detail.pageCount} page(s).`;
-    });
-    viewer.addEventListener('supernote-error', (event) => {
-        status.textContent = `Error: ${event.detail.error?.message ?? event.detail.error}`;
-    });
+        document.getElementById('file-input').addEventListener('change', async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            status.textContent = `Reading ${file.name}…`;
+            viewer.presentation = startBlankCheckbox.checked ? 'write-on-paused' : 'static';
+            viewer.noteData = await file.arrayBuffer();
+        });
+
+        document.getElementById('load-sample').addEventListener('click', async () => {
+            status.textContent = 'Loading sample note…';
+            try {
+                const response = await fetch('./rtr.note');
+                if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+                viewer.presentation = startBlankCheckbox.checked ? 'write-on-paused' : 'static';
+                viewer.noteData = await response.arrayBuffer();
+            } catch (err) {
+                status.textContent = `Error loading sample note: ${err.message ?? err}`;
+            }
+        });
+
+        viewer.addEventListener('supernote-load', (event) => {
+            status.textContent = `Loaded ${event.detail.pageCount} page(s).`;
+        });
+        viewer.addEventListener('supernote-error', (event) => {
+            status.textContent = `Error: ${event.detail.error?.message ?? event.detail.error}`;
+        });
+    }
 </script>
 </body>
 </html>

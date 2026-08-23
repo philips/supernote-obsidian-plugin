@@ -16,16 +16,18 @@ import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWord
 import { LinkOverlayEntry, bucketLinksByPage, buildLinkOverlay, repositionLinkOverlay } from '../render/linkOverlay';
 import { SidebarListItem, buildSidebarList, fillSidebarThumbnail, setupLazyListLoading } from '../render/sidebarList';
 import { svgIcon } from './icons';
+import { buildPageStrokeAnimation, StrokeAnimator } from './strokeAnimation';
+import type { PageStrokeAnimation } from './strokeAnimation';
 
 // How many pages either side of the currently-viewed page (see
-// setupPageLoadObserver()) get unconditionally preloaded, and protected from
+// startFullInkPageLoading()) get unconditionally preloaded, and protected from
 // eviction, regardless of exact scroll geometry - makes stepping through
 // nearby pages feel instant since the image is already decoded before it's
 // asked for.
 const PAGE_PRELOAD_DISTANCE = 2;
 
 // How far (as a percentage of the scroll container's own height) a page can
-// scroll out of view before its image is evicted (see setupPageLoadObserver()
+// scroll out of view before its image is evicted (see startFullInkPageLoading()
 // and evictPageImage()) - approximates "how many page-heights of scroll
 // buffer to hold onto" on the (usual) assumption that a page's rendered
 // height is roughly one viewport. Large enough that scrolling a handful of
@@ -72,7 +74,11 @@ type IconName =
     | 'zoom-out'
     | 'zoom-in'
     | 'rotate-ccw'
-    | 'stretch-horizontal';
+    | 'stretch-horizontal'
+    | 'pen'
+    | 'play'
+    | 'pause'
+    | 'repeat';
 
 const FALLBACK_ICONS: Record<IconName, () => SVGSVGElement> = {
     'layout-list': () => svgIcon([
@@ -106,6 +112,26 @@ const FALLBACK_ICONS: Record<IconName, () => SVGSVGElement> = {
         ['path', { d: 'M8 3 4 7l4 4' }],
         ['line', { x1: '4', y1: '7', x2: '20', y2: '7' }],
         ['path', { d: 'M16 3l4 4-4 4' }],
+    ]),
+    // Write-on animation (see src/webcomponent/strokeAnimation.ts): the pen
+    // enters/exits the mode, play/pause drive its animator, and repeat
+    // restarts the whole run.
+    'pen': () => svgIcon([
+        ['path', { d: 'M12 20h9' }],
+        ['path', { d: 'M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z' }],
+    ]),
+    'play': () => svgIcon([
+        ['path', { d: 'M6 3l14 9-14 9V3z' }],
+    ]),
+    'pause': () => svgIcon([
+        ['rect', { x: '6', y: '4', width: '4', height: '16', rx: '1' }],
+        ['rect', { x: '14', y: '4', width: '4', height: '16', rx: '1' }],
+    ]),
+    'repeat': () => svgIcon([
+        ['path', { d: 'm17 2 4 4-4 4' }],
+        ['path', { d: 'M3 11v-1a4 4 0 0 1 4-4h14' }],
+        ['path', { d: 'm7 22-4-4 4-4' }],
+        ['path', { d: 'M21 13v1a4 4 0 0 1-4 4H3' }],
     ]),
 };
 
@@ -352,6 +378,49 @@ button[aria-pressed="true"] {
 @media (max-width: 480px) {
     .page-jump-label,
     .zoom-step-btn {
+        display: none;
+    }
+}
+/* Write-on animation (prototype - see src/webcomponent/strokeAnimation.ts):
+   each animated page's stroke overlay is one absolutely-positioned <svg>
+   covering the page image's own box exactly - the container's aspect ratio
+   always equals the SVG's viewBox (both derive from the page's native
+   pixel size), so width/height: 100% with the default preserveAspectRatio
+   is an exact fit that tracks every zoom/fit-width resize the container
+   goes through. pointer-events: none so find-in-note's word spans and the
+   link rects (sibling elements) keep receiving their own clicks. */
+.pages .page-container > .stroke-animation-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+/* The play/pause + replay + speed + time group - hidden entirely until
+   write-on animation mode is active (see updateAnimControls()), since in
+   the static view only the pen button itself is meaningful. */
+.anim-controls {
+    display: none;
+    align-items: center;
+    gap: 0.5em;
+}
+.anim-controls.active {
+    display: inline-flex;
+}
+.anim-time {
+    min-width: 7.5em;
+    color: var(--supernote-viewer-muted);
+    font-size: 0.9em;
+    white-space: nowrap;
+}
+/* A fixed width keeps the button from jumping as its label changes
+   ("4×" → "1×" → "2×" → "½×"). */
+.anim-speed-btn {
+    min-width: 2.8em;
+    text-align: center;
+}
+@media (max-width: 480px) {
+    .anim-time {
         display: none;
     }
 }
@@ -702,6 +771,12 @@ button[aria-pressed="true"] {
 }
 `;
 
+// The public rendering contract. Set this before `noteData`/`src` to choose
+// the initial renderer, or change it after load to switch renderers.
+// `write-on-paused` is the old startBlank behavior: background only at 0:00.
+export type ViewerPresentation = 'static' | 'write-on-paused' | 'write-on-playing';
+type ActivePresentation = ViewerPresentation | 'write-on-preparing';
+
 export class SupernoteViewerElement extends HTMLElement {
     static get observedAttributes(): string[] {
         return ['src', 'page', 'single-page', 'invert-dark'];
@@ -726,6 +801,13 @@ export class SupernoteViewerElement extends HTMLElement {
     rasterizePage: (sn: SupernoteX, pageNumber: number) => Promise<string> = async (sn, pageNumber) => {
         const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber], undefined, this.vectorInk);
         return imageDataUrl;
+    };
+
+    // Overridable for the same reason rasterizePage is - the write-on
+    // animation's background-only base layers go through the same real
+    // ImageConverter/Worker pipeline via convertToBackgroundImages().
+    rasterizeBackgrounds: (sn: SupernoteX, pageNumbers: number[]) => Promise<string[]> = async (sn, pageNumbers) => {
+        return new ImageConverter().convertToBackgroundImages(sn, pageNumbers);
     };
 
     // Overridable hook applied to each page's raw recognized text before
@@ -767,7 +849,8 @@ export class SupernoteViewerElement extends HTMLElement {
     private pageJumpInputEl: HTMLInputElement | null = null;
     private modeToggleBtn: HTMLButtonElement | null = null;
     private pageLoadObserver: IntersectionObserver | null = null;
-    // Shared across every page - see setupPageLoadObserver()'s own comment
+    private pageLoadScrollHandler: (() => void) | null = null;
+    // Shared across every page - see startFullInkPageLoading()'s own comment
     // for why loading needs one debounce for "has scrolling settled" rather
     // than each page tracking its own independently.
     private loadCheckDebounceTimer?: number;
@@ -810,6 +893,21 @@ export class SupernoteViewerElement extends HTMLElement {
     private fitWidthEnabled = true;
     private zoomLabelEl: HTMLElement | null = null;
     private fitWidthBtn: HTMLButtonElement | null = null;
+    // Presentation owns page imagery. Static mode owns the normal lazy PNG
+    // loader; write-on owns background PNGs plus SVG overlays. Keeping this
+    // explicit prevents the two async renderers from competing for an img.
+    private requestedPresentation: ViewerPresentation = 'static';
+    private activePresentation: ActivePresentation = 'static';
+    private animation: StrokeAnimator | null = null;
+    private pageAnimations: (PageStrokeAnimation | null)[] = [];
+    private animSpeedMult = 4;
+    private animPenBtn: HTMLButtonElement | null = null;
+    private animControlsEl: HTMLElement | null = null;
+    private animPlayBtn: HTMLButtonElement | null = null;
+    private animReplayBtn: HTMLButtonElement | null = null;
+    private animSpeedBtn: HTMLButtonElement | null = null;
+    private animTimeEl: HTMLElement | null = null;
+    private lastAnimSecond = -1;
 
     constructor() {
         super();
@@ -847,12 +945,32 @@ export class SupernoteViewerElement extends HTMLElement {
         this.queueRender();
     }
 
+    // Selects who renders page images. Set before noteData/src to choose
+    // the initial renderer, or after load to switch immediately. The
+    // single-page presentation deliberately remains static because it has
+    // no write-on toolbar or page timeline.
+    get presentation(): ViewerPresentation {
+        return this.activePresentation === 'write-on-preparing'
+            ? this.requestedPresentation
+            : this.activePresentation;
+    }
+
+    set presentation(value: ViewerPresentation) {
+        if (value !== 'static' && value !== 'write-on-paused' && value !== 'write-on-playing') {
+            throw new TypeError(`Unknown supernote-viewer presentation: ${String(value)}`);
+        }
+        if (value === this.requestedPresentation && this.activePresentation !== 'write-on-preparing') return;
+        this.requestedPresentation = value;
+        this.applyRequestedPresentation();
+    }
+
     connectedCallback(): void {
         this.queueRender();
     }
 
     disconnectedCallback(): void {
-        this.pageLoadObserver?.disconnect();
+        this.animation?.destroy();
+        this.stopFullInkPageLoading();
         this.resizeObserver?.disconnect();
         this.thumbLoadObserver?.disconnect();
         window.clearTimeout(this.loadCheckDebounceTimer);
@@ -1093,8 +1211,7 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     private teardownForRerender(): void {
-        this.pageLoadObserver?.disconnect();
-        this.pageLoadObserver = null;
+        this.stopFullInkPageLoading();
         this.resizeObserver?.disconnect();
         this.resizeObserver = null;
         this.thumbLoadObserver?.disconnect();
@@ -1128,6 +1245,18 @@ export class SupernoteViewerElement extends HTMLElement {
         this.fitWidthEnabled = true;
         this.zoomLabelEl = null;
         this.fitWidthBtn = null;
+        this.animation?.destroy();
+        this.animation = null;
+        this.activePresentation = 'static';
+        this.animSpeedMult = 4;
+        this.pageAnimations = [];
+        this.animPenBtn = null;
+        this.animControlsEl = null;
+        this.animPlayBtn = null;
+        this.animReplayBtn = null;
+        this.animSpeedBtn = null;
+        this.animTimeEl = null;
+        this.lastAnimSecond = -1;
         this.rootEl.innerHTML = '';
     }
 
@@ -1171,7 +1300,10 @@ export class SupernoteViewerElement extends HTMLElement {
             return { lower: text.toLowerCase(), entryAt, entriesInRange };
         });
 
-        this.setupPageLoadObserver(sn, states);
+        // Pick the renderer before any page image work begins. In
+        // particular, a write-on initial presentation never creates the
+        // static IntersectionObserver that could race its blank backgrounds.
+        if (this.requestedPresentation === 'static') this.startFullInkPageLoading(sn, states);
         if (pageCount > 1) {
             this.setupPageIndicatorTracking();
             this.buildThumbSidebar(sn, pageCount, invertColorsWhenDark);
@@ -1188,6 +1320,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.setupZoomTouchHandling();
         this.setupScrollBoundaryContainment();
         this.setupFitWidthResizing();
+        if (this.requestedPresentation !== 'static') this.applyRequestedPresentation();
     }
 
     // A single deep-linked page (the `page` attribute, clamped, defaulting
@@ -1225,6 +1358,8 @@ export class SupernoteViewerElement extends HTMLElement {
         // doesn't mistake this one-and-only page for one that's since
         // become irrelevant.
         state.visible = true;
+        // Single-page mode intentionally has no write-on controls/timeline.
+        this.activePresentation = 'static';
         void this.ensurePageImageLoaded(sn, state);
         this.setupScrollBoundaryContainment();
     }
@@ -1339,7 +1474,21 @@ export class SupernoteViewerElement extends HTMLElement {
     // document - exactly the memory-safety gap SupernoteView itself had
     // to fix once (issue #154) before this component existed, and would
     // otherwise silently reintroduce here.
-    private setupPageLoadObserver(sn: SupernoteX, states: ViewerPageState[]): void {
+    private stopFullInkPageLoading(): void {
+        this.pageLoadObserver?.disconnect();
+        this.pageLoadObserver = null;
+        window.clearTimeout(this.loadCheckDebounceTimer);
+        if (this.pagesEl && this.pageLoadScrollHandler) {
+            this.pagesEl.removeEventListener('scroll', this.pageLoadScrollHandler);
+        }
+        this.pageLoadScrollHandler = null;
+    }
+
+    // Full-ink image lifecycle: every static page, plus a write-on
+    // presentation's non-vector fallback pages. pageUsesFullInkRaster()
+    // decides ownership before this loader can begin a raster.
+    private startFullInkPageLoading(sn: SupernoteX, states: ViewerPageState[]): void {
+        this.stopFullInkPageLoading();
         const scheduleLoadCheck = () => {
             window.clearTimeout(this.loadCheckDebounceTimer);
             this.loadCheckDebounceTimer = window.setTimeout(() => {
@@ -1391,6 +1540,7 @@ export class SupernoteViewerElement extends HTMLElement {
         // long, unbroken scroll pass where nothing happens to enter/exit
         // the margin for a stretch could let the settle timer fire
         // mid-scroll instead of only once it actually stops.
+        this.pageLoadScrollHandler = scheduleLoadCheck;
         this.pagesEl?.addEventListener('scroll', scheduleLoadCheck, { passive: true });
     }
 
@@ -1399,7 +1549,7 @@ export class SupernoteViewerElement extends HTMLElement {
     // rootMargin (PAGE_EVICT_MARGIN_PERCENT% 0px), which deliberately pads a
     // much more generous zone around the real viewport just to decide when a
     // page is worth starting to watch, and how far it can scroll out before
-    // its image is evicted. See setupPageLoadObserver()'s own
+    // its image is evicted. See startFullInkPageLoading()'s own
     // comment for why the two need to be different checks.
     private isPageNearScreen(state: ViewerPageState, marginRatio: number): boolean {
         if (!this.pagesEl) return false;
@@ -1912,9 +2062,19 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pagesResizeObserver.observe(this.pagesEl);
     }
 
+    // A write-on presentation still needs ordinary full-ink rasters for a
+    // page with no decodable vector timeline (e.g. a scanned/bitmap page in
+    // an otherwise handwritten note). Before the timeline map exists,
+    // write-on owns every page and no full-ink request may begin.
+    private pageUsesFullInkRaster(state: ViewerPageState): boolean {
+        return this.activePresentation === 'static'
+            || this.pageAnimations[state.pageNumber - 1] === null;
+    }
+
     // Idempotent and safe to call speculatively - `loaded` is set eagerly so
     // a slow rasterization can't be triggered twice for the same page.
     private async ensurePageImageLoaded(sn: SupernoteX, state: ViewerPageState): Promise<void> {
+        if (!this.pageUsesFullInkRaster(state)) return;
         state.loaded = true;
         console.debug(`supernote-viewer: loading page ${state.pageNumber}`);
         try {
@@ -1940,6 +2100,13 @@ export class SupernoteViewerElement extends HTMLElement {
                 console.debug(`supernote-viewer: discarding page ${state.pageNumber}'s load - scrolled away while rasterizing`);
                 return;
             }
+            // A full-ink raster can finish after write-on takes ownership
+            // of this page. Never let that stale result replace its
+            // background-only image.
+            if (!this.pageUsesFullInkRaster(state)) {
+                state.loaded = false;
+                return;
+            }
             fillNotePagePlaceholder(state, imageDataUrl);
             console.debug(`supernote-viewer: page ${state.pageNumber} loaded, img.src set (length ${imageDataUrl.length})`);
             // fillNotePagePlaceholder() clears this page's width overrides
@@ -1963,7 +2130,7 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     // Releases a loaded page's image once it's scrolled out of the
-    // pageLoadObserver's own prefetch margin (see setupPageLoadObserver()) -
+    // pageLoadObserver's own prefetch margin (see startFullInkPageLoading()) -
     // the "evict" half of the lazy-load/evict cycle that bounds memory on a
     // long scroll, mirroring SupernoteView's own evictPageImage() (main.ts,
     // issue #154's fix). Safe to call speculatively: a no-op if nothing's
@@ -1971,6 +2138,9 @@ export class SupernoteViewerElement extends HTMLElement {
     // reports initial non-intersection for anything outside the viewport
     // at file-open time).
     private evictPageImage(sn: SupernoteX, state: ViewerPageState): void {
+        // Vector-timeline pages belong to write-on; static/fallback pages
+        // participate in the normal lazy image lifecycle.
+        if (!this.pageUsesFullInkRaster(state)) return;
         if (!state.loaded) return;
         console.debug(`supernote-viewer: evicting page ${state.pageNumber}`);
         evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
@@ -2128,6 +2298,69 @@ export class SupernoteViewerElement extends HTMLElement {
         findBtn.addEventListener('click', () => this.toggleFindBar());
         toolbar.appendChild(findBtn);
         this.findToggleBtn = findBtn;
+
+        // Write-on animation (prototype - see src/webcomponent/
+        // strokeAnimation.ts): the pen button enters/exits the mode; the
+        // .anim-controls group (hidden until active - see its CSS rule) is
+        // where play/pause, replay, speed, and the time label live, so the
+        // static view only ever shows the one extra pen button.
+        const animPenBtn = document.createElement('button');
+        animPenBtn.type = 'button';
+        animPenBtn.setAttribute('part', 'button');
+        animPenBtn.setAttribute('aria-label', 'Toggle write-on animation');
+        animPenBtn.setAttribute('aria-pressed', 'false');
+        this.renderIcon('pen', animPenBtn);
+        animPenBtn.addEventListener('click', () => this.toggleAnimationMode());
+        toolbar.appendChild(animPenBtn);
+        this.animPenBtn = animPenBtn;
+
+        const animControls = document.createElement('div');
+        animControls.className = 'anim-controls';
+        animControls.setAttribute('part', 'anim-controls');
+
+        const animPlayBtn = document.createElement('button');
+        animPlayBtn.type = 'button';
+        animPlayBtn.setAttribute('part', 'button');
+        animPlayBtn.setAttribute('aria-label', 'Play write-on animation');
+        this.renderIcon('play', animPlayBtn);
+        animPlayBtn.addEventListener('click', () => {
+            this.presentation = this.presentation === 'write-on-playing'
+                ? 'write-on-paused'
+                : 'write-on-playing';
+        });
+        animControls.appendChild(animPlayBtn);
+        this.animPlayBtn = animPlayBtn;
+
+        const animReplayBtn = document.createElement('button');
+        animReplayBtn.type = 'button';
+        animReplayBtn.setAttribute('part', 'button');
+        animReplayBtn.setAttribute('aria-label', 'Replay write-on animation');
+        this.renderIcon('repeat', animReplayBtn);
+        animReplayBtn.addEventListener('click', () => {
+            this.animation?.reset();
+            this.presentation = 'write-on-playing';
+        });
+        animControls.appendChild(animReplayBtn);
+        this.animReplayBtn = animReplayBtn;
+
+        const animSpeedBtn = document.createElement('button');
+        animSpeedBtn.type = 'button';
+        animSpeedBtn.className = 'anim-speed-btn';
+        animSpeedBtn.setAttribute('part', 'button');
+        animSpeedBtn.setAttribute('aria-label', 'Cycle animation speed');
+        animSpeedBtn.textContent = '4×';
+        animSpeedBtn.addEventListener('click', () => this.cycleAnimSpeed());
+        animControls.appendChild(animSpeedBtn);
+        this.animSpeedBtn = animSpeedBtn;
+
+        const animTime = document.createElement('span');
+        animTime.className = 'anim-time';
+        animTime.setAttribute('part', 'anim-time');
+        animControls.appendChild(animTime);
+        this.animTimeEl = animTime;
+
+        toolbar.appendChild(animControls);
+        this.animControlsEl = animControls;
 
         // Lets a host add its own controls to this toolbar - e.g.
         // SupernoteView's "export current page as image" button in
@@ -2423,9 +2656,251 @@ export class SupernoteViewerElement extends HTMLElement {
     }
 
     private toggleMode(): void {
+        // Write-on animation is an image-mode feature (the strokes are laid
+        // over the page image's own box, which recognized-text mode hides
+        // entirely) - leave the mode first, so a switch to text restores
+        // the real ink rasters along with everything else the mode swapped.
+        if (this.activePresentation !== 'static') this.presentation = 'static';
         this.mode = this.mode === 'image' ? 'text' : 'image';
         this.pagesEl?.classList.toggle('mode-text', this.mode === 'text');
         this.modeToggleBtn?.setAttribute('aria-pressed', String(this.mode === 'text'));
+    }
+
+    // ------------------------------------------------------------------
+    // Write-on animation (prototype). The stroke decode, per-page SVG
+    // overlay, and timeline/player live in src/webcomponent/
+    // strokeAnimation.ts; this section is only the component wiring: the
+    // pen button, the background-layer swap, and the toolbar controls.
+    // ------------------------------------------------------------------
+
+    // Public convenience toggle for hosts with their own shortcut. The
+    // public `presentation` property is the declarative equivalent.
+    toggleAnimationMode(): void {
+        this.presentation = this.presentation === 'static'
+            ? 'write-on-playing'
+            : 'static';
+    }
+
+    private applyRequestedPresentation(): void {
+        if (!this.sn || !this.pagesEl || this.hasAttribute('single-page')) return;
+        if (this.requestedPresentation === 'static') {
+            this.activateStaticPresentation();
+            return;
+        }
+        if (this.activePresentation === 'static') {
+            void this.enterWriteOnPresentation();
+            return;
+        }
+        if (this.activePresentation === 'write-on-preparing') return;
+        this.setWriteOnPlayback(this.requestedPresentation);
+    }
+
+    private setWriteOnPlayback(presentation: Exclude<ViewerPresentation, 'static'>): void {
+        if (!this.animation) return;
+        if (presentation === 'write-on-playing') this.animation.play();
+        else this.animation.pause();
+        this.activePresentation = presentation;
+        this.updateAnimControls();
+    }
+
+    // Enters the write-on presentation. It claims page imagery and stops
+    // the static loader before any asynchronous work starts, so there is no
+    // intermediate state in which two renderers can write the same <img>.
+    private async enterWriteOnPresentation(): Promise<void> {
+        if (this.activePresentation !== 'static') return;
+        const sn = this.sn;
+        if (!sn || !this.pagesEl || this.pageStates.length === 0) return;
+        // Write-on is image-only. Do not call toggleMode(): it also changes
+        // presentation, whereas this transition merely leaves text mode.
+        if (this.mode === 'text') {
+            this.mode = 'image';
+            this.pagesEl.classList.remove('mode-text');
+            this.modeToggleBtn?.setAttribute('aria-pressed', 'false');
+        }
+
+        this.stopFullInkPageLoading();
+        this.activePresentation = 'write-on-preparing';
+        const token = this.renderToken;
+        try {
+            this.pageAnimations = this.pageStates.map((state) => buildPageStrokeAnimation(sn, state.pageNumber));
+            const animIndexes = this.pageAnimations.map((page, index) => (page ? index : -1)).filter((index) => index >= 0);
+            if (animIndexes.length === 0) {
+                // A bitmap/scanned note has no write timeline. Fall back to
+                // the static presentation instead of leaving page ownership
+                // in a half-prepared state.
+                this.requestedPresentation = 'static';
+                this.activePresentation = 'static';
+                this.pageAnimations = [];
+                this.startFullInkPageLoading(sn, this.pageStates);
+                this.animPenHint('No animatable ink on this note');
+                return;
+            }
+
+            // Blank any static images immediately. The page shells retain
+            // their known dimensions while background-only rasters arrive.
+            for (const index of animIndexes) {
+                const state = this.pageStates[index];
+                state.loaded = false;
+                evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
+            }
+            // Mixed notes retain static rendering for their non-vector
+            // pages. The timeline map already exists, so the full-ink
+            // loader's page eligibility check cannot touch animated pages.
+            this.startFullInkPageLoading(sn, this.pageStates);
+
+            const backgroundUrls = await this.rasterizeBackgrounds(sn, animIndexes.map((index) => index + 1));
+            // A property change to static, a rerender, or disconnection
+            // cancels this transition without allowing stale URLs to land.
+            if (token !== this.renderToken || this.activePresentation !== 'write-on-preparing') return;
+
+            animIndexes.forEach((index, k) => {
+                const state = this.pageStates[index];
+                // This image now belongs to write-on presentation, not the
+                // static lazy-load/evict cycle.
+                state.loaded = true;
+                fillNotePagePlaceholder(state, backgroundUrls[k]);
+                state.containerEl.appendChild(this.pageAnimations[index]!.svg);
+            });
+            // fillNotePagePlaceholder() reset each page's container width -
+            // reapply whatever zoom/fit-width is currently active, exactly
+            // as ensurePageImageLoaded() does after its own fill.
+            this.applyZoomToPages();
+
+            this.animation = new StrokeAnimator(this.pageAnimations, {
+                onActivePage: (page) => this.scrollActiveAnimPageIntoView(page),
+                onTime: (timeMs) => this.updateAnimTimeLabel(timeMs),
+                onFinish: () => {
+                    this.requestedPresentation = 'write-on-paused';
+                    this.activePresentation = 'write-on-paused';
+                    this.updateAnimControls();
+                },
+            });
+            this.animation.speed = this.animSpeedMult;
+            this.lastAnimSecond = -1;
+            if (this.requestedPresentation !== 'static') this.setWriteOnPlayback(this.requestedPresentation);
+        } catch (err) {
+            // A partial failure always returns ownership to the static
+            // renderer; never leave pages between the two presentations.
+            console.error('supernote-viewer: write-on animation failed to start', err);
+            if (token === this.renderToken && this.activePresentation === 'write-on-preparing') {
+                this.requestedPresentation = 'static';
+                this.activateStaticPresentation();
+            }
+        }
+    }
+
+    // Transfers page imagery back to the static presentation. This is also
+    // the cancellation path for write-on-preparing: the awaited worker may
+    // still finish, but its active-presentation check prevents stale output
+    // from being installed.
+    private activateStaticPresentation(): void {
+        const wasWriteOn = this.activePresentation !== 'static';
+        this.activePresentation = 'static';
+        this.animation?.destroy();
+        this.animation = null;
+        const sn = this.sn;
+        this.pageStates.forEach((state, index) => {
+            const pageAnim = this.pageAnimations[index];
+            pageAnim?.svg.remove();
+            if (wasWriteOn && pageAnim && sn) {
+                state.loaded = false;
+                evictNotePageImage(state, sn.pageWidth, sn.pageHeight);
+            }
+        });
+        this.pageAnimations = [];
+        this.lastAnimSecond = -1;
+        if (sn) {
+            this.startFullInkPageLoading(sn, this.pageStates);
+            for (const state of this.pageStates) {
+                if (state.visible && !state.loaded) void this.ensurePageImageLoaded(sn, state);
+            }
+        }
+        this.updateAnimControls();
+    }
+
+    // Swaps the .anim-controls group in/out with the mode, and updates the
+    // play button's own glyph/label for the animator's state (playing →
+    // pause glyph, anything else → play).
+    private updateAnimControls(): void {
+        const writeOnActive = this.activePresentation !== 'static';
+        this.animPenBtn?.setAttribute('aria-pressed', String(writeOnActive));
+        this.animControlsEl?.classList.toggle('active', writeOnActive);
+        if (this.animPlayBtn) {
+            const playing = this.animation?.isPlaying ?? false;
+            this.setButtonIcon(this.animPlayBtn, playing ? 'pause' : 'play');
+            this.animPlayBtn.setAttribute('aria-label', playing ? 'Pause write-on animation' : 'Play write-on animation');
+        }
+        if (this.animTimeEl) {
+            this.animTimeEl.textContent = this.animation
+                ? `${this.formatAnimTime(this.animation.currentTime)} / ${this.formatAnimTime(this.animation.totalDuration)}`
+                : '';
+        }
+    }
+
+    // renderIcon() appends (it must - a host's own iconRenderer may not
+    // replace existing children), so an icon *swap* on a button that
+    // already carries one needs its children cleared first.
+    private setButtonIcon(btn: HTMLElement | null, name: IconName): void {
+        if (!btn) return;
+        btn.replaceChildren();
+        this.renderIcon(name, btn);
+    }
+
+    // 4× → 1× → 2× → ½× → 4× ... 4× is the default - at 1× a long
+    // handwritten note takes minutes, which is fine for a replay but not
+    // for a first look. The ½× step is for scrubbing back over a
+    // tricky stroke, not just going faster.
+    private static readonly ANIM_SPEEDS: number[] = [4, 1, 2, 0.5];
+
+    private cycleAnimSpeed(): void {
+        const speeds = SupernoteViewerElement.ANIM_SPEEDS;
+        const next = speeds[(speeds.indexOf(this.animSpeedMult) + 1) % speeds.length];
+        this.animSpeedMult = next;
+        if (this.animation) this.animation.speed = next;
+        if (this.animSpeedBtn) this.animSpeedBtn.textContent = next < 1 ? '½×' : `${next}×`;
+    }
+
+    // ~1 DOM write per second, not per animation frame.
+    private updateAnimTimeLabel(timeMs: number): void {
+        if (!this.animTimeEl || !this.animation) return;
+        const second = Math.floor(timeMs / 1000);
+        if (second === this.lastAnimSecond) return;
+        this.lastAnimSecond = second;
+        this.animTimeEl.textContent = `${this.formatAnimTime(timeMs)} / ${this.formatAnimTime(this.animation.totalDuration)}`;
+    }
+
+    private formatAnimTime(ms: number): string {
+        const totalSeconds = Math.max(0, Math.round(ms / 1000));
+        return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`;
+    }
+
+    // Short, self-clearing hint shown in the time label for an animation
+    // entry that produces nothing to play.
+    private animPenHint(message: string): void {
+        if (!this.animTimeEl) return;
+        this.animTimeEl.textContent = message;
+        window.setTimeout(() => {
+            if (this.animTimeEl && this.activePresentation === 'static') this.animTimeEl.textContent = '';
+        }, 3000);
+    }
+
+    // Follows the pen from page to page: when the active page *changes*
+    // and that page is entirely out of view, bring its top to ~10% below
+    // .pages' own top edge (writing flows downward from a page's top, so
+    // "near the top" keeps the in-progress stroke visible longest). A page
+    // the user has deliberately positioned elsewhere is left alone - this
+    // only fires on a page change, and only for a page actually off-screen
+    // (the overlap check below), so it never fights a manual mid-page
+    // scroll.
+    private scrollActiveAnimPageIntoView(page: number): void {
+        if (!this.pagesEl) return;
+        const state = this.pageStates[page];
+        if (!state) return;
+        const pagesRect = this.pagesEl.getBoundingClientRect();
+        const rect = state.containerEl.getBoundingClientRect();
+        if (rect.bottom >= pagesRect.top && rect.top <= pagesRect.bottom) return; // already in view
+        const targetTop = this.pagesEl.scrollTop + (rect.top - pagesRect.top) - pagesRect.height * 0.1;
+        this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
     }
 
     private showStatus(message: string): void {

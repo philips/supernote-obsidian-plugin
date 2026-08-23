@@ -42,7 +42,16 @@ export type RasterizeWorkerMessage =
     // returns a PNG data URL as before. Only sent for full-res renders
     // (scale undefined) — downsampled thumbnails keep the raster path since
     // vector coordinates don't survive a downsample.
-    { type: 'convert'; note: IRenderableNote; scale?: number; vectorInk?: VectorInkPage[] };
+    //
+    // `backgroundOnly`, when present, is a parallel boolean array aligned
+    // by index with note.pages. A page whose entry is true has its bitmap
+    // ink layers nulled exactly as above but returns a plain PNG data URL
+    // (no addSvgPage) — the bare paper/ruling/background with the ink
+    // stripped, for callers that supply their own ink. That's the
+    // web component's write-on stroke animation mode (see
+    // src/webcomponent/strokeAnimation.ts), which draws the strokes itself,
+    // one at a time, over the returned base layer.
+    { type: 'convert'; note: IRenderableNote; scale?: number; vectorInk?: VectorInkPage[]; backgroundOnly?: boolean[] };
 
 export type RasterizeWorkerResponse =
     | { type: 'result'; images: string[] }
@@ -52,19 +61,20 @@ self.onmessage = async (e: MessageEvent<RasterizeWorkerMessage>) => {
     try {
         const data = e.data;
         const vectorInk = data.vectorInk;
+        const backgroundOnly = data.backgroundOnly;
 
-        // Strip the bitmap ink layers from each vector-ink page *before*
-        // toImage, so the raster it produces for those pages is the
-        // background only — the vector strokes (carried alongside in the
-        // VectorInkPage entry) are drawn on top by addSvgPage below. Doing
-        // this on the slice (rather than via buildRenderNoteForVectorInk on
-        // the whole note) keeps the sliced-send memory model from
-        // imageConverter.ts intact: the worker never sees the full
-        // SupernoteX.
-        if (vectorInk) {
+        // Strip the bitmap ink layers from each vector-ink page (and each
+        // background-only page — same strip, plain-PNG result, see the
+        // `backgroundOnly` comment on the message type) *before* toImage,
+        // so the raster it produces for those pages is the background only —
+        // the vector strokes (carried alongside in the VectorInkPage entry)
+        // are drawn on top by addSvgPage below. Doing this on the slice
+        // (rather than via buildRenderNoteForVectorInk on the whole note)
+        // keeps the sliced-send memory model from imageConverter.ts intact:
+        // the worker never sees the full SupernoteX.
+        if (vectorInk || backgroundOnly) {
             for (let i = 0; i < data.note.pages.length; i++) {
-                const vip = vectorInk[i];
-                if (!vip?.useVectorInk) continue;
+                if (!vectorInk?.[i]?.useVectorInk && !backgroundOnly?.[i]) continue;
                 const page = data.note.pages[i];
                 for (const name of INK_LAYER_NAMES) {
                     const layer = page[name];
