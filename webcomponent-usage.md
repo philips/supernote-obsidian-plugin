@@ -37,6 +37,15 @@ npm run build:webcomponent   # writes dist/supernote-viewer.js
 Copy `dist/supernote-viewer.js` into your own project and load it as an ES module — it's only ever built as
 ESM, so this needs `type="module"` and needs to be served over http(s), not opened as a `file://` URL:
 
+For a local Chromium smoke test of the standalone component, run the following (once per machine, install
+Playwright's browser first with `npx playwright install chromium`):
+
+```
+npm run test:webcomponent:playwright
+```
+
+It builds the bundle, serves the demo and opens a real `.note` fixture in paused write-on mode.
+
 ```html
 <script type="module" src="/path/to/supernote-viewer.js"></script>
 ```
@@ -54,7 +63,7 @@ call.
 
 `:host` has no default height - without one set (inline style, a CSS rule, or a flex/grid parent that
 gives it one), the element collapses to whatever its content naturally takes up. See
-[`demo/index.html`](demo/index.html) for a complete working page (it sets `height: 80vh`).
+[`demo/index.html`](demo/index.html) for a complete working page (it uses a portrait page aspect ratio with a `100vh` minimum height).
 
 If you have the file's bytes already (a `<input type="file">` picker, a `fetch()` you made yourself, a File
 System Access API handle) rather than a fetchable URL, use the `noteData` property instead of `src`:
@@ -72,6 +81,13 @@ System Access API handle) rather than a fetchable URL, use the `noteData` proper
 
 `noteData` takes priority over `src` when both are set.
 
+To open a note blank and let the user start its write-on replay explicitly:
+
+```js
+viewer.presentation = 'write-on-paused';
+viewer.noteData = bytes;
+```
+
 ## API reference
 
 ### Attributes / properties
@@ -85,11 +101,12 @@ System Access API handle) rather than a fetchable URL, use the `noteData` proper
 | `dark` | tri-state attribute | Overrides this element's own default guess (the OS-level `prefers-color-scheme: dark` media feature) for its default colours (border/background/text) and `invert-dark`'s filter. **Not a plain boolean** - three distinct states: attribute absent entirely → follow the OS-level guess; present with any value other than the string `"false"` (including with no value at all) → force dark; present with value exactly `"false"` → force light. Getting this wrong (treating it as an OR with the OS guess rather than an override) is a real bug this project hit: on a system whose OS-level scheme is dark, a host actually rendering *light* still had its images inverted underneath it. Only needed if your page's actual dark/light state doesn't reliably track the OS setting - which is exactly why Obsidian's `SupernoteEmbed` always explicitly sets `"true"` or `"false"` (never just adds/removes the attribute) from Obsidian's own theme, rather than relying on the OS guess in either direction. Pure CSS attribute selector - no rebuild needed to toggle it. |
 | `bare` | boolean attribute | Drops this element's own border/background/rounded corners - pure CSS, takes effect immediately, no rebuild. For embedding inside a host page/component that already provides its own frame around it (this is what Obsidian's `SupernoteEmbed` sets, since its container already has a border). |
 | `.noteData` | property, `ArrayBuffer \| Uint8Array \| null` | Set the file's bytes directly. JS-only - there's no string form of this, so it can't be set as an HTML attribute (see the framework note below). |
+| `.presentation` | property, `'static' \| 'write-on-paused' \| 'write-on-playing'` | Chooses the page-image renderer. Default `'static'` lazily loads ordinary full-ink PNGs. `'write-on-paused'` opens background-only at `0:00`, with hidden SVG ink until Play; `'write-on-playing'` does the same setup and begins playback. Set it before `src`/`noteData` for the initial renderer or after load to switch. `single-page` deliberately remains static. |
 
 Setting `src`/`page`/`noteData`/`single-page`/`invert-dark` after the element is already showing a note
 tears down and rebuilds the whole thing from scratch (a fresh fetch if using `src`) - there's no in-place
-diffing. `dark` and `bare` are the exception: both are applied via plain CSS attribute selectors
-internally, so toggling either live just restyles the existing content, no rebuild.
+diffing. `presentation` is different: changing it transfers the existing page shells between the static
+and write-on renderers without reparsing the note. `dark` and `bare` are also live CSS-only changes.
 
 ### Methods
 

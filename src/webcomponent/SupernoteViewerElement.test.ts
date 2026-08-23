@@ -14,6 +14,10 @@ import * as path from 'path';
 // document.createElement('supernote-viewer') below is properly typed with
 // no cast needed.
 import './SupernoteViewerElement';
+// Type-only - the side-effect import above both registers the element and
+// its HTMLElementTagNameMap augmentation (so createElement below needs no
+// cast); this just names the class for the animation-test helpers' types.
+import type { SupernoteViewerElement } from './SupernoteViewerElement';
 
 const FIXTURES_DIR = path.join(import.meta.dirname, '..', '..', 'supernote-typescript', 'tests', 'input');
 
@@ -525,7 +529,7 @@ describe('<supernote-viewer>', () => {
             return el;
         }
 
-        it('zoom in/out/reset buttons scale every page and update the label', async () => {
+        it('zoom in/out/reset buttons scale every page without a percentage label', async () => {
             // happy-dom has no real layout engine (.pages' clientWidth
             // defaults to 0 - see applyFitWidth()'s own early-return
             // guard), so fit-width - on by default - never actually
@@ -539,24 +543,21 @@ describe('<supernote-viewer>', () => {
             const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
             const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
             const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
             const containers = el.shadowRoot!.querySelectorAll<HTMLElement>('.page-container');
+            expect(el.shadowRoot!.querySelector('.zoom-label')).toBeNull();
 
             resetBtn.click();
-            expect(label.textContent).toBe('100%');
             expect(containers[0].style.width).toBe('1404px');
             expect(containers[1].style.width).toBe('1404px');
 
             zoomInBtn.click();
-            expect(label.textContent).toBe('125%');
             expect(containers[0].style.width).toBe('1755px'); // 1404 * 1.25
 
             zoomOutBtn.click();
             zoomOutBtn.click();
-            expect(label.textContent).toBe('80%'); // 125% / 1.25 / 1.25
+            expect(containers[0].style.width).toBe('1123.2px'); // 125% / 1.25 / 1.25
 
             resetBtn.click();
-            expect(label.textContent).toBe('100%');
             expect(containers[0].style.width).toBe('1404px');
 
             // Every page's img stays at width: 100% of its own
@@ -570,13 +571,13 @@ describe('<supernote-viewer>', () => {
             const el = await createLoadedViewer();
             const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
             const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
 
             for (let i = 0; i < 20; i++) zoomInBtn.click();
-            expect(label.textContent).toBe('500%');
+            expect(container.style.width).toBe('7020px');
 
             for (let i = 0; i < 40; i++) zoomOutBtn.click();
-            expect(label.textContent).toBe('5%');
+            expect(container.style.width).toBe('70.2px');
         });
 
         it('any manual zoom action turns off fit-width', async () => {
@@ -593,11 +594,11 @@ describe('<supernote-viewer>', () => {
         it('ctrl+wheel zooms; a plain wheel does not', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
 
             const plainWheel = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
             pagesEl.dispatchEvent(plainWheel);
-            expect(label.textContent).toBe('100%');
+            expect(container.style.width).toBe('100%');
             expect(plainWheel.defaultPrevented).toBe(false);
 
             // happy-dom's WheelEvent constructor doesn't wire up ctrlKey
@@ -610,18 +611,17 @@ describe('<supernote-viewer>', () => {
             Object.defineProperty(ctrlWheel, 'ctrlKey', { value: true });
             pagesEl.dispatchEvent(ctrlWheel);
             expect(ctrlWheel.defaultPrevented).toBe(true);
-            expect(label.textContent).not.toBe('100%');
             // deltaY -100 -> factor min(1.05, 1 - (-100)*0.01) = min(1.05, 2) = 1.05
-            expect(label.textContent).toBe('105%');
+            expect(container.style.width).toBe('1474.2px');
         });
 
         it('two-finger touch pinch zooms (issue #202)', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
             const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
             resetBtn.click();
-            expect(label.textContent).toBe('100%');
+            expect(container.style.width).toBe('1404px');
 
             const touch = (id: number, x: number, y: number) =>
                 new Touch({ identifier: id, target: pagesEl, clientX: x, clientY: y });
@@ -639,13 +639,13 @@ describe('<supernote-viewer>', () => {
             pagesEl.dispatchEvent(move);
 
             expect(move.defaultPrevented).toBe(true);
-            expect(label.textContent).toBe('200%');
+            expect(container.style.width).toBe('2808px');
         });
 
         it('a single-finger touchmove does not pinch-zoom', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
             const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
             resetBtn.click();
 
@@ -653,7 +653,7 @@ describe('<supernote-viewer>', () => {
             pagesEl.dispatchEvent(new TouchEvent('touchstart', { touches: [touch(100)], cancelable: true }));
             pagesEl.dispatchEvent(new TouchEvent('touchmove', { touches: [touch(50)], cancelable: true }));
 
-            expect(label.textContent).toBe('100%');
+            expect(container.style.width).toBe('1404px');
         });
 
         it('re-enabling fit-width recomputes from .pages\' current width', async () => {
@@ -661,7 +661,6 @@ describe('<supernote-viewer>', () => {
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
             const fitWidthBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Fit page to viewport width"]')!;
             const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
             const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
 
             // happy-dom's clientWidth is always 0 by default - stub it to a
@@ -673,8 +672,7 @@ describe('<supernote-viewer>', () => {
 
             fitWidthBtn.click(); // re-enable -> recomputes immediately
             expect(fitWidthBtn.getAttribute('aria-pressed')).toBe('true');
-            expect(label.textContent).toBe('50%'); // 702 / 1404
-            expect(container.style.width).toBe('702px');
+            expect(container.style.width).toBe('702px'); // 702 / 1404
         });
 
         it('has no toolbar/zoom controls in single-page mode, and stays capped by CSS instead of zoom', async () => {
@@ -1269,6 +1267,219 @@ describe('<supernote-viewer>', () => {
             // (not the native pixel size) drove the positioning.
             expect(rect.style.left).not.toBe('118px');
             expect(parseFloat(rect.style.left)).toBeCloseTo((118 / 1404) * 500, 0);
+        });
+    });
+
+    describe('write-on animation (prototype)', () => {
+        // Same setup as the rest of this file (real note parsed off disk,
+        // faked rasterizer) plus a faked rasterizeBackgrounds - its real
+        // implementation is the same Worker pipeline as rasterizePage (see
+        // convertToBackgroundImages()), which happy-dom can't run.
+        function createAnimationViewer() {
+            const el = createViewer();
+            el.rasterizeBackgrounds = vi.fn(async (_sn, pageNumbers: number[]) => pageNumbers.map((n) => `data:image/png;base64,bg${n}`));
+            return el;
+        }
+
+        async function loadAndEnterAnimation(el: SupernoteViewerElement): Promise<void> {
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle write-on animation"]')!.click();
+            // Entry is async: decode (synchronous) → background rasters
+            // (the fake resolves on a microtask) → swap + play. One timer
+            // tick gets past both.
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+        }
+
+        it('pen button swaps the page to its background raster, overlays the stroke SVG, and plays', async () => {
+            const el = createAnimationViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+
+            const penBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle write-on animation"]')!;
+            expect(penBtn).toBeTruthy();
+            const animControls = el.shadowRoot!.querySelector('.anim-controls')!;
+            expect(animControls.classList.contains('active')).toBe(false);
+            expect(penBtn.getAttribute('aria-pressed')).toBe('false');
+
+            penBtn.click();
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            // This note's single page is the only animatable one.
+            expect(el.rasterizeBackgrounds).toHaveBeenCalledTimes(1);
+            expect(el.rasterizeBackgrounds).toHaveBeenCalledWith(expect.anything(), [1]);
+            const container = el.shadowRoot!.querySelector('.page-container')!;
+            expect(container.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+            // The page image is the background-only base layer, not the
+            // lazy-loaded ink raster (which never ran - no Intersection-
+            // Observer in this environment, and the mode guards it anyway).
+            expect(container.querySelector('img')!.getAttribute('src')).toBe('data:image/png;base64,bg1');
+            expect(el.rasterizePage).not.toHaveBeenCalled();
+
+            // The controls group is active, the pen is "pressed", and the
+            // running animator shows as playing (pause glyph + label) with
+            // a written time label.
+            expect(animControls.classList.contains('active')).toBe(true);
+            expect(penBtn.getAttribute('aria-pressed')).toBe('true');
+            expect(el.shadowRoot!.querySelector('button[aria-label="Pause write-on animation"]')).not.toBeNull();
+            expect(el.shadowRoot!.querySelector('.anim-time')!.textContent.trim()).not.toBe('');
+
+            // The play button doubles as pause.
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Pause write-on animation"]')!.click();
+            expect(el.shadowRoot!.querySelector('button[aria-label="Play write-on animation"]')).not.toBeNull();
+        });
+
+        it('write-on-paused opens primed at t=0 - blank until play is pressed', async () => {
+            const el = createAnimationViewer();
+            el.presentation = 'write-on-paused';
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            // Entry is async: decode (synchronous) → background rasters
+            // (the fake resolves on a microtask) → swap - but no play this
+            // time.
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            // The note opens in the animation mode's visual state - the
+            // background base layer + stroke overlay - yet paused at t=0:
+            // the controls show the idle play glyph, not the running one.
+            const container = el.shadowRoot!.querySelector('.page-container')!;
+            expect(container.querySelector('img')!.getAttribute('src')).toBe('data:image/png;base64,bg1');
+            expect(container.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+            expect(el.shadowRoot!.querySelector('.anim-controls')!.classList.contains('active')).toBe(true);
+            expect(el.shadowRoot!.querySelector('button[aria-label="Play write-on animation"]')).not.toBeNull();
+            expect(el.shadowRoot!.querySelector('button[aria-label="Pause write-on animation"]')).toBeNull();
+            expect(el.shadowRoot!.querySelector('button[aria-label="Toggle write-on animation"]')!.getAttribute('aria-pressed')).toBe('true');
+            expect(el.presentation).toBe('write-on-paused');
+
+            // Pressing play starts the running animator (pause glyph) and
+            // updates the public presentation state too.
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Play write-on animation"]')!.click();
+            expect(el.shadowRoot!.querySelector('button[aria-label="Pause write-on animation"]')).not.toBeNull();
+            expect(el.presentation).toBe('write-on-playing');
+        });
+
+        it('switches an already-loaded note through the public presentation property', async () => {
+            const el = createAnimationViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+
+            el.presentation = 'write-on-paused';
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            expect(el.presentation).toBe('write-on-paused');
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+
+            el.presentation = 'static';
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            expect(el.presentation).toBe('static');
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).toBeNull();
+        });
+
+        it('claims write-on pages before background rasterization, so a forced static load cannot reveal ink mid-entry', async () => {
+            const el = createAnimationViewer();
+            let resolveBackgrounds!: (urls: string[]) => void;
+            el.rasterizeBackgrounds = vi.fn(() => new Promise<string[]>((resolve) => { resolveBackgrounds = resolve; }));
+            el.presentation = 'write-on-paused';
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+
+            // The worker is intentionally held pending. goToPage() mimics
+            // an IntersectionObserver/programmatic request for this page's
+            // normal image at exactly this point in real browsers.
+            el.goToPage(1);
+            await Promise.resolve();
+            expect(el.rasterizePage).not.toHaveBeenCalled();
+
+            resolveBackgrounds(['data:image/png;base64,bg1']);
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            expect(el.shadowRoot!.querySelector('.page-container img')!.getAttribute('src')).toBe('data:image/png;base64,bg1');
+        });
+
+        it('starts at the default 4× speed, and the speed button cycles 4× → 1× → 2× → ½×', async () => {
+            const el = createAnimationViewer();
+            await loadAndEnterAnimation(el);
+            const speedBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('.anim-speed-btn')!;
+            expect(speedBtn.textContent).toBe('4×');
+            speedBtn.click();
+            expect(speedBtn.textContent).toBe('1×');
+            speedBtn.click();
+            expect(speedBtn.textContent).toBe('2×');
+            speedBtn.click();
+            expect(speedBtn.textContent).toBe('½×');
+            speedBtn.click();
+            expect(speedBtn.textContent).toBe('4×');
+        });
+
+        it('clicking the pen button again exits: overlay removed, base layer evicted, lazy-load restored', async () => {
+            const el = createAnimationViewer();
+            await loadAndEnterAnimation(el);
+            const container = el.shadowRoot!.querySelector('.page-container')!;
+            expect(container.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+
+            const penBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle write-on animation"]')!;
+            penBtn.click();
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            expect(container.querySelector('svg.stroke-animation-svg')).toBeNull();
+            // The page was never "visible" in this environment (happy-dom
+            // never fires IntersectionObserver), so exit evicts the base
+            // layer and leaves the page lazy - no eager re-raster.
+            expect(container.querySelector('img')!.hasAttribute('src')).toBe(false);
+            expect(el.rasterizePage).not.toHaveBeenCalled();
+            expect(penBtn.getAttribute('aria-pressed')).toBe('false');
+            expect(el.shadowRoot!.querySelector('.anim-controls')!.classList.contains('active')).toBe(false);
+            expect(el.presentation).toBe('static');
+        });
+
+        it('switching to recognized text view exits the animation', async () => {
+            const el = createAnimationViewer();
+            await loadAndEnterAnimation(el);
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle recognized text view"]')!.click();
+            // Presentation transfer runs synchronously inside toggleMode();
+            // the flush is only for the (no-op here) static restore path.
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            expect(el.shadowRoot!.querySelector('.pages')!.classList.contains('mode-text')).toBe(true);
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).toBeNull();
+            expect(el.shadowRoot!.querySelector('button[aria-label="Toggle write-on animation"]')!.getAttribute('aria-pressed')).toBe('false');
+        });
+
+        it('a note with nothing decodable shows a hint and leaves the note untouched', async () => {
+            const el = createAnimationViewer();
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
+            await loaded;
+
+            vi.useFakeTimers();
+            el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Toggle write-on animation"]')!.click();
+            // Entry is async (microtasks only - a blank note never reaches
+            // the background-raster await); microtasks run under fake
+            // timers too, so flush a couple of them.
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(el.rasterizeBackgrounds).not.toHaveBeenCalled();
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).toBeNull();
+            expect(el.shadowRoot!.querySelector('.anim-controls')!.classList.contains('active')).toBe(false);
+            expect(el.shadowRoot!.querySelector('button[aria-label="Toggle write-on animation"]')!.getAttribute('aria-pressed')).toBe('false');
+            // The hint shows in the time label, and clears itself once its
+            // (now-faked) timeout elapses.
+            expect(el.shadowRoot!.querySelector('.anim-time')!.textContent).toMatch(/no animatable ink/i);
+            vi.advanceTimersByTime(3500);
+            vi.useRealTimers();
+            expect(el.shadowRoot!.querySelector('.anim-time')!.textContent).toBe('');
         });
     });
 });

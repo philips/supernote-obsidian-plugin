@@ -123,7 +123,7 @@ export class WorkerPool {
     // request in flight) and round-robining across every call (so
     // concurrent single-page requests still spread across every worker,
     // instead of piling onto worker 0) fixes both.
-    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[]): Promise<string[]> {
+    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[], backgroundOnly?: boolean[]): Promise<string[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
         const worker = this.workers[workerIndex];
@@ -152,6 +152,7 @@ export class WorkerPool {
                 note: renderableNote,
                 scale,
                 vectorInk: vectorInkPages,
+                backgroundOnly,
             };
 
             worker.postMessage(message);
@@ -166,7 +167,11 @@ export class WorkerPool {
         return result;
     }
 
-    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[]): Promise<string[]> {
+    // `backgroundOnly`, when present, is a parallel array aligned by index
+    // with allPageNumbers (see the `backgroundOnly` comment on
+    // RasterizeWorkerMessage): the worker strips those pages' bitmap ink
+    // layers before rasterizing and returns plain background-only PNGs.
+    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[], backgroundOnly?: boolean[]): Promise<string[]> {
         //console.time('Total processing time');
 
         const chunks = chunkPageNumbers(allPageNumbers);
@@ -175,16 +180,18 @@ export class WorkerPool {
 
         // Process chunks concurrently - safe now regardless of how many land
         // on the same worker, or how many separate processPages() calls are
-        // in flight at once (see processChunk()'s comment). vectorInkPages,
-        // when present, is aligned by index with allPageNumbers, so slice it
-        // the same way each chunk slices the page numbers.
+        // in flight at once (see processChunk()'s comment). vectorInkPages
+        // and backgroundOnly, when present, are aligned by index with
+        // allPageNumbers, so slice each the same way each chunk slices the
+        // page numbers.
         let offset = 0;
         const results = await Promise.all(
             chunks.map((chunk) => {
                 const start = offset;
                 offset += chunk.length;
                 const vip = vectorInkPages?.slice(start, start + chunk.length);
-                return this.processChunk(note, chunk, scale, vip);
+                const bg = backgroundOnly?.slice(start, start + chunk.length);
+                return this.processChunk(note, chunk, scale, vip, bg);
             })
         );
 
@@ -275,6 +282,24 @@ export class ImageConverter {
             // so thumbnails keep the raster path.
             const vectorInkPages = vectorInk && !scale ? prepareVectorInkPages(note, pages, 1) : undefined;
             return await getSharedWorkerPool().processPages(note, pages, scale, vectorInkPages);
+        } finally {
+            activeWorkerCalls--;
+            scheduleIdleTeardownIfIdle();
+        }
+    }
+
+    // Background-only raster: strips the bitmap ink layers from each
+    // requested page before toImage (see `backgroundOnly` on
+    // RasterizeWorkerMessage) and returns plain PNG data URLs of the bare
+    // paper/ruling/background, no ink — the base layer the web component's
+    // write-on stroke animation mode (src/webcomponent/strokeAnimation.ts)
+    // draws its animated vector ink over. Same memory model as
+    // convertToImages() (sliced pages, chunked, shared pool).
+    async convertToBackgroundImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
+        const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
+        activeWorkerCalls++;
+        try {
+            return await getSharedWorkerPool().processPages(note, pages, undefined, undefined, pages.map(() => true));
         } finally {
             activeWorkerCalls--;
             scheduleIdleTeardownIfIdle();

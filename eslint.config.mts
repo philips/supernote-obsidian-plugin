@@ -16,6 +16,9 @@ export default defineConfig(
 		'esbuild.webcomponent.config.mjs',
 		'esbuild.atelier-webcomponent.config.mjs',
 		'dist',
+		// Manual/CI copies of the standalone bundles served straight from
+		// the demo directory (gitignored, like the root dist/).
+		'demo/dist',
 		'version-bump.mjs',
 		'versions.json',
 		'manifest.json',
