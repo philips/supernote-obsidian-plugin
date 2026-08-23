@@ -13,11 +13,10 @@
 //   - centerline strokes: the classic SVG dash-reveal (pathLength="1" +
 //     animated stroke-dashoffset), duration proportional to the stroke's
 //     own length so short ticks and long flourishes both read as writing
-//   - pressure-varying contour fills: a dash-revealed *mask* stroke that
-//     follows the record's own centerline, so the filled outline (the
-//     device's real pressure-varying shape) is exposed as the pen moves —
-//     falling back to a short fade-in only when the record carries no
-//     centerline to trace at all
+//   - pressure-varying contour fills: a cheap dashed centerline preview
+//     while writing, swapped for the device's exact filled contour when the
+//     stroke finishes — avoiding per-frame SVG mask rasterization; falling
+//     back to a short fade-in only with no centerline to trace at all
 //   - filled Heading rects: a short fade-in at their write position
 //
 // Z-order vs. time order: the DOM (what covers what) follows
@@ -59,6 +58,10 @@ const MAX_STROKE_MS = 1200;
 const STROKE_GAP_MS = 30;
 const CONTOUR_FADE_MS = 250;
 const RECT_FADE_MS = 350;
+// SVG stroke-dashoffset changes are paint work, not compositor-only work in
+// Chrome. Thirty visual updates per second remain smooth for handwriting,
+// including at the default 4× speed, and substantially reduce raster load.
+const MAX_ANIMATION_FPS = 30;
 
 // Rings shorter than this enclose no area (same constant and reasoning as
 // MIN_CONTOUR_RING_POINTS in the submodule's vector-ink.ts).
@@ -139,42 +142,6 @@ function polylineLength(points: IStrokePoint[]): number {
     return total;
 }
 
-// Mask ids must be unique *document-wide* (inline SVGs share the document's
-// id namespace, and a note's pages all live in one document).
-let contourMaskCounter = 0;
-
-// Twice the largest distance from any ring point to the nearest centerline
-// point, plus a little slack — the width a mask stroke needs so that
-// sweeping it along the centerline fully exposes the ring everywhere, its
-// terminal caps included. The centerline is subsampled to at most
-// MAX_MASK_SAMPLES points first: the distance to the nearest *sample* is
-// always at least the distance to the nearest true point, so the result is
-// a safe overestimate (a slightly fatter mask) at O(rings × samples) cost.
-const MAX_MASK_SAMPLES = 500;
-function maskWidthForRings(rings: IStrokePoint[][], centerline: IStrokePoint[]): number {
-    const step = Math.max(1, Math.ceil(centerline.length / MAX_MASK_SAMPLES));
-    const samples: IStrokePoint[] = [];
-    for (let i = 0; i < centerline.length; i += step) samples.push(centerline[i]);
-    let maxSq = 0;
-    for (const ring of rings) {
-        for (const point of ring) {
-            // Width is derived from this point's *nearest* sampled
-            // centerline point, then maximized across the ring. Taking the
-            // farthest point instead would make a long stroke's mask span
-            // most of the page, exposing unrelated-looking ink as soon as
-            // even a tiny dash segment became visible.
-            let nearestSq = Infinity;
-            for (const sample of samples) {
-                const dx = point.x - sample.x;
-                const dy = point.y - sample.y;
-                nearestSq = Math.min(nearestSq, dx * dx + dy * dy);
-            }
-            maxSq = Math.max(maxSq, nearestSq);
-        }
-    }
-    return Math.sqrt(maxSq) * 2 + 2;
-}
-
 // `M x,y L x,y ...` — the same path data renderPrimitiveToSvg in the
 // submodule's svg.ts emits for a strokedPath, so the animated strokes are
 // geometrically identical to the static vector-ink render.
@@ -226,17 +193,18 @@ function buildHatchPattern(color: string): { defs: SVGElement; id: string } {
 }
 
 // How this stroke reveals. 'draw' = dash-reveal along a path — its own for
-// a centerline stroke, the mask's for a masked contour (see
+// a centerline stroke, or a temporary centerline preview for a contour (see
 // StrokeSegment.revealEl); 'fade' = opacity-in (Heading rects and
 // centerline-less contour silhouettes).
 export type StrokeSegmentKind = 'draw' | 'fade';
 
 export interface StrokeSegment {
     el: SVGElement;
-    // The element the animator actually drives, when that isn't the
-    // visible one: a masked contour's dash reveal lives on its mask's
-    // stroke, while el is the filled path that gets exposed by it.
+    // The element the animator actually drives when this is a contour's
+    // temporary centerline preview. `el` is then the exact final contour.
     revealEl?: SVGElement;
+    // On a contour, hide the preview and reveal `el` once fully drawn.
+    swapOnComplete?: boolean;
     kind: StrokeSegmentKind;
     // Page-local timeline offsets — the StrokeAnimator below stitches
     // pages' segments into one global timeline in page order.
@@ -277,12 +245,19 @@ export function buildPageStrokeAnimation(sn: SupernoteX, pageNumber: number): Pa
     // them stays visible even though the rect's own record often comes
     // after it; highlighter passes next, beneath the rest of the ink; the
     // remaining ink last.
-    const rects: { el: SVGElement; revealEl?: SVGElement; kind: StrokeSegmentKind; duration: number }[] = [];
-    const highlighters: { el: SVGElement; revealEl?: SVGElement; kind: StrokeSegmentKind; duration: number }[] = [];
-    const ink: { el: SVGElement; revealEl?: SVGElement; kind: StrokeSegmentKind; duration: number }[] = [];
+    type BuildEntry = {
+        el: SVGElement;
+        revealEl?: SVGElement;
+        swapOnComplete?: boolean;
+        kind: StrokeSegmentKind;
+        duration: number;
+    };
+    const rects: BuildEntry[] = [];
+    const highlighters: BuildEntry[] = [];
+    const ink: BuildEntry[] = [];
     // Write order (the strokes' own array order) → element, for the
     // timeline below.
-    const byWriteOrder = new Map<number, { el: SVGElement; revealEl?: SVGElement; kind: StrokeSegmentKind; duration: number }>();
+    const byWriteOrder = new Map<number, BuildEntry>();
 
     const boundsList = vip.strokes.map(strokeBounds);
     const greys = vip.strokes.map((_, i) => {
@@ -320,56 +295,35 @@ export function buildPageStrokeAnimation(sn: SupernoteX, pageNumber: number): Pa
 
         const rings = (stroke.contour ?? []).filter((ring) => ring.length >= MIN_CONTOUR_RING_POINTS);
         if (rings.length > 0) {
-            // The device's own rendered outline (pressure-varying width) —
-            // a filled region, exposed as the pen moves when the record
-            // carries a centerline to trace (masked branch below), or
-            // faded in at its write position otherwise.
+            // The device's own rendered outline (pressure-varying width).
+            // Repainting that fill through an SVG mask every frame is very
+            // expensive in Chromium. Instead, write a plain centerline
+            // preview and swap in this exact final contour at completion.
             const path = document.createElementNS(SVG_NS, 'path');
             path.setAttribute('d', ringsToPath(rings));
             path.setAttribute('fill', style.color);
             const bucket =
                 style.tier === 'marker' && isHighlighterPass(i, boundsList, greys, drawable) ? highlighters : ink;
             if (stroke.points.length >= 2) {
-                // The record carries its own centerline: instead of fading
-                // the filled ring in, expose it with a dash-revealed mask
-                // stroke that follows that centerline — the ink appears to
-                // be *written* with the device's own pressure-varying
-                // outline, and once fully revealed the element is exactly
-                // the static render's filled path. The mask stroke is what
-                // the animator drives (StrokeSegment.revealEl); the visible
-                // path itself never moves.
-                const maskId = `supernote-viewer-anim-mask-${++contourMaskCounter}`;
-                const mask = document.createElementNS(SVG_NS, 'mask');
-                mask.setAttribute('id', maskId);
-                // The default mask region is a percentage of the
-                // *referencing* element's bbox — a thin ring's box would
-                // clip the mask stroke's round caps, so use a full-page
-                // user-space region (browsers rasterize only the part the
-                // element actually draws).
-                mask.setAttribute('maskUnits', 'userSpaceOnUse');
-                mask.setAttribute('x', '0');
-                mask.setAttribute('y', '0');
-                mask.setAttribute('width', String(sn.pageWidth));
-                mask.setAttribute('height', String(sn.pageHeight));
                 const reveal = document.createElementNS(SVG_NS, 'path');
                 reveal.setAttribute('d', pointsToPath(stroke.points));
                 reveal.setAttribute('fill', 'none');
-                reveal.setAttribute('stroke', 'white');
-                reveal.setAttribute('stroke-width', String(maskWidthForRings(rings, stroke.points).toFixed(2)));
+                reveal.setAttribute('stroke', style.color);
+                reveal.setAttribute('stroke-width', String(style.width));
                 reveal.setAttribute('stroke-linecap', 'round');
                 reveal.setAttribute('stroke-linejoin', 'round');
-                // Same pathLength=1 normalization as the plain draw path
-                // below: one dash value reveals the whole trace without a
-                // per-element getTotalLength() measurement.
+                // Normalize every preview to length 1. This avoids an
+                // expensive getTotalLength() per stroke and works in test
+                // DOMs too.
                 reveal.setAttribute('pathLength', '1');
                 reveal.style.strokeDasharray = '1';
                 reveal.style.strokeDashoffset = '1';
-                mask.appendChild(reveal);
-                svg.appendChild(mask);
-                path.setAttribute('mask', `url(#${maskId})`);
+                // The animator keeps the final contour display:none until
+                // the preview reaches its end.
+                path.style.display = 'none';
                 const length = polylineLength(stroke.points);
                 const duration = Math.min(MAX_STROKE_MS, Math.max(MIN_STROKE_MS, (length / WRITE_SPEED_PX_PER_SEC) * 1000));
-                const entry = { el: path, revealEl: reveal, kind: 'draw' as const, duration };
+                const entry = { el: path, revealEl: reveal, swapOnComplete: true, kind: 'draw' as const, duration };
                 bucket.push(entry);
                 byWriteOrder.set(i, entry);
                 return;
@@ -406,7 +360,12 @@ export function buildPageStrokeAnimation(sn: SupernoteX, pageNumber: number): Pa
 
     if (byWriteOrder.size === 0) return null;
 
-    for (const entry of [...rects, ...highlighters, ...ink]) svg.appendChild(entry.el);
+    for (const entry of [...rects, ...highlighters, ...ink]) {
+        svg.appendChild(entry.el);
+        // A contour's final path is in the static z-order; its temporary
+        // centerline sits immediately above it until the swap completes.
+        if (entry.revealEl) svg.appendChild(entry.revealEl);
+    }
 
     // Timeline: pure write order (the strokes' own array order — Maps
     // iterate in insertion order, so the index-keyed map above is the
@@ -416,7 +375,14 @@ export function buildPageStrokeAnimation(sn: SupernoteX, pageNumber: number): Pa
     let t = 0;
     for (const entry of byWriteOrder.values()) {
         if (t > 0) t += STROKE_GAP_MS;
-        segments.push({ el: entry.el, revealEl: entry.revealEl, kind: entry.kind, start: t, duration: entry.duration });
+        segments.push({
+            el: entry.el,
+            revealEl: entry.revealEl,
+            swapOnComplete: entry.swapOnComplete,
+            kind: entry.kind,
+            start: t,
+            duration: entry.duration,
+        });
         t += entry.duration;
     }
 
@@ -426,6 +392,7 @@ export function buildPageStrokeAnimation(sn: SupernoteX, pageNumber: number): Pa
 interface AnimatorEntry {
     el: SVGElement;
     revealEl?: SVGElement;
+    swapOnComplete?: boolean;
     kind: StrokeSegmentKind;
     page: number;
     start: number; // global (across all pages)
@@ -467,6 +434,7 @@ export class StrokeAnimator {
     private lastActivePage = -1;
     private rafId: number | undefined;
     private lastNow = 0;
+    private lastVisualUpdateNow = 0;
     private callbacks: StrokeAnimatorCallbacks;
     private clock: { now: () => number; frame: (cb: (t: number) => void) => number; unframe: (id: number) => void };
 
@@ -485,6 +453,7 @@ export class StrokeAnimator {
                 this.entries.push({
                     el: segment.el,
                     revealEl: segment.revealEl,
+                    swapOnComplete: segment.swapOnComplete,
                     kind: segment.kind,
                     page: pageIndex,
                     start: offset + segment.start,
@@ -518,6 +487,7 @@ export class StrokeAnimator {
         if (this.time >= this.totalDuration) this.seek(0);
         this.playing = true;
         this.lastNow = this.clock.now();
+        this.lastVisualUpdateNow = this.lastNow;
         // Report the active page right away (a host auto-scrolls to the
         // first page the moment the pen starts, not on the first frame).
         // The replay-from-end case's seek(0) above already reported its
@@ -559,6 +529,7 @@ export class StrokeAnimator {
         }
         this.pointer = pointer;
         this.lastNow = this.clock.now();
+        this.lastVisualUpdateNow = this.lastNow;
         this.updateState(clamped, false);
     }
 
@@ -573,8 +544,13 @@ export class StrokeAnimator {
 
     private frame = (now: number): void => {
         if (!this.playing) return;
+        if (now - this.lastVisualUpdateNow < 1000 / MAX_ANIMATION_FPS) {
+            this.rafId = this.clock.frame(this.frame);
+            return;
+        }
         const delta = (now - this.lastNow) * this.speed;
         this.lastNow = now;
+        this.lastVisualUpdateNow = now;
         const time = Math.min(this.time + delta, this.totalDuration);
         // updateState() owns the end-of-run transition: it stops playback
         // and fires onFinish when the timeline is exhausted, so this frame
@@ -636,6 +612,17 @@ export class StrokeAnimator {
     private apply(entry: AnimatorEntry, progress: number): void {
         if (progress === entry.lastApplied) return;
         entry.lastApplied = progress;
+        if (entry.swapOnComplete) {
+            // The centerline is the only SVG geometry Chrome needs to
+            // repaint during a contour's animation. Once complete, replace
+            // it atomically with the original pressure-varying fill.
+            const reveal = entry.revealEl!;
+            const complete = progress >= 1;
+            entry.el.style.display = complete ? '' : 'none';
+            reveal.style.display = complete ? 'none' : '';
+            reveal.style.strokeDashoffset = String(1 - progress);
+            return;
+        }
         const el = entry.revealEl ?? entry.el;
         if (entry.kind === 'draw') el.style.strokeDashoffset = String(1 - progress);
         else el.style.opacity = String(progress);

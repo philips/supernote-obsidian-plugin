@@ -13,7 +13,10 @@
         color-scheme: light dark;
     }
     supernote-viewer {
-        height: 80vh;
+        /* A note page is portrait-shaped. Let the demo grow to that page
+           height instead of trapping most desktop pages in an 80vh scroller. */
+        aspect-ratio: 1 / 1.42;
+        min-height: 100vh;
         margin-top: 1em;
     }
     #status {

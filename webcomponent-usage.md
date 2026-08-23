@@ -37,6 +37,15 @@ npm run build:webcomponent   # writes dist/supernote-viewer.js
 Copy `dist/supernote-viewer.js` into your own project and load it as an ES module — it's only ever built as
 ESM, so this needs `type="module"` and needs to be served over http(s), not opened as a `file://` URL:
 
+For a local Chromium smoke test of the standalone component, run the following (once per machine, install
+Playwright's browser first with `npx playwright install chromium`):
+
+```
+npm run test:webcomponent:playwright
+```
+
+It builds the bundle, serves the demo and opens a real `.note` fixture in paused write-on mode.
+
 ```html
 <script type="module" src="/path/to/supernote-viewer.js"></script>
 ```
@@ -54,7 +63,7 @@ call.
 
 `:host` has no default height - without one set (inline style, a CSS rule, or a flex/grid parent that
 gives it one), the element collapses to whatever its content naturally takes up. See
-[`demo/index.html`](demo/index.html) for a complete working page (it sets `height: 80vh`).
+[`demo/index.html`](demo/index.html) for a complete working page (it uses a portrait page aspect ratio with a `100vh` minimum height).
 
 If you have the file's bytes already (a `<input type="file">` picker, a `fetch()` you made yourself, a File
 System Access API handle) rather than a fetchable URL, use the `noteData` property instead of `src`:

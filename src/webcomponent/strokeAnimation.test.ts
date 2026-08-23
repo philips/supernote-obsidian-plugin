@@ -140,35 +140,31 @@ describe('buildPageStrokeAnimation', () => {
         expect(anim.duration).toBeGreaterThan(0);
     });
 
-    it('emits masked contour strokes with a dash-ready reveal path, and centerline strokes as dash-ready open paths', () => {
+    it('uses a cheap centerline preview for contours, then retains their exact final fills', () => {
         const sn = new SupernoteX(readFixture('turkish-a6x-20230015-handwriting-erase.note'));
         const anim = buildPageStrokeAnimation(sn, 1)!;
-        const masked = anim.segments.filter((s) => s.revealEl);
+        const previews = anim.segments.filter((s) => s.swapOnComplete);
         const plainDraws = anim.segments.filter((s) => s.kind === 'draw' && !s.revealEl);
-        // This note is mostly pressure-varying contour fills (each revealed
-        // by a mask stroke along the record's own centerline) with one
-        // plain centerline stroke — and no fades at all.
-        expect(masked.length).toBeGreaterThan(0);
+        // This note is mostly pressure-varying contour fills. They get a
+        // normal dashed centerline during playback, not an SVG mask.
+        expect(previews.length).toBeGreaterThan(0);
         expect(plainDraws.length).toBeGreaterThan(0);
         expect(anim.segments.every((s) => s.kind === 'draw')).toBe(true);
+        expect(anim.svg.querySelector('mask')).toBeNull();
 
-        for (const { el, revealEl } of masked) {
-            // The visible element is the static render's filled ring.
+        for (const { el, revealEl } of previews) {
+            // The initially-hidden element is still the exact static fill.
             expect(tag(el)).toBe('path');
             expect(el.getAttribute('fill')!.startsWith('rgb(')).toBe(true);
             expect(el.getAttribute('d')!.includes('Z')).toBe(true);
-            // ...exposed by a dash-revealed mask stroke.
-            expect(el.getAttribute('mask')!.startsWith('url(#')).toBe(true);
-            const maskId = (el.getAttribute('mask') ?? '').replace(/^url\(#/, '').replace(/\)$/, '');
-            const mask = anim.svg.querySelector(`mask#${maskId}`);
-            expect(mask).not.toBeNull();
-            expect(mask!.getAttribute('maskUnits')).toBe('userSpaceOnUse');
+            expect(el.getAttribute('mask')).toBeNull();
+            expect(el.style.display).toBe('none');
+            // Its temporary visible preview is just a cheap dashed path.
             const reveal = revealEl!;
-            expect(mask!.firstElementChild).toBe(reveal);
             expect(tag(reveal)).toBe('path');
             expect(reveal.getAttribute('pathLength')).toBe('1');
             expect(reveal.getAttribute('fill')).toBe('none');
-            expect(reveal.getAttribute('stroke')).toBe('white');
+            expect(reveal.getAttribute('stroke')).toBe(el.getAttribute('fill'));
             expect(parseFloat(reveal.getAttribute('stroke-width') ?? '')).toBeGreaterThan(0);
             expect(reveal.style.strokeDasharray).toBe('1');
             expect(reveal.style.strokeDashoffset).toBe('1');
@@ -204,6 +200,9 @@ describe('StrokeAnimator', () => {
         expect(animator.isPlaying).toBe(false);
         expect(animator.currentTime).toBe(0);
         for (const seg of page.segments) expect(progressOf(seg)).toBe(0);
+        const contour = page.segments.find((seg) => seg.swapOnComplete)!;
+        expect(contour.el.style.display).toBe('none');
+        expect(contour.revealEl!.style.display).toBe('');
         expect(activePages).toEqual([]); // nothing has started; no page yet
 
         animator.play();
@@ -225,12 +224,16 @@ describe('StrokeAnimator', () => {
         expect(finished).toBe(1);
         expect(clock.frameQueued()).toBe(false);
         for (const seg of page.segments) expect(progressOf(seg)).toBe(1);
+        expect(contour.el.style.display).toBe('');
+        expect(contour.revealEl!.style.display).toBe('none');
 
         // Playing again from the finished state restarts the whole run.
         animator.play();
         expect(animator.isPlaying).toBe(true);
         expect(animator.currentTime).toBe(0);
         for (const seg of page.segments) expect(progressOf(seg)).toBe(0);
+        expect(contour.el.style.display).toBe('none');
+        expect(contour.revealEl!.style.display).toBe('');
         animator.pause();
     });
 
@@ -270,6 +273,25 @@ describe('StrokeAnimator', () => {
         animator.speed = 0.5;
         clock.tick(50);
         expect(animator.currentTime).toBe(125);
+        animator.pause();
+    });
+
+    it('limits visual updates to 30 FPS while retaining elapsed timeline time', () => {
+        const sn = new SupernoteX(readFixture('turkish-a6x-20230015-handwriting-erase.note'));
+        const page = buildPageStrokeAnimation(sn, 1)!;
+        const clock = makeFakeClock();
+        const animator = new StrokeAnimator([page], {}, clock.options);
+
+        animator.play();
+        clock.tick(20);
+        // A 20ms rAF is retained for the next visual update instead of
+        // changing an SVG dash offset immediately.
+        expect(animator.currentTime).toBe(0);
+        expect(clock.frameQueued()).toBe(true);
+        clock.tick(14);
+        // The following update absorbs all elapsed time; pacing has not
+        // slowed, only the number of expensive SVG paints.
+        expect(animator.currentTime).toBe(34);
         animator.pause();
     });
 
