@@ -529,7 +529,7 @@ describe('<supernote-viewer>', () => {
             return el;
         }
 
-        it('zoom in/out/reset buttons scale every page and update the label', async () => {
+        it('zoom in/out/reset buttons scale every page without a percentage label', async () => {
             // happy-dom has no real layout engine (.pages' clientWidth
             // defaults to 0 - see applyFitWidth()'s own early-return
             // guard), so fit-width - on by default - never actually
@@ -543,24 +543,21 @@ describe('<supernote-viewer>', () => {
             const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
             const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
             const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
             const containers = el.shadowRoot!.querySelectorAll<HTMLElement>('.page-container');
+            expect(el.shadowRoot!.querySelector('.zoom-label')).toBeNull();
 
             resetBtn.click();
-            expect(label.textContent).toBe('100%');
             expect(containers[0].style.width).toBe('1404px');
             expect(containers[1].style.width).toBe('1404px');
 
             zoomInBtn.click();
-            expect(label.textContent).toBe('125%');
             expect(containers[0].style.width).toBe('1755px'); // 1404 * 1.25
 
             zoomOutBtn.click();
             zoomOutBtn.click();
-            expect(label.textContent).toBe('80%'); // 125% / 1.25 / 1.25
+            expect(containers[0].style.width).toBe('1123.2px'); // 125% / 1.25 / 1.25
 
             resetBtn.click();
-            expect(label.textContent).toBe('100%');
             expect(containers[0].style.width).toBe('1404px');
 
             // Every page's img stays at width: 100% of its own
@@ -574,13 +571,13 @@ describe('<supernote-viewer>', () => {
             const el = await createLoadedViewer();
             const zoomInBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!;
             const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
 
             for (let i = 0; i < 20; i++) zoomInBtn.click();
-            expect(label.textContent).toBe('500%');
+            expect(container.style.width).toBe('7020px');
 
             for (let i = 0; i < 40; i++) zoomOutBtn.click();
-            expect(label.textContent).toBe('5%');
+            expect(container.style.width).toBe('70.2px');
         });
 
         it('any manual zoom action turns off fit-width', async () => {
@@ -597,11 +594,11 @@ describe('<supernote-viewer>', () => {
         it('ctrl+wheel zooms; a plain wheel does not', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
 
             const plainWheel = new WheelEvent('wheel', { deltaY: -100, cancelable: true });
             pagesEl.dispatchEvent(plainWheel);
-            expect(label.textContent).toBe('100%');
+            expect(container.style.width).toBe('100%');
             expect(plainWheel.defaultPrevented).toBe(false);
 
             // happy-dom's WheelEvent constructor doesn't wire up ctrlKey
@@ -614,18 +611,17 @@ describe('<supernote-viewer>', () => {
             Object.defineProperty(ctrlWheel, 'ctrlKey', { value: true });
             pagesEl.dispatchEvent(ctrlWheel);
             expect(ctrlWheel.defaultPrevented).toBe(true);
-            expect(label.textContent).not.toBe('100%');
             // deltaY -100 -> factor min(1.05, 1 - (-100)*0.01) = min(1.05, 2) = 1.05
-            expect(label.textContent).toBe('105%');
+            expect(container.style.width).toBe('1474.2px');
         });
 
         it('two-finger touch pinch zooms (issue #202)', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
             const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
             resetBtn.click();
-            expect(label.textContent).toBe('100%');
+            expect(container.style.width).toBe('1404px');
 
             const touch = (id: number, x: number, y: number) =>
                 new Touch({ identifier: id, target: pagesEl, clientX: x, clientY: y });
@@ -643,13 +639,13 @@ describe('<supernote-viewer>', () => {
             pagesEl.dispatchEvent(move);
 
             expect(move.defaultPrevented).toBe(true);
-            expect(label.textContent).toBe('200%');
+            expect(container.style.width).toBe('2808px');
         });
 
         it('a single-finger touchmove does not pinch-zoom', async () => {
             const el = await createLoadedViewer();
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
+            const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
             const resetBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Reset zoom"]')!;
             resetBtn.click();
 
@@ -657,7 +653,7 @@ describe('<supernote-viewer>', () => {
             pagesEl.dispatchEvent(new TouchEvent('touchstart', { touches: [touch(100)], cancelable: true }));
             pagesEl.dispatchEvent(new TouchEvent('touchmove', { touches: [touch(50)], cancelable: true }));
 
-            expect(label.textContent).toBe('100%');
+            expect(container.style.width).toBe('1404px');
         });
 
         it('re-enabling fit-width recomputes from .pages\' current width', async () => {
@@ -665,7 +661,6 @@ describe('<supernote-viewer>', () => {
             const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
             const fitWidthBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Fit page to viewport width"]')!;
             const zoomOutBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')!;
-            const label = el.shadowRoot!.querySelector('.zoom-label')!;
             const container = el.shadowRoot!.querySelector<HTMLElement>('.page-container')!;
 
             // happy-dom's clientWidth is always 0 by default - stub it to a
@@ -677,8 +672,7 @@ describe('<supernote-viewer>', () => {
 
             fitWidthBtn.click(); // re-enable -> recomputes immediately
             expect(fitWidthBtn.getAttribute('aria-pressed')).toBe('true');
-            expect(label.textContent).toBe('50%'); // 702 / 1404
-            expect(container.style.width).toBe('702px');
+            expect(container.style.width).toBe('702px'); // 702 / 1404
         });
 
         it('has no toolbar/zoom controls in single-page mode, and stays capped by CSS instead of zoom', async () => {

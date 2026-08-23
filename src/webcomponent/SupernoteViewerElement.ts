@@ -358,12 +358,6 @@ button[aria-pressed="true"] {
     border-radius: 4px;
     padding: 0.2em 0.3em;
 }
-.zoom-label {
-    min-width: 3.5em;
-    text-align: center;
-    color: var(--supernote-viewer-muted);
-    font-size: 0.9em;
-}
 /* Narrow phones (issue #202, reported on iOS 13) don't have room for every
    toolbar control at once - the full set (thumbnails, "Page" label + jump
    box + total, zoom out/in/reset + fit-width, mode toggle, find) reliably
@@ -891,7 +885,6 @@ export class SupernoteViewerElement extends HTMLElement {
     // mode - see the :host(:not([single-page])) CSS override above.
     private zoomScale = 1;
     private fitWidthEnabled = true;
-    private zoomLabelEl: HTMLElement | null = null;
     private fitWidthBtn: HTMLButtonElement | null = null;
     // Presentation owns page imagery. Static mode owns the normal lazy PNG
     // loader; write-on owns background PNGs plus SVG overlays. Keeping this
@@ -1243,7 +1236,6 @@ export class SupernoteViewerElement extends HTMLElement {
         this.thumbnailsVisible = false;
         this.zoomScale = 1;
         this.fitWidthEnabled = true;
-        this.zoomLabelEl = null;
         this.fitWidthBtn = null;
         this.animation?.destroy();
         this.animation = null;
@@ -1783,7 +1775,6 @@ export class SupernoteViewerElement extends HTMLElement {
             state.containerEl.style.width = width;
             state.imageEl.style.width = '100%';
         }
-        if (this.zoomLabelEl) this.zoomLabelEl.textContent = `${Math.round(this.zoomScale * 100)}%`;
     }
 
     // Scales every page so its rendered width matches however much
@@ -2240,13 +2231,6 @@ export class SupernoteViewerElement extends HTMLElement {
         this.renderIcon('zoom-out', zoomOutBtn);
         zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
         toolbar.appendChild(zoomOutBtn);
-
-        const zoomLabel = document.createElement('span');
-        zoomLabel.className = 'zoom-label';
-        zoomLabel.setAttribute('part', 'zoom-label');
-        zoomLabel.textContent = '100%';
-        toolbar.appendChild(zoomLabel);
-        this.zoomLabelEl = zoomLabel;
 
         const zoomInBtn = document.createElement('button');
         zoomInBtn.type = 'button';
