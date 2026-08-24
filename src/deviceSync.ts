@@ -1,4 +1,4 @@
-import { decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
+import { decodeDevicePathSegment, decodeDevicePathVariants, normalizeDeviceFileName } from './devicePath';
 
 // Pure planning/decision logic for mirroring .note/.spd files from a
 // Supernote device (over "Browse and Access") into the vault, unmodified —
@@ -71,7 +71,11 @@ export function globToRegExp(pattern: string): RegExp {
 // returns).
 export function matchesAnyPattern(deviceUri: string, patterns: string[]): boolean {
     if (patterns.length === 0) return true;
-    return patterns.some((p) => globToRegExp(p).test(deviceUri));
+    const pathVariants = decodeDevicePathVariants(deviceUri);
+    return patterns.some((p) => {
+        const re = globToRegExp(p);
+        return pathVariants.some((path) => re.test(path));
+    });
 }
 
 // Settings store path filters as one text field (newline- or comma-separated)
@@ -143,7 +147,18 @@ export function planSync(files: DeviceNoteListing[], manifest: SyncManifest, pat
 // instead of piling up "Note 2.md"-style duplicates)
 // ---------------------------------------------------------------------------
 
-const INVALID_FILENAME_CHARS = /[\\:*?"<>|]/g;
+// URI components are decoded before reaching this sanitizer, so `/` must be
+// included alongside the filesystem-invalid characters: `%2F` is otherwise a
+// path separator after decoding.
+const INVALID_FILENAME_CHARS = /[\\/:*?"<>|]/g;
+
+function isSafePathSegment(segment: string): boolean {
+    return segment.length > 0 && segment !== '.' && segment !== '..';
+}
+
+function sanitizePathSegment(segment: string): string {
+    return isSafePathSegment(segment) ? segment.replace(INVALID_FILENAME_CHARS, '_') : '';
+}
 
 // Maps a device note to a stable vault path that mirrors the device's own
 // folder structure and filename (extension included — sync only ever copies
@@ -153,15 +168,16 @@ const INVALID_FILENAME_CHARS = /[\\:*?"<>|]/g;
 // write — appropriate for a one-off manual "attach", wrong for something
 // that runs repeatedly.)
 export function deviceUriToVaultPath(syncFolder: string, deviceUri: string, fileName?: string): string {
+    // Decode before rejecting dot segments. Filtering only raw `..` leaves
+    // `%2e%2e` as a traversal segment after decoding.
     const uriSegments = deviceUri
         .split('/')
-        .filter((s) => s.length > 0 && s !== '.' && s !== '..');
-    const dirSegments = uriSegments.slice(0, -1)
-        .map((s) => decodeDevicePathSegment(s).replace(INVALID_FILENAME_CHARS, '_'));
-    const leaf = (fileName !== undefined
+        .filter((s) => s.length > 0)
+        .map(decodeDevicePathSegment);
+    const dirSegments = uriSegments.slice(0, -1).map(sanitizePathSegment);
+    const leaf = sanitizePathSegment(fileName !== undefined
         ? normalizeDeviceFileName(fileName)
-        : decodeDevicePathSegment(uriSegments[uriSegments.length - 1] ?? ''))
-        .replace(INVALID_FILENAME_CHARS, '_');
+        : uriSegments[uriSegments.length - 1] ?? '');
 
     const cleanRoot = syncFolder.replace(/^\/+|\/+$/g, '');
     const parts = cleanRoot ? [cleanRoot, ...dirSegments, leaf] : [...dirSegments, leaf];

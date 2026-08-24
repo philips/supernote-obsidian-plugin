@@ -86,6 +86,14 @@ describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', 
         expect(files.map((f) => f.name)).toEqual(['Substack Notes.note']);
     });
 
+    it('keeps entries whose filename contains literal plus signs', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'C++.note', uri: '/Note/C++.note' },
+        ]));
+
+        expect((await scanDeviceSupernoteTree('192.168.1.50')).map((f) => f.name)).toEqual(['C++.note']);
+    });
+
     it('drops entries whose name and uri disagree on the filename', async () => {
         // name passes the .note filter; the uri it would actually be
         // downloaded from points elsewhere (e.g. carries traversal segments).

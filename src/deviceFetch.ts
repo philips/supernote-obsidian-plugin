@@ -31,6 +31,8 @@ export interface DeviceResponse {
 
 export type DeviceRequestInit = Pick<RequestUrlParam, 'method' | 'body' | 'contentType' | 'headers'> & {
     timeoutMs?: number;
+    /** Display name from the listing, used to distinguish literal `+` from a space. */
+    pathLeafName?: string;
 };
 
 // `requestUrl`'s body can only be a string or ArrayBuffer (no FormData/Blob
@@ -65,7 +67,7 @@ export async function fetchFromDevice(
     context: string,
     init: DeviceRequestInit = {},
 ): Promise<DeviceResponse> {
-    const { timeoutMs = DEVICE_REQUEST_TIMEOUT_MS, ...requestInit } = init;
+    const { timeoutMs = DEVICE_REQUEST_TIMEOUT_MS, pathLeafName, ...requestInit } = init;
 
     // Pin the request to the device host: `path` comes from parsed device
     // directory listings, so a hostile or impersonating device controls its
@@ -76,7 +78,7 @@ export async function fetchFromDevice(
     // A leading "/" terminates the authority right after the port, so the
     // host can never be escaped. Normalizing (prefixing) rather than
     // rejecting keeps odd-but-benign listings from real devices working.
-    const requestPath = encodeDeviceRequestPath(path);
+    const requestPath = encodeDeviceRequestPath(path, pathLeafName);
 
     let timeoutHandle: ReturnType<typeof window.setTimeout>;
     const timeout = new Promise<never>((_, reject) => {

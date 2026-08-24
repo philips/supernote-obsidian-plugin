@@ -177,6 +177,24 @@ describe('fetchFromDevice', () => {
                 expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/Work%20Journal.note' }),
             );
         });
+
+        it('uses the listing name to distinguish literal pluses from form-style spaces', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '/Note/C++.note', 'Failed to download file', {
+                pathLeafName: 'C++.note',
+            });
+            expect(requestUrl).toHaveBeenLastCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/C%2B%2B.note' }),
+            );
+
+            await fetchFromDevice('192.168.1.50', '/Note/Substack+Notes.note', 'Failed to download file', {
+                pathLeafName: 'Substack Notes.note',
+            });
+            expect(requestUrl).toHaveBeenLastCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/Substack%20Notes.note' }),
+            );
+        });
     });
 });
 

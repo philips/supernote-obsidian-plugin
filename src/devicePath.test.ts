@@ -1,13 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { decodeDevicePathSegment, encodeDeviceRequestPath } from './devicePath';
+import {
+    decodeDeviceFormPathSegment,
+    decodeDevicePathSegment,
+    decodeDevicePathVariants,
+    encodeDeviceRequestPath,
+} from './devicePath';
 
-describe('decodeDevicePathSegment', () => {
+describe('device path decoding', () => {
     it('decodes percent-encoded spaces', () => {
         expect(decodeDevicePathSegment('Work%20Journal.note')).toBe('Work Journal.note');
     });
 
-    it('treats plus signs as spaces', () => {
-        expect(decodeDevicePathSegment('Substack+Notes.note')).toBe('Substack Notes.note');
+    it('keeps literal plus signs in URI path segments', () => {
+        expect(decodeDevicePathSegment('C++.note')).toBe('C++.note');
+    });
+
+    it('offers the Supernote form-style plus-as-space form separately', () => {
+        expect(decodeDeviceFormPathSegment('Substack+Notes.note')).toBe('Substack Notes.note');
+        expect(decodeDevicePathVariants('/Note/Substack+Notes.note')).toEqual([
+            '/Note/Substack+Notes.note',
+            '/Note/Substack Notes.note',
+        ]);
     });
 
     it('returns the segment unchanged when decoding fails', () => {
@@ -22,5 +35,10 @@ describe('encodeDeviceRequestPath', () => {
 
     it('does not double-encode segments that are already percent-encoded', () => {
         expect(encodeDeviceRequestPath('/Note/Work%20Journal.note')).toBe('/Note/Work%20Journal.note');
+    });
+
+    it('uses the listing name to distinguish literal plus from a space', () => {
+        expect(encodeDeviceRequestPath('/Note/C++.note', 'C++.note')).toBe('/Note/C%2B%2B.note');
+        expect(encodeDeviceRequestPath('/Note/Substack+Notes.note', 'Substack Notes.note')).toBe('/Note/Substack%20Notes.note');
     });
 });
