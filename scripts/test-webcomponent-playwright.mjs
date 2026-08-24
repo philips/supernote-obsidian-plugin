@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const fixture = join(projectRoot, 'supernote-typescript/tests/input/turkish-a6x-20230015-handwriting-erase.note');
 const mimeTypes = {
     '.css': 'text/css',
     '.html': 'text/html',
@@ -57,12 +56,18 @@ try {
     page.on('pageerror', (error) => pageErrors.push(error));
 
     await page.goto(`http://127.0.0.1:${address.port}/demo/`, { waitUntil: 'networkidle' });
+    // The demo itself loads rtr.note; wait for that default sample rather
+    // than injecting a fixture through the file picker.
+    await page.waitForFunction(() => {
+        const viewer = document.querySelector('supernote-viewer');
+        return !!viewer?.shadowRoot?.querySelector('.page-container > img[src]')
+            && document.querySelector('#status')?.textContent?.startsWith('Loaded');
+    });
     await page.locator('supernote-viewer').evaluate((element) => {
         element.setAttribute('dark', '');
         element.setAttribute('invert-dark', '');
+        element.presentation = 'write-on-paused';
     });
-    await page.locator('#start-blank').check();
-    await page.locator('#file-input').setInputFiles(fixture);
     await page.waitForFunction(() => document.querySelector('supernote-viewer')?.shadowRoot?.querySelector('.anim-controls.active'));
 
     const initial = await page.locator('supernote-viewer').evaluate((element) => {
