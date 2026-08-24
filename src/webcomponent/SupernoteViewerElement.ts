@@ -743,14 +743,19 @@ button[aria-pressed="true"] {
    selector - confirmed as a real, reported bug (issue #192): a thumbnail's
    own <img> gets the same class (see sidebarList.ts's buildSidebarList())
    but this rule originally only ever matched .pages' own page images, so
-   thumbnails never inverted regardless of dark mode. */
+   thumbnails never inverted regardless of dark mode. The write-on overlay
+   is separate SVG over an otherwise identical background image, so it must
+   receive the same filter or its ink colors no longer match the inverted
+   page beneath it. */
 @media (prefers-color-scheme: dark) {
     :host(:not([dark])) .pages .page-container > img.supernote-invert-dark,
+    :host(:not([dark])) .pages .page-container > .stroke-animation-svg.supernote-invert-dark,
     :host(:not([dark])) .sidebar-list-thumb.supernote-invert-dark {
         filter: invert(1);
     }
 }
 :host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark,
+:host([dark]:not([dark="false"])) .pages .page-container > .stroke-animation-svg.supernote-invert-dark,
 :host([dark]:not([dark="false"])) .sidebar-list-thumb.supernote-invert-dark {
     filter: invert(1);
 }
@@ -2743,7 +2748,14 @@ export class SupernoteViewerElement extends HTMLElement {
                 // static lazy-load/evict cycle.
                 state.loaded = true;
                 fillNotePagePlaceholder(state, backgroundUrls[k]);
-                state.containerEl.appendChild(this.pageAnimations[index]!.svg);
+                const svg = this.pageAnimations[index]!.svg;
+                // The worker background inherits this class from the page
+                // placeholder. Keep the separately-rendered animation ink
+                // in the same dark-mode color space.
+                if (state.imageEl.classList.contains('supernote-invert-dark')) {
+                    svg.classList.add('supernote-invert-dark');
+                }
+                state.containerEl.appendChild(svg);
             });
             // fillNotePagePlaceholder() reset each page's container width -
             // reapply whatever zoom/fit-width is currently active, exactly

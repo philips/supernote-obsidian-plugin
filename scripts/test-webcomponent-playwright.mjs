@@ -57,6 +57,10 @@ try {
     page.on('pageerror', (error) => pageErrors.push(error));
 
     await page.goto(`http://127.0.0.1:${address.port}/demo/`, { waitUntil: 'networkidle' });
+    await page.locator('supernote-viewer').evaluate((element) => {
+        element.setAttribute('dark', '');
+        element.setAttribute('invert-dark', '');
+    });
     await page.locator('#start-blank').check();
     await page.locator('#file-input').setInputFiles(fixture);
     await page.waitForFunction(() => document.querySelector('supernote-viewer')?.shadowRoot?.querySelector('.anim-controls.active'));
@@ -64,17 +68,26 @@ try {
     const initial = await page.locator('supernote-viewer').evaluate((element) => {
         const root = element.shadowRoot;
         if (!root) throw new Error('Viewer has no shadow root');
+        const background = root.querySelector('.page-container > img');
+        const overlay = root.querySelector('.page-container > .stroke-animation-svg');
+        if (!(background instanceof HTMLImageElement) || !(overlay instanceof SVGSVGElement)) {
+            throw new Error('Write-on page layers missing');
+        }
         return {
             masks: root.querySelectorAll('mask').length,
             previews: root.querySelectorAll('svg path[pathLength="1"]').length,
             hiddenFinals: [...root.querySelectorAll('svg path[fill^="rgb"]')].filter((path) => path.style.display === 'none').length,
             hasPlay: !!root.querySelector('button[aria-label="Play write-on animation"]'),
+            backgroundFilter: getComputedStyle(background).filter,
+            overlayFilter: getComputedStyle(overlay).filter,
         };
     });
     assert.equal(initial.masks, 0, 'write-on playback must not use SVG masks');
     assert(initial.previews > 0, 'expected dashed centerline previews');
     assert(initial.hiddenFinals > 0, 'contours should be hidden before playback');
     assert(initial.hasPlay, 'paused presentation should expose Play');
+    assert.equal(initial.backgroundFilter, 'invert(1)', 'dark mode should invert the write-on background');
+    assert.equal(initial.overlayFilter, initial.backgroundFilter, 'dark mode must invert the SVG ink with its background');
 
     await page.locator('supernote-viewer').evaluate((element) => {
         const button = element.shadowRoot?.querySelector('button[aria-label="Play write-on animation"]');
