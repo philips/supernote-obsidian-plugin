@@ -3,6 +3,7 @@ import SupernotePlugin from './main';
 import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from './settings';
 import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
+import { decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
 import { ErrorModal } from './ErrorModal';
 
 export interface SupernoteFile {
@@ -75,7 +76,8 @@ export async function scanDeviceSupernoteTree(ip: string, path = '/', visited: S
 // same file.
 function uriMatchesName(uri: string, name: string): boolean {
     const segments = uri.split('/').filter((s) => s.length > 0);
-    return segments[segments.length - 1] === name;
+    if (segments.length === 0) return false;
+    return decodeDevicePathSegment(segments[segments.length - 1]) === normalizeDeviceFileName(name);
 }
 
 // A "plain" filename: non-empty, not a dot segment, and containing no path

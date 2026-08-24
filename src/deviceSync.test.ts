@@ -225,6 +225,18 @@ describe('deviceUriToVaultPath (safety: deterministic, collision-free naming —
         expect(deviceUriToVaultPath('Sync', '/Note/weird:name*?.note')).toBe('Sync/Note/weird_name__.note');
     });
 
+    it('decodes percent-encoded spaces in device URIs for vault filenames', () => {
+        expect(deviceUriToVaultPath('Supernote sync', '/Note/Work%20Journal.note')).toBe(
+            'Supernote sync/Note/Work Journal.note',
+        );
+    });
+
+    it('prefers the listing name for the vault leaf when provided', () => {
+        expect(deviceUriToVaultPath('Supernote sync', '/Note/Substack+Notes.note', 'Substack Notes.note')).toBe(
+            'Supernote sync/Note/Substack Notes.note',
+        );
+    });
+
     it('does not produce a doubled or leading slash when the sync folder is empty', () => {
         const path = deviceUriToVaultPath('', '/Diary/2026-07-25.note');
         expect(path).toBe('Diary/2026-07-25.note');

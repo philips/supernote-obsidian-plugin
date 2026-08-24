@@ -1,3 +1,5 @@
+import { decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
+
 // Pure planning/decision logic for mirroring .note/.spd files from a
 // Supernote device (over "Browse and Access") into the vault, unmodified —
 // see issue #119. Sync only ever copies the raw file; it never converts it
@@ -150,14 +152,20 @@ const INVALID_FILENAME_CHARS = /[\\:*?"<>|]/g;
 // (VaultWriter's existing writeMarkdownFile instead uniquifies on every
 // write — appropriate for a one-off manual "attach", wrong for something
 // that runs repeatedly.)
-export function deviceUriToVaultPath(syncFolder: string, deviceUri: string): string {
-    const segments = deviceUri
+export function deviceUriToVaultPath(syncFolder: string, deviceUri: string, fileName?: string): string {
+    const uriSegments = deviceUri
         .split('/')
-        .filter((s) => s.length > 0 && s !== '.' && s !== '..')
-        .map((s) => s.replace(INVALID_FILENAME_CHARS, '_'));
+        .filter((s) => s.length > 0 && s !== '.' && s !== '..');
+    const dirSegments = uriSegments.slice(0, -1)
+        .map((s) => decodeDevicePathSegment(s).replace(INVALID_FILENAME_CHARS, '_'));
+    const leaf = (fileName !== undefined
+        ? normalizeDeviceFileName(fileName)
+        : decodeDevicePathSegment(uriSegments[uriSegments.length - 1] ?? ''))
+        .replace(INVALID_FILENAME_CHARS, '_');
 
     const cleanRoot = syncFolder.replace(/^\/+|\/+$/g, '');
-    return cleanRoot ? `${cleanRoot}/${segments.join('/')}` : segments.join('/');
+    const parts = cleanRoot ? [cleanRoot, ...dirSegments, leaf] : [...dirSegments, leaf];
+    return parts.filter((s) => s.length > 0).join('/');
 }
 
 // ---------------------------------------------------------------------------

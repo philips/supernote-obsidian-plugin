@@ -65,6 +65,27 @@ describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', 
         expect(files.map((f) => f.name).sort()).toEqual(['diary.note', 'sketch.spd']);
     });
 
+    it('keeps entries whose uri percent-encodes spaces in the filename', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'Work Journal.note', uri: '/Note/Work%20Journal.note' },
+            { name: 'Work Journal.note', uri: '/Note/Work Journal.note' },
+        ]));
+
+        const files = await scanDeviceSupernoteTree('192.168.1.50');
+
+        expect(files.map((f) => f.name).sort()).toEqual(['Work Journal.note', 'Work Journal.note']);
+    });
+
+    it('keeps entries whose uri uses plus signs for spaces in the filename', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'Substack Notes.note', uri: '/Note/Substack+Notes.note' },
+        ]));
+
+        const files = await scanDeviceSupernoteTree('192.168.1.50');
+
+        expect(files.map((f) => f.name)).toEqual(['Substack Notes.note']);
+    });
+
     it('drops entries whose name and uri disagree on the filename', async () => {
         // name passes the .note filter; the uri it would actually be
         // downloaded from points elsewhere (e.g. carries traversal segments).

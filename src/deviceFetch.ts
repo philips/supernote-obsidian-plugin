@@ -1,4 +1,5 @@
 import { requestUrl, RequestUrlParam } from 'obsidian';
+import { encodeDeviceRequestPath } from './devicePath';
 
 // Wraps Obsidian's `requestUrl` for requests to the Supernote's local "Browse
 // and Access" HTTP server so every call site (listing, download, upload)
@@ -75,7 +76,7 @@ export async function fetchFromDevice(
     // A leading "/" terminates the authority right after the port, so the
     // host can never be escaped. Normalizing (prefixing) rather than
     // rejecting keeps odd-but-benign listings from real devices working.
-    const safePath = path.startsWith('/') ? path : `/${path}`;
+    const requestPath = encodeDeviceRequestPath(path);
 
     let timeoutHandle: ReturnType<typeof window.setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
@@ -88,7 +89,7 @@ export async function fetchFromDevice(
     try {
         const response = await Promise.race([
             requestUrl({
-                url: `http://${ip}:8089${safePath}`,
+                url: `http://${ip}:8089${requestPath}`,
                 throw: false,
                 ...requestInit,
             }),
