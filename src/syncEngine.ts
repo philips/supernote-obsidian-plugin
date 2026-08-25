@@ -135,6 +135,7 @@ export async function runDeviceSync(
             const response = await fetchFromDevice(ip, listing.uri, `Failed to download ${deviceFile.name}`, {
                 timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
                 pathLeafName: deviceFile.name,
+                pathDirectoryNames: deviceFile.directoryNames,
             });
             if (!response.ok) {
                 throw new Error(`Supernote responded with status ${response.status}`);

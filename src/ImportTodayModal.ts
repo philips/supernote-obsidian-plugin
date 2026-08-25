@@ -170,6 +170,7 @@ export class ImportTodayModal extends Modal {
                 const response = await fetchFromDevice(ip, file.uri, `Failed to download ${file.name}`, {
                     timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
                     pathLeafName: file.name,
+                    pathDirectoryNames: file.directoryNames,
                 });
                 if (!response.ok) {
                     throw new Error(`Failed to download ${file.name}: Supernote responded with an error (status ${response.status}).`);

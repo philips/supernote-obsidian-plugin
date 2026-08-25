@@ -32,13 +32,22 @@ export function decodeDevicePathVariants(path: string): string[] {
 }
 
 /**
- * Percent-encodes every path segment for an HTTP request. `expectedLeafName`,
- * when available from a directory listing, disambiguates a literal `+` from
- * the Supernote server's non-standard `+`-for-space form.
+ * Percent-encodes every path segment for an HTTP request. Listing display
+ * names, when available, disambiguate a literal `+` from the Supernote
+ * server's non-standard `+`-for-space form.
  */
-export function encodeDeviceRequestPath(path: string, expectedLeafName?: string): string {
+export function encodeDeviceRequestPath(
+    path: string,
+    expectedLeafName?: string,
+    expectedDirectoryNames?: readonly string[],
+): string {
     const withLeadingSlash = path.startsWith('/') ? path : `/${path}`;
     const segments = withLeadingSlash.split('/');
+    // Directory display names must describe every non-leaf segment. Applying a
+    // partial list at the wrong depth could turn a literal `+` into a space.
+    const directoryNames = expectedDirectoryNames?.length === segments.length - 2
+        ? expectedDirectoryNames.map(normalizeDeviceFileName)
+        : undefined;
     return segments
         .map((segment, index) => {
             if (index === 0 && segment === '') return '';
@@ -47,8 +56,10 @@ export function encodeDeviceRequestPath(path: string, expectedLeafName?: string)
             const standard = decodeDevicePathSegment(segment);
             const formStyle = decodeDeviceFormPathSegment(segment);
             const isLeaf = index === segments.length - 1;
-            const expected = expectedLeafName === undefined ? undefined : normalizeDeviceFileName(expectedLeafName);
-            const decoded = isLeaf && expected !== undefined && formStyle === expected && standard !== expected
+            const expected = isLeaf
+                ? expectedLeafName === undefined ? undefined : normalizeDeviceFileName(expectedLeafName)
+                : directoryNames?.[index - 1];
+            const decoded = expected !== undefined && formStyle === expected && standard !== expected
                 ? formStyle
                 : standard;
             return encodeURIComponent(decoded);

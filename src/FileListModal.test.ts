@@ -162,5 +162,11 @@ describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', 
         const files = await scanDeviceSupernoteTree('192.168.1.50');
 
         expect(files[0].directoryNames).toEqual(['Note', 'test dir']);
+        expect(fetchFromDevice).toHaveBeenLastCalledWith(
+            '192.168.1.50',
+            '/Note/test+dir',
+            'Failed to load file list',
+            { pathLeafName: 'test dir', pathDirectoryNames: ['Note'] },
+        );
     });
 });

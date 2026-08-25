@@ -29,8 +29,13 @@ interface SupernoteResponse {
 // Fetches and parses one directory listing from the Supernote "Browse and
 // Access" HTTP server. Shared by the file-browsing modals below and by
 // ImportTodayModal, which walks the whole tree looking for today's notes.
-export async function fetchSupernoteDirectory(ip: string, path: string, pathLeafName?: string): Promise<SupernoteFile[]> {
-    const response = await fetchFromDevice(ip, path, 'Failed to load file list', { pathLeafName });
+export async function fetchSupernoteDirectory(
+    ip: string,
+    path: string,
+    pathLeafName?: string,
+    pathDirectoryNames?: readonly string[],
+): Promise<SupernoteFile[]> {
+    const response = await fetchFromDevice(ip, path, 'Failed to load file list', { pathLeafName, pathDirectoryNames });
     if (!response.ok) {
         throw new Error(`Failed to load file list: Supernote responded with an error (status ${response.status}).`);
     }
@@ -65,7 +70,12 @@ export async function scanDeviceSupernoteTree(
     visited.add(path);
     if (!directoryNamesByUri.has(path)) directoryNamesByUri.set(path, directoryNames);
 
-    const entries = await fetchSupernoteDirectory(ip, path, pathLeafName);
+    const entries = await fetchSupernoteDirectory(
+        ip,
+        path,
+        pathLeafName,
+        directoryNames.length > 0 ? directoryNames.slice(0, -1) : undefined,
+    );
     const results: SupernoteFile[] = [];
 
     for (const entry of entries) {
