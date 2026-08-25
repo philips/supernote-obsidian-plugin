@@ -1,6 +1,10 @@
 // This entry is bundled only by test-device-sync.mjs with a tiny Node shim for
 // Obsidian. It deliberately imports the plugin's real Browse & Access and sync
 // modules, rather than reproducing their URI encoding or sync behavior here.
+//
+// Supernote may migrate an uploaded .note to its current on-device format.
+// Therefore this test checks that sync mirrors the bytes subsequently served
+// by the device, not that an older fixture remains byte-identical after import.
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -91,6 +95,8 @@ if (!parentEntries.some((entry) => entry.isDirectory && entry.name === directory
 }
 let listed = await fetchSupernoteDirectory(ip, testDirectory, directoryLeafName);
 const fixtureBuffer = fixture.buffer.slice(fixture.byteOffset, fixture.byteOffset + fixture.byteLength);
+const fixtureHash = createHash('sha256').update(fixture).digest('hex');
+const uploadedNames = new Set<string>();
 
 for (const filename of namingCases) {
     if (listed.some((file) => file.name === filename && !file.isDirectory)) {
@@ -108,6 +114,7 @@ for (const filename of namingCases) {
         pathLeafName: directoryLeafName,
     });
     if (!uploadResponse.ok) throw new Error(`Upload failed with HTTP ${uploadResponse.status}`);
+    uploadedNames.add(filename);
     listed = await fetchSupernoteDirectory(ip, testDirectory, directoryLeafName);
 }
 
@@ -128,7 +135,11 @@ for (const file of deviceFiles) {
         pathLeafName: file.name,
     });
     if (!response.ok) throw new Error(`Download failed for ${file.name} with HTTP ${response.status}`);
-    deviceHashes.set(file.uri, createHash('sha256').update(new Uint8Array(await response.arrayBuffer())).digest('hex'));
+    const deviceHash = createHash('sha256').update(new Uint8Array(await response.arrayBuffer())).digest('hex');
+    if (uploadedNames.has(file.name) && deviceHash !== fixtureHash) {
+        console.log(`Device migrated ${file.name} during import; syncing its device-served bytes.`);
+    }
+    deviceHashes.set(file.uri, deviceHash);
 }
 
 const settings = {
@@ -162,5 +173,5 @@ for (const file of deviceFiles) {
     }
 }
 
-console.log(`PASS: actual plugin upload, listing, filter, download, and sync code transferred ${deviceFiles.length} naming cases byte-for-byte.`);
+console.log(`PASS: actual plugin upload, listing, filter, download, and sync code mirrored ${deviceFiles.length} device-served naming cases byte-for-byte.`);
 console.log(`The fixture files remain in ${testDirectory}; remove them manually when finished.`);
