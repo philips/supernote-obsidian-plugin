@@ -150,6 +150,10 @@ if (result.synced !== deviceFiles.length || result.failed.length !== 0 || saves 
 for (const file of deviceFiles) {
     const record = settings.noteSyncState[file.uri];
     if (!record) throw new Error(`Sync completed without recording ${file.uri}.`);
+    const expectedVaultPath = `${settings.syncFolder}/${testDirectory.slice(1)}/${file.name}`;
+    if (record.vaultPath !== expectedVaultPath) {
+        throw new Error(`Expected ${expectedVaultPath}, got ${record.vaultPath}.`);
+    }
     const synced = files.get(record.vaultPath);
     if (!synced?.bytes) throw new Error(`Sync did not write ${record.vaultPath} to the in-memory vault.`);
     const syncedHash = createHash('sha256').update(new Uint8Array(synced.bytes)).digest('hex');

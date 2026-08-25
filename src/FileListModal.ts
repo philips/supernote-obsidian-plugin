@@ -13,6 +13,8 @@ export interface SupernoteFile {
     uri: string;
     extension: string;
     isDirectory: boolean;
+    /** Display names of the file's containing folders, from the device root. */
+    directoryNames?: string[];
 }
 
 interface SupernoteResponse {
@@ -56,21 +58,47 @@ export async function scanDeviceSupernoteTree(
     path = '/',
     visited: Set<string> = new Set(),
     pathLeafName?: string,
+    directoryNames: string[] = [],
+    directoryNamesByUri: Map<string, string[]> = new Map(),
 ): Promise<SupernoteFile[]> {
     if (visited.has(path)) return [];
     visited.add(path);
+    if (!directoryNamesByUri.has(path)) directoryNamesByUri.set(path, directoryNames);
 
     const entries = await fetchSupernoteDirectory(ip, path, pathLeafName);
     const results: SupernoteFile[] = [];
 
     for (const entry of entries) {
+        const parentNames = directoryNamesByUri.get(parentUri(entry.uri))
+            ?? decodeUriDirectorySegments(entry.uri);
         if (entry.isDirectory) {
-            results.push(...await scanDeviceSupernoteTree(ip, entry.uri, visited, entry.name));
+            const entryDirectoryNames = [...parentNames, entry.name];
+            directoryNamesByUri.set(entry.uri, entryDirectoryNames);
+            results.push(...await scanDeviceSupernoteTree(
+                ip,
+                entry.uri,
+                visited,
+                entry.name,
+                entryDirectoryNames,
+                directoryNamesByUri,
+            ));
         } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && isTrustedListingEntry(entry)) {
-            results.push(entry);
+            results.push({ ...entry, directoryNames: parentNames });
         }
     }
     return results;
+}
+
+function parentUri(uri: string): string {
+    const lastSlash = uri.lastIndexOf('/');
+    return lastSlash <= 0 ? '/' : uri.slice(0, lastSlash);
+}
+
+// Fallback for malformed/non-hierarchical listings: a normal scan has display
+// names for every parent in directoryNamesByUri, which is required to tell a
+// literal `+` from Supernote's `+`-for-space representation.
+function decodeUriDirectorySegments(uri: string): string[] {
+    return uri.split('/').filter((segment) => segment.length > 0).slice(0, -1).map(decodeDevicePathSegment);
 }
 
 // Defense in depth against a device listing whose `name` and `uri` fields

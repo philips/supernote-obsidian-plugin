@@ -243,6 +243,15 @@ describe('deviceUriToVaultPath (safety: deterministic, collision-free naming —
         );
     });
 
+    it('uses listing directory names for form-style spaces in URI paths', () => {
+        expect(deviceUriToVaultPath(
+            'Supernote sync',
+            '/Note/test+dir/Work+Journal.note',
+            'Work Journal.note',
+            ['Note', 'test dir'],
+        )).toBe('Supernote sync/Note/test dir/Work Journal.note');
+    });
+
     it('cannot escape the sync folder through percent-encoded dot or slash segments', () => {
         expect(deviceUriToVaultPath('Supernote sync', '/%2e%2e/escaped.note')).toBe(
             'Supernote sync/escaped.note',

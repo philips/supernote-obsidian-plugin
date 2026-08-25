@@ -145,5 +145,22 @@ describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', 
         const files = await scanDeviceSupernoteTree('192.168.1.50');
 
         expect(files.map((f) => f.name)).toEqual(['inside.note']);
+        expect(files[0].directoryNames).toEqual(['EXPORT']);
+    });
+
+    it('uses display names from the URI hierarchy when a listing jumps through a route alias', async () => {
+        // The real server can reach /Note through a virtual route such as
+        // /EXPORT/Home Books/Art, while the Note entry's URI remains /Note.
+        vi.mocked(fetchFromDevice)
+            .mockResolvedValueOnce(mockListing([{ name: 'EXPORT', isDirectory: true, uri: '/EXPORT' }]))
+            .mockResolvedValueOnce(mockListing([{ name: 'Note', isDirectory: true, uri: '/Note' }]))
+            .mockResolvedValueOnce(mockListing([{ name: 'test dir', isDirectory: true, uri: '/Note/test+dir' }]))
+            .mockResolvedValueOnce(mockListing([
+                { name: 'Work Journal.note', uri: '/Note/test+dir/Work+Journal.note' },
+            ]));
+
+        const files = await scanDeviceSupernoteTree('192.168.1.50');
+
+        expect(files[0].directoryNames).toEqual(['Note', 'test dir']);
     });
 });

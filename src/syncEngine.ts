@@ -125,7 +125,12 @@ export async function runDeviceSync(
             const deviceFile = deviceFiles.find((f) => f.uri === listing.uri);
             if (!deviceFile) continue; // Listing changed between the scan and here; pick it up next run.
 
-            const vaultPath = deviceUriToVaultPath(settings.syncFolder, listing.uri, deviceFile.name);
+            const vaultPath = deviceUriToVaultPath(
+                settings.syncFolder,
+                listing.uri,
+                deviceFile.name,
+                deviceFile.directoryNames,
+            );
 
             const response = await fetchFromDevice(ip, listing.uri, `Failed to download ${deviceFile.name}`, {
                 timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,

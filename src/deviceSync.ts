@@ -167,14 +167,27 @@ function sanitizePathSegment(segment: string): string {
 // (VaultWriter's existing writeMarkdownFile instead uniquifies on every
 // write — appropriate for a one-off manual "attach", wrong for something
 // that runs repeatedly.)
-export function deviceUriToVaultPath(syncFolder: string, deviceUri: string, fileName?: string): string {
+export function deviceUriToVaultPath(
+    syncFolder: string,
+    deviceUri: string,
+    fileName?: string,
+    directoryNames?: string[],
+): string {
     // Decode before rejecting dot segments. Filtering only raw `..` leaves
     // `%2e%2e` as a traversal segment after decoding.
     const uriSegments = deviceUri
         .split('/')
         .filter((s) => s.length > 0)
         .map(decodeDevicePathSegment);
-    const dirSegments = uriSegments.slice(0, -1).map(sanitizePathSegment);
+    const uriDirectorySegments = uriSegments.slice(0, -1);
+    // Supernote commonly represents spaces as `+` in listing URIs. Unlike a
+    // file leaf, a URI alone cannot distinguish that form from a literal plus;
+    // use the containing directories' display names collected during the tree
+    // walk when they line up with the URI depth.
+    const sourceDirectories = directoryNames?.length === uriDirectorySegments.length
+        ? directoryNames.map(normalizeDeviceFileName)
+        : uriDirectorySegments;
+    const dirSegments = sourceDirectories.map(sanitizePathSegment);
     const leaf = sanitizePathSegment(fileName !== undefined
         ? normalizeDeviceFileName(fileName)
         : uriSegments[uriSegments.length - 1] ?? '');
