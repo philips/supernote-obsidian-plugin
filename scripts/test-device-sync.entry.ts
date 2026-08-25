@@ -1,13 +1,17 @@
 // This entry is bundled only by test-device-sync.mjs with a tiny Node shim for
 // Obsidian. It deliberately imports the plugin's real Browse & Access and sync
 // modules, rather than reproducing their URI encoding or sync behavior here.
+//
+// Supernote may migrate an uploaded .note to its current on-device format.
+// Therefore this test checks that sync mirrors the bytes subsequently served
+// by the device, not that an older fixture remains byte-identical after import.
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { App, TFile } from 'obsidian';
-import { fetchSupernoteDirectory } from '../src/FileListModal';
+import { fetchSupernoteDirectory, scanDeviceSupernoteTree } from '../src/FileListModal';
 import { buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS, fetchFromDevice } from '../src/deviceFetch';
 import { runDeviceSync } from '../src/syncEngine';
 import type { SupernotePluginSettings } from '../src/settings';
@@ -91,6 +95,8 @@ if (!parentEntries.some((entry) => entry.isDirectory && entry.name === directory
 }
 let listed = await fetchSupernoteDirectory(ip, testDirectory, directoryLeafName);
 const fixtureBuffer = fixture.buffer.slice(fixture.byteOffset, fixture.byteOffset + fixture.byteLength);
+const fixtureHash = createHash('sha256').update(fixture).digest('hex');
+const uploadedNames = new Set<string>();
 
 for (const filename of namingCases) {
     if (listed.some((file) => file.name === filename && !file.isDirectory)) {
@@ -108,14 +114,23 @@ for (const filename of namingCases) {
         pathLeafName: directoryLeafName,
     });
     if (!uploadResponse.ok) throw new Error(`Upload failed with HTTP ${uploadResponse.status}`);
+    uploadedNames.add(filename);
     listed = await fetchSupernoteDirectory(ip, testDirectory, directoryLeafName);
 }
 
-const deviceFiles = namingCases.map((filename) => {
+const listedDeviceFiles = namingCases.map((filename) => {
     const file = listed.find((candidate) => candidate.name === filename && !candidate.isDirectory);
     if (!file) throw new Error(`Upload succeeded but ${filename} was absent from the device listing.`);
     console.log(`Device listed ${filename} as ${file.uri}`);
     return file;
+});
+// Use the actual recursive scanner's entries below so direct pre-sync downloads
+// get the same parent-directory display names that runDeviceSync receives.
+const scannedFiles = await scanDeviceSupernoteTree(ip);
+const deviceFiles = listedDeviceFiles.map((listedFile) => {
+    const scannedFile = scannedFiles.find((file) => file.uri === listedFile.uri);
+    if (!scannedFile) throw new Error(`Recursive scan did not find ${listedFile.uri}.`);
+    return scannedFile;
 });
 
 // Read each listing URI through the actual request helper before sync. This
@@ -126,9 +141,18 @@ for (const file of deviceFiles) {
     const response = await fetchFromDevice(ip, file.uri, `Failed to download ${file.name}`, {
         timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
         pathLeafName: file.name,
+        pathDirectoryNames: file.directoryNames,
     });
     if (!response.ok) throw new Error(`Download failed for ${file.name} with HTTP ${response.status}`);
-    deviceHashes.set(file.uri, createHash('sha256').update(new Uint8Array(await response.arrayBuffer())).digest('hex'));
+    const deviceBytes = new Uint8Array(await response.arrayBuffer());
+    if (!/^(?:mark|note)SN_FILE_VER_\d{8}/.test(new TextDecoder().decode(deviceBytes.subarray(0, 24)))) {
+        throw new Error(`Download for ${file.name} is not a Supernote file; check encoded parent directory paths.`);
+    }
+    const deviceHash = createHash('sha256').update(deviceBytes).digest('hex');
+    if (uploadedNames.has(file.name) && deviceHash !== fixtureHash) {
+        console.log(`Device migrated ${file.name} during import; syncing its device-served bytes.`);
+    }
+    deviceHashes.set(file.uri, deviceHash);
 }
 
 const settings = {
@@ -162,5 +186,5 @@ for (const file of deviceFiles) {
     }
 }
 
-console.log(`PASS: actual plugin upload, listing, filter, download, and sync code transferred ${deviceFiles.length} naming cases byte-for-byte.`);
+console.log(`PASS: actual plugin upload, listing, filter, download, and sync code mirrored ${deviceFiles.length} device-served naming cases byte-for-byte.`);
 console.log(`The fixture files remain in ${testDirectory}; remove them manually when finished.`);

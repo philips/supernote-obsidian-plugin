@@ -41,4 +41,12 @@ describe('encodeDeviceRequestPath', () => {
         expect(encodeDeviceRequestPath('/Note/C++.note', 'C++.note')).toBe('/Note/C%2B%2B.note');
         expect(encodeDeviceRequestPath('/Note/Substack+Notes.note', 'Substack Notes.note')).toBe('/Note/Substack%20Notes.note');
     });
+
+    it('uses display names for form-style spaces in parent directories', () => {
+        expect(encodeDeviceRequestPath(
+            '/Note/test+dir/a+b.note',
+            'a b.note',
+            ['Note', 'test dir'],
+        )).toBe('/Note/test%20dir/a%20b.note');
+    });
 });

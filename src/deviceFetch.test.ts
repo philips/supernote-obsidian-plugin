@@ -194,6 +194,14 @@ describe('fetchFromDevice', () => {
             expect(requestUrl).toHaveBeenLastCalledWith(
                 expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/Substack%20Notes.note' }),
             );
+
+            await fetchFromDevice('192.168.1.50', '/Note/test+dir/a+b.note', 'Failed to download file', {
+                pathLeafName: 'a b.note',
+                pathDirectoryNames: ['Note', 'test dir'],
+            });
+            expect(requestUrl).toHaveBeenLastCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/test%20dir/a%20b.note' }),
+            );
         });
     });
 });
