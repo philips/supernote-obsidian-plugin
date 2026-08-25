@@ -81,6 +81,12 @@ describe('globToRegExp / matchesAnyPattern', () => {
         expect(matchesAnyPattern('/Diary/today.note', patterns)).toBe(true);
         expect(matchesAnyPattern('/Personal/today.note', patterns)).toBe(false);
     });
+
+    it('matches human-readable filters against percent-encoded and form-style device paths', () => {
+        expect(matchesAnyPattern('/Note/Work%20Journal.note', ['/Note/Work Journal.note'])).toBe(true);
+        expect(matchesAnyPattern('/Note/Substack+Notes.note', ['/Note/Substack Notes.note'])).toBe(true);
+        expect(matchesAnyPattern('/Note/C++.note', ['/Note/C++.note'])).toBe(true);
+    });
 });
 
 describe('parsePathFilters', () => {
@@ -223,6 +229,27 @@ describe('deviceUriToVaultPath (safety: deterministic, collision-free naming —
 
     it('sanitizes characters that are invalid in vault filenames', () => {
         expect(deviceUriToVaultPath('Sync', '/Note/weird:name*?.note')).toBe('Sync/Note/weird_name__.note');
+    });
+
+    it('decodes percent-encoded spaces in device URIs for vault filenames', () => {
+        expect(deviceUriToVaultPath('Supernote sync', '/Note/Work%20Journal.note')).toBe(
+            'Supernote sync/Note/Work Journal.note',
+        );
+    });
+
+    it('prefers the listing name for the vault leaf when provided', () => {
+        expect(deviceUriToVaultPath('Supernote sync', '/Note/Substack+Notes.note', 'Substack Notes.note')).toBe(
+            'Supernote sync/Note/Substack Notes.note',
+        );
+    });
+
+    it('cannot escape the sync folder through percent-encoded dot or slash segments', () => {
+        expect(deviceUriToVaultPath('Supernote sync', '/%2e%2e/escaped.note')).toBe(
+            'Supernote sync/escaped.note',
+        );
+        expect(deviceUriToVaultPath('Supernote sync', '/Note%2Foutside/escaped.note')).toBe(
+            'Supernote sync/Note_outside/escaped.note',
+        );
     });
 
     it('does not produce a doubled or leading slash when the sync folder is empty', () => {

@@ -3,6 +3,7 @@ import SupernotePlugin from './main';
 import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from './settings';
 import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
+import { decodeDeviceFormPathSegment, decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
 import { ErrorModal } from './ErrorModal';
 
 export interface SupernoteFile {
@@ -26,8 +27,8 @@ interface SupernoteResponse {
 // Fetches and parses one directory listing from the Supernote "Browse and
 // Access" HTTP server. Shared by the file-browsing modals below and by
 // ImportTodayModal, which walks the whole tree looking for today's notes.
-export async function fetchSupernoteDirectory(ip: string, path: string): Promise<SupernoteFile[]> {
-    const response = await fetchFromDevice(ip, path, 'Failed to load file list');
+export async function fetchSupernoteDirectory(ip: string, path: string, pathLeafName?: string): Promise<SupernoteFile[]> {
+    const response = await fetchFromDevice(ip, path, 'Failed to load file list', { pathLeafName });
     if (!response.ok) {
         throw new Error(`Failed to load file list: Supernote responded with an error (status ${response.status}).`);
     }
@@ -50,16 +51,21 @@ const SYNCABLE_EXTENSION_PATTERN = /\.(note|spd)$/i;
 // filters by date) and the device auto-sync engine (which filters by the
 // configured path patterns) — both need the same "list everything once"
 // traversal, just with different downstream filtering.
-export async function scanDeviceSupernoteTree(ip: string, path = '/', visited: Set<string> = new Set()): Promise<SupernoteFile[]> {
+export async function scanDeviceSupernoteTree(
+    ip: string,
+    path = '/',
+    visited: Set<string> = new Set(),
+    pathLeafName?: string,
+): Promise<SupernoteFile[]> {
     if (visited.has(path)) return [];
     visited.add(path);
 
-    const entries = await fetchSupernoteDirectory(ip, path);
+    const entries = await fetchSupernoteDirectory(ip, path, pathLeafName);
     const results: SupernoteFile[] = [];
 
     for (const entry of entries) {
         if (entry.isDirectory) {
-            results.push(...await scanDeviceSupernoteTree(ip, entry.uri, visited));
+            results.push(...await scanDeviceSupernoteTree(ip, entry.uri, visited, entry.name));
         } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && isTrustedListingEntry(entry)) {
             results.push(entry);
         }
@@ -75,7 +81,11 @@ export async function scanDeviceSupernoteTree(ip: string, path = '/', visited: S
 // same file.
 function uriMatchesName(uri: string, name: string): boolean {
     const segments = uri.split('/').filter((s) => s.length > 0);
-    return segments[segments.length - 1] === name;
+    if (segments.length === 0) return false;
+    const leaf = segments[segments.length - 1];
+    const normalizedName = normalizeDeviceFileName(name);
+    return decodeDevicePathSegment(leaf) === normalizedName
+        || decodeDeviceFormPathSegment(leaf) === normalizedName;
 }
 
 // A "plain" filename: non-empty, not a dot segment, and containing no path
@@ -113,6 +123,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     settings: SupernotePluginSettings;
     files: SupernoteFile[] = [];
     currentPath = '/';
+    protected currentPathLeafName: string | undefined;
     sortOrder: FileBrowserSortOrder;
     private nameSortButton!: HTMLButtonElement;
     private dateSortButton!: HTMLButtonElement;
@@ -194,7 +205,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
 
     async loadFiles() {
         try {
-            this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath);
+            this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath, this.currentPathLeafName);
             this.sortFiles();
         } catch (err) {
             this.close();
@@ -246,6 +257,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
             void (async () => {
                 // Navigate into directory
                 this.currentPath = file.uri;
+                this.currentPathLeafName = file.name;
                 await this.loadFiles();
                 // Reopen the modal to show new directory contents
                 this.open();
@@ -265,6 +277,7 @@ export class DownloadListModal extends FileListModal {
             if (file.isDirectory) {
                 // Navigate into directory
                 this.currentPath = file.uri;
+                this.currentPathLeafName = file.name;
                 await this.loadFiles();
                 // Reopen the modal to show new directory contents
                 this.open();
@@ -283,6 +296,7 @@ export class DownloadListModal extends FileListModal {
                     }
                     const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file', {
                         timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                        pathLeafName: file.name,
                     });
                     if (!fileResponse.ok) {
                         throw new Error(`Failed to download file: Supernote responded with an error (status ${fileResponse.status}).`);
@@ -384,6 +398,7 @@ export class UploadListModal extends FileListModal {
                         contentType,
                         body,
                         timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                        pathLeafName: this.currentPathLeafName,
                     });
 
                     if (!response.ok) {
