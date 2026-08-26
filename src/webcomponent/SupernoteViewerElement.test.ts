@@ -332,47 +332,6 @@ describe('<supernote-viewer>', () => {
         expect(scrollToSpy).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'smooth' }));
     });
 
-    it('scroll-delay postpones only automatic write-on page following and cancels on disconnect', async () => {
-        const el = createViewer();
-        document.body.appendChild(el);
-        const loaded = waitForEvent(el, 'supernote-load');
-        el.noteData = readFixture('blank-a6x-3.26.40-two-pages.note');
-        await loaded;
-
-        const pagesEl = el.shadowRoot!.querySelector('.pages') as HTMLElement;
-        const page2 = el.shadowRoot!.querySelectorAll('.page-container')[1];
-        vi.spyOn(pagesEl, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 100, height: 100 } as DOMRect);
-        vi.spyOn(page2, 'getBoundingClientRect').mockReturnValue({ top: 200, bottom: 300 } as DOMRect);
-        const scrollToSpy = vi.spyOn(pagesEl, 'scrollTo');
-        el.setAttribute('scroll-delay', '1000');
-        const playback = el as unknown as { scrollActiveAnimPageIntoView(page: number): void };
-
-        vi.useFakeTimers();
-        try {
-            playback.scrollActiveAnimPageIntoView(1);
-            vi.advanceTimersByTime(999);
-            expect(scrollToSpy).not.toHaveBeenCalled();
-            vi.advanceTimersByTime(1);
-            expect(scrollToSpy).toHaveBeenCalledTimes(1);
-
-            // The delay applies only to playback following: ordinary page
-            // navigation still scrolls as soon as it is requested.
-            scrollToSpy.mockClear();
-            el.goToPage(1);
-            expect(scrollToSpy).toHaveBeenCalledTimes(1);
-
-            // A component that leaves the DOM cannot execute a stale delayed
-            // page follow after its host has moved on.
-            scrollToSpy.mockClear();
-            playback.scrollActiveAnimPageIntoView(1);
-            el.remove();
-            vi.advanceTimersByTime(1000);
-            expect(scrollToSpy).not.toHaveBeenCalled();
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
     describe('page-jump textbox (issue #194)', () => {
         it('jumps to the typed page on Enter', async () => {
             const el = createViewer();

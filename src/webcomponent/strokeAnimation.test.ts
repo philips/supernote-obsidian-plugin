@@ -31,12 +31,29 @@ function makeFakeClock(): {
     let now = 0;
     let frameCb: ((t: number) => void) | null = null;
     let nextId = 1;
+    const timers = new Map<number, { at: number; cb: () => void }>();
+    const runDueTimers = () => {
+        for (;;) {
+            const due = [...timers.entries()]
+                .filter(([, timer]) => timer.at <= now)
+                .sort(([, a], [, b]) => a.at - b.at)[0];
+            if (!due) return;
+            const [id, timer] = due;
+            timers.delete(id);
+            timer.cb();
+        }
+    };
     return {
         tick: (dtMs: number) => {
             now += dtMs;
+            // Timers run before the frame at this instant, like the browser
+            // task/rAF ordering. A transition timer can therefore queue the
+            // next animation frame at the same fake timestamp.
+            runDueTimers();
             const cb = frameCb;
             frameCb = null;
             cb?.(now);
+            runDueTimers();
         },
         now: () => now,
         frameQueued: () => frameCb !== null,
@@ -44,6 +61,12 @@ function makeFakeClock(): {
             now: () => now,
             requestFrame: (cb) => { frameCb = cb; return nextId++; },
             cancelFrame: () => { frameCb = null; },
+            setTimeout: (cb, delay) => {
+                const id = nextId++;
+                timers.set(id, { at: now + delay, cb });
+                return id;
+            },
+            clearTimeout: (id) => { timers.delete(id); },
         },
     };
 }
@@ -351,6 +374,48 @@ describe('StrokeAnimator', () => {
         clock.tick(animator.totalDuration + 1000);
         expect(animator.isFinished).toBe(true);
         expect(progressOf(p3.segments[0])).toBe(1);
+    });
+
+    it('holds at a page boundary before scrolling and starting the next page', () => {
+        const sn = new SupernoteX(readFixture('demo-a5x-20230015-1to10.note'));
+        const p1 = buildPageStrokeAnimation(sn, 1)!;
+        const p3 = buildPageStrokeAnimation(sn, 3)!;
+        const clock = makeFakeClock();
+        const activePages: number[] = [];
+        const transitions: number[] = [];
+        const animator = new StrokeAnimator([p1, null, p3], {
+            onActivePage: (p) => activePages.push(p),
+            onPageTransition: (p) => transitions.push(p),
+        }, clock.options);
+        animator.pageTransitionDelay = 1000;
+
+        animator.play();
+        // This frame would have entered page 3, but instead completes page
+        // 1 and starts the real-time hold. Page 3 remains entirely blank.
+        clock.tick(p1.duration + 34);
+        expect(animator.currentTime).toBe(p1.duration);
+        expect(progressOf(p1.segments[p1.segments.length - 1])).toBe(1);
+        expect(progressOf(p3.segments[0])).toBe(0);
+        expect(activePages).toEqual([0]);
+        expect(transitions).toEqual([]);
+        expect(clock.frameQueued()).toBe(false);
+
+        clock.tick(999);
+        expect(animator.currentTime).toBe(p1.duration);
+        expect(progressOf(p3.segments[0])).toBe(0);
+        expect(transitions).toEqual([]);
+
+        // The delay expires: the host is told to scroll to the still-blank
+        // page before a future animation frame is allowed to begin its ink.
+        clock.tick(1);
+        expect(transitions).toEqual([2]);
+        expect(progressOf(p3.segments[0])).toBe(0);
+        expect(activePages).toEqual([0]);
+
+        clock.tick(34);
+        expect(progressOf(p3.segments[0])).toBeGreaterThan(0);
+        expect(activePages).toEqual([0, 2]);
+        animator.pause();
     });
 
     it('reports the same active page across a page boundary gap without re-firing', () => {
