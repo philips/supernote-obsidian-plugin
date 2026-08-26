@@ -915,6 +915,10 @@ export class SupernoteViewerElement extends HTMLElement {
     private animSpeedBtn: HTMLButtonElement | null = null;
     private animTimeEl: HTMLElement | null = null;
     private lastAnimSecond = -1;
+    // One delayed automatic page-follow at most. A new active page replaces
+    // it; pause, exit, rerender, and disconnect clear it (see
+    // cancelPendingAnimScroll()).
+    private animScrollDelayTimer?: number;
 
     constructor() {
         super();
@@ -981,6 +985,7 @@ export class SupernoteViewerElement extends HTMLElement {
 
     disconnectedCallback(): void {
         this.animation?.destroy();
+        this.cancelPendingAnimScroll();
         this.stopFullInkPageLoading();
         this.resizeObserver?.disconnect();
         this.thumbLoadObserver?.disconnect();
@@ -1010,6 +1015,32 @@ export class SupernoteViewerElement extends HTMLElement {
                 if (Number.isFinite(n)) this.goToPage(n);
             }
         }
+    }
+
+    // `scroll-behavior="instant"` is an e-ink-friendly opt-out from this
+    // component's own smooth programmatic scrolling. It is deliberately
+    // read at each jump rather than observed/re-rendered: changing it live
+    // affects the next page jump, find result, or write-on page-follow
+    // scroll, and never changes a user's manual scrolling. Only exactly
+    // "instant" opts out; absent or any other value preserves the existing
+    // smooth default.
+    private get programmaticScrollBehavior(): ScrollBehavior {
+        return this.getAttribute('scroll-behavior') === 'instant' ? 'instant' : 'smooth';
+    }
+
+    // `scroll-delay="<milliseconds>"` deliberately applies only to
+    // write-on playback's automatic page following - never page buttons,
+    // goToPage(), find results, or manual scrolling. Exact non-negative
+    // integer milliseconds keep the HTML contract small (`1000` = one
+    // second); absent/malformed values mean no delay. A minute is already a
+    // very long wait between pages, and the cap avoids setTimeout's
+    // platform-dependent overflow behavior for an accidental huge number.
+    private static readonly SCROLL_DELAY_RE = /^\d+$/;
+
+    private get writeOnScrollDelay(): number {
+        const value = this.getAttribute('scroll-delay') ?? '';
+        if (!SupernoteViewerElement.SCROLL_DELAY_RE.test(value)) return 0;
+        return Math.min(60_000, Number(value));
     }
 
     // 1-indexed, matching goToPage()'s own convention - 0 before any note
@@ -1051,7 +1082,7 @@ export class SupernoteViewerElement extends HTMLElement {
         const pagesRect = this.pagesEl.getBoundingClientRect();
         const targetRect = state.containerEl.getBoundingClientRect();
         const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top);
-        this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+        this.pagesEl.scrollTo({ top: targetTop, behavior: this.programmaticScrollBehavior });
         // Marked visible before forcing the load (not just left to whatever
         // the observer last reported) - a jump can target a page nowhere
         // near the current scroll position, still mid-animation and not
@@ -1258,6 +1289,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.fitWidthBtn = null;
         this.animation?.destroy();
         this.animation = null;
+        this.cancelPendingAnimScroll();
         this.activePresentation = 'static';
         // Seed the write-on defaults from the autoplay attribute (strict
         // "<num>x" - see autoplaySpeed): a matching attribute opens the
@@ -2356,6 +2388,7 @@ export class SupernoteViewerElement extends HTMLElement {
         animReplayBtn.setAttribute('aria-label', 'Replay write-on animation');
         this.renderIcon('repeat', animReplayBtn);
         animReplayBtn.addEventListener('click', () => {
+            this.cancelPendingAnimScroll();
             this.animation?.reset();
             this.presentation = 'write-on-playing';
         });
@@ -2656,7 +2689,7 @@ export class SupernoteViewerElement extends HTMLElement {
         const pagesRect = this.pagesEl.getBoundingClientRect();
         const targetRect = el.getBoundingClientRect();
         const targetTop = this.pagesEl.scrollTop + (targetRect.top - pagesRect.top) - pagesRect.height / 2 + targetRect.height / 2;
-        this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+        this.pagesEl.scrollTo({ top: targetTop, behavior: this.programmaticScrollBehavior });
     }
 
     private clearFindHighlights(): void {
@@ -2734,7 +2767,10 @@ export class SupernoteViewerElement extends HTMLElement {
     private setWriteOnPlayback(presentation: Exclude<ViewerPresentation, 'static'>): void {
         if (!this.animation) return;
         if (presentation === 'write-on-playing') this.animation.play();
-        else this.animation.pause();
+        else {
+            this.animation.pause();
+            this.cancelPendingAnimScroll();
+        }
         this.activePresentation = presentation;
         this.updateAnimControls();
     }
@@ -2813,6 +2849,7 @@ export class SupernoteViewerElement extends HTMLElement {
                 onActivePage: (page) => this.scrollActiveAnimPageIntoView(page),
                 onTime: (timeMs) => this.updateAnimTimeLabel(timeMs),
                 onFinish: () => {
+                    this.cancelPendingAnimScroll();
                     this.requestedPresentation = 'write-on-paused';
                     this.activePresentation = 'write-on-paused';
                     this.updateAnimControls();
@@ -2840,6 +2877,7 @@ export class SupernoteViewerElement extends HTMLElement {
         const wasWriteOn = this.activePresentation !== 'static';
         this.activePresentation = 'static';
         this.animation?.destroy();
+        this.cancelPendingAnimScroll();
         this.animation = null;
         const sn = this.sn;
         this.pageStates.forEach((state, index) => {
@@ -2944,14 +2982,37 @@ export class SupernoteViewerElement extends HTMLElement {
     // (the overlap check below), so it never fights a manual mid-page
     // scroll.
     private scrollActiveAnimPageIntoView(page: number): void {
-        if (!this.pagesEl) return;
-        const state = this.pageStates[page];
-        if (!state) return;
-        const pagesRect = this.pagesEl.getBoundingClientRect();
-        const rect = state.containerEl.getBoundingClientRect();
-        if (rect.bottom >= pagesRect.top && rect.top <= pagesRect.bottom) return; // already in view
-        const targetTop = this.pagesEl.scrollTop + (rect.top - pagesRect.top) - pagesRect.height * 0.1;
-        this.pagesEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+        // A quick playback speed can move through more than one page before
+        // the configured wait expires. Only the latest page is useful then;
+        // clearing the prior timeout prevents a stale scroll back to it.
+        this.cancelPendingAnimScroll();
+        if (!this.pagesEl || !this.pageStates[page]) return;
+
+        const follow = () => {
+            this.animScrollDelayTimer = undefined;
+            // Re-read both geometry and the state after the wait: the user
+            // may have manually reached this page in the meantime, or a
+            // rerender/exit may have removed it (the latter normally clears
+            // the timer too, but this guard keeps the callback self-contained).
+            const pagesEl = this.pagesEl;
+            const state = this.pageStates[page];
+            if (!pagesEl || !state) return;
+            const pagesRect = pagesEl.getBoundingClientRect();
+            const rect = state.containerEl.getBoundingClientRect();
+            if (rect.bottom >= pagesRect.top && rect.top <= pagesRect.bottom) return; // already in view
+            const targetTop = pagesEl.scrollTop + (rect.top - pagesRect.top) - pagesRect.height * 0.1;
+            pagesEl.scrollTo({ top: targetTop, behavior: this.programmaticScrollBehavior });
+        };
+
+        const delay = this.writeOnScrollDelay;
+        if (delay === 0) follow();
+        else this.animScrollDelayTimer = window.setTimeout(follow, delay);
+    }
+
+    private cancelPendingAnimScroll(): void {
+        if (this.animScrollDelayTimer === undefined) return;
+        window.clearTimeout(this.animScrollDelayTimer);
+        this.animScrollDelayTimer = undefined;
     }
 
     private showStatus(message: string): void {
