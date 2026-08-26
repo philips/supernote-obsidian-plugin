@@ -1419,6 +1419,125 @@ describe('<supernote-viewer>', () => {
             expect(speedBtn.textContent).toBe('4×');
         });
 
+        it('autoplay="8x" opens the note blank, playing, at 8×', async () => {
+            const el = createAnimationViewer();
+            el.setAttribute('autoplay', '8x');
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            // Same async entry as a property-driven start: decode →
+            // background rasters → swap + play; one timer tick covers it.
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            const container = el.shadowRoot!.querySelector('.page-container')!;
+            expect(container.querySelector('img')!.getAttribute('src')).toBe('data:image/png;base64,bg1');
+            expect(container.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+            expect(el.presentation).toBe('write-on-playing');
+            expect(el.shadowRoot!.querySelector('button[aria-label="Pause write-on animation"]')).not.toBeNull();
+            expect(el.shadowRoot!.querySelector<HTMLButtonElement>('.anim-speed-btn')!.textContent).toBe('8×');
+        });
+
+        it('autoplay accepts fractional speeds and clamps out-of-range ones', async () => {
+            const cases: Array<[string, string]> = [
+                ['0.5x', '½×'],
+                ['2.5x', '2.5×'],
+                ['99x', '16×'],
+                ['0.01x', '0.25×'],
+            ];
+            for (const [attr, label] of cases) {
+                const el = createAnimationViewer();
+                el.setAttribute('autoplay', attr);
+                document.body.appendChild(el);
+                const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+                el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+                await loaded;
+                await new Promise((resolve) => window.setTimeout(resolve, 0));
+                expect(el.presentation, attr).toBe('write-on-playing');
+                expect(el.shadowRoot!.querySelector<HTMLButtonElement>('.anim-speed-btn')!.textContent, attr).toBe(label);
+            }
+        });
+
+        it('a malformed autoplay value is ignored - the note opens static', async () => {
+            for (const bad of ['8', '8X', '8×', ' x8', '½x', '']) {
+                const el = createAnimationViewer();
+                el.setAttribute('autoplay', bad);
+                document.body.appendChild(el);
+                const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+                el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+                await loaded;
+                await new Promise((resolve) => window.setTimeout(resolve, 0));
+                expect(el.presentation, `autoplay="${bad}"`).toBe('static');
+                expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg'), `autoplay="${bad}"`).toBeNull();
+                expect(el.shadowRoot!.querySelector('button[aria-label="Toggle write-on animation"]')!.getAttribute('aria-pressed'), `autoplay="${bad}"`).toBe('false');
+                expect(el.rasterizeBackgrounds, `autoplay="${bad}"`).not.toHaveBeenCalled();
+            }
+        });
+
+        it('a presentation set via the property out-prioritizes autoplay', async () => {
+            const el = createAnimationViewer();
+            el.setAttribute('autoplay', '8x');
+            // Even an explicit 'static' (a no-op assignment on its own)
+            // marks the presentation as host-owned from here on.
+            el.presentation = 'static';
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            expect(el.presentation).toBe('static');
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).toBeNull();
+            // The speed seed still applies for whenever the host enters
+            // write-on itself.
+            expect(el.shadowRoot!.querySelector<HTMLButtonElement>('.anim-speed-btn')!.textContent).toBe('8×');
+        });
+
+        it('autoplay replays on every (re)load, and the speed cycle works from an attribute-set start', async () => {
+            const el = createAnimationViewer();
+            el.setAttribute('autoplay', '2x');
+            document.body.appendChild(el);
+            let loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            expect(el.presentation).toBe('write-on-playing');
+
+            // A fresh noteData rebuilds from scratch - the attribute
+            // re-seeds autoplay for the new load.
+            loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            expect(el.presentation).toBe('write-on-playing');
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).not.toBeNull();
+
+            // 2 is in ANIM_SPEEDS ([4, 1, 2, ½]), so the cycle steps to
+            // the next entry rather than resetting to its head (an 8× start
+            // would: indexOf(8) is -1, landing on speeds[0]).
+            const speedBtn = el.shadowRoot!.querySelector<HTMLButtonElement>('.anim-speed-btn')!;
+            expect(speedBtn.textContent).toBe('2×');
+            speedBtn.click();
+            expect(speedBtn.textContent).toBe('½×');
+            speedBtn.click();
+            expect(speedBtn.textContent).toBe('4×');
+        });
+
+        it('autoplay is ignored in single-page mode', async () => {
+            const el = createAnimationViewer();
+            el.setAttribute('autoplay', '8x');
+            el.setAttribute('single-page', '');
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            expect(el.presentation).toBe('static');
+            expect(el.shadowRoot!.querySelector('.toolbar')).toBeNull();
+            expect(el.shadowRoot!.querySelector('svg.stroke-animation-svg')).toBeNull();
+        });
+
         it('clicking the pen button again exits: overlay removed, base layer evicted, lazy-load restored', async () => {
             const el = createAnimationViewer();
             await loadAndEnterAnimation(el);

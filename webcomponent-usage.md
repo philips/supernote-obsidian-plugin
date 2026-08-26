@@ -88,6 +88,12 @@ viewer.presentation = 'write-on-paused';
 viewer.noteData = bytes;
 ```
 
+Or entirely declaratively - blank and *already playing* at a chosen speed:
+
+```html
+<supernote-viewer src="path/to/file.note" autoplay="8x" style="height: 600px; display: block;"></supernote-viewer>
+```
+
 ## API reference
 
 ### Attributes / properties
@@ -100,10 +106,11 @@ viewer.noteData = bytes;
 | `invert-dark` | boolean attribute | Tags every page image so it's colour-inverted (`filter: invert(1)`) whenever this element is actually in dark mode (see `dark` below) - the attribute alone doesn't force inversion, matching the two-part "setting + actual theme" condition the Obsidian plugin's own equivalent setting uses. Useful for handwriting scanned on a white background that would otherwise look like a bright rectangle in an otherwise-dark page. |
 | `dark` | tri-state attribute | Overrides this element's own default guess (the OS-level `prefers-color-scheme: dark` media feature) for its default colours (border/background/text) and `invert-dark`'s filter. **Not a plain boolean** - three distinct states: attribute absent entirely → follow the OS-level guess; present with any value other than the string `"false"` (including with no value at all) → force dark; present with value exactly `"false"` → force light. Getting this wrong (treating it as an OR with the OS guess rather than an override) is a real bug this project hit: on a system whose OS-level scheme is dark, a host actually rendering *light* still had its images inverted underneath it. Only needed if your page's actual dark/light state doesn't reliably track the OS setting - which is exactly why Obsidian's `SupernoteEmbed` always explicitly sets `"true"` or `"false"` (never just adds/removes the attribute) from Obsidian's own theme, rather than relying on the OS guess in either direction. Pure CSS attribute selector - no rebuild needed to toggle it. |
 | `bare` | boolean attribute | Drops this element's own border/background/rounded corners - pure CSS, takes effect immediately, no rebuild. For embedding inside a host page/component that already provides its own frame around it (this is what Obsidian's `SupernoteEmbed` sets, since its container already has a border). |
+| `autoplay` | attribute, string (`<num>x`) | Opens the note in write-on mode - blank pages, immediately replaying - at the given speed multiplier: the declarative equivalent of `presentation = 'write-on-playing'` with that speed (e.g. `autoplay="8x"`). The value must be exactly one or more digits, an optional decimal part, then a lowercase `x` (`1x`, `2.5x`, `0.5x`); anything else (`8`, `8X`, `8×`, `½x`, a valueless `autoplay`) means no autoplay, silently. Values clamp to `[0.25, 16]`. It only sets the *initial* state - the toolbar's play/pause and speed-cycle buttons work as normal afterwards. Consumed at build time like `src` (changing it rebuilds the note), re-applied on every subsequent load, ignored in `single-page` mode, and superseded by any `presentation` property assignment (one host-side `viewer.presentation = ...` wins from then on). |
 | `.noteData` | property, `ArrayBuffer \| Uint8Array \| null` | Set the file's bytes directly. JS-only - there's no string form of this, so it can't be set as an HTML attribute (see the framework note below). |
 | `.presentation` | property, `'static' \| 'write-on-paused' \| 'write-on-playing'` | Chooses the page-image renderer. Default `'static'` lazily loads ordinary full-ink PNGs. `'write-on-paused'` opens background-only at `0:00`, with hidden SVG ink until Play; `'write-on-playing'` does the same setup and begins playback. Set it before `src`/`noteData` for the initial renderer or after load to switch. `single-page` deliberately remains static. |
 
-Setting `src`/`page`/`noteData`/`single-page`/`invert-dark` after the element is already showing a note
+Setting `src`/`page`/`noteData`/`single-page`/`invert-dark`/`autoplay` after the element is already showing a note
 tears down and rebuilds the whole thing from scratch (a fresh fetch if using `src`) - there's no in-place
 diffing. `presentation` is different: changing it transfers the existing page shells between the static
 and write-on renderers without reparsing the note. `dark` and `bare` are also live CSS-only changes.

@@ -778,7 +778,7 @@ type ActivePresentation = ViewerPresentation | 'write-on-preparing';
 
 export class SupernoteViewerElement extends HTMLElement {
     static get observedAttributes(): string[] {
-        return ['src', 'page', 'single-page', 'invert-dark'];
+        return ['src', 'page', 'single-page', 'invert-dark', 'autoplay'];
     }
 
     // Whether rasterizePage() below draws this page's pen strokes as crisp
@@ -895,6 +895,15 @@ export class SupernoteViewerElement extends HTMLElement {
     // loader; write-on owns background PNGs plus SVG overlays. Keeping this
     // explicit prevents the two async renderers from competing for an img.
     private requestedPresentation: ViewerPresentation = 'static';
+    // Set true by the presentation property's setter (host script, or this
+    // component's own toolbar, which routes through it) and never reset.
+    // While false, an autoplay="<num>x" attribute seeds each render's
+    // requestedPresentation to 'write-on-playing'; once true, a host's
+    // programmatic choice - including an explicit 'static' - out-prioritizes
+    // the attribute and stays sticky across src/noteData rebuilds. Internal
+    // transitions (onFinish's 'write-on-paused', the no-animatable-ink
+    // fallback) assign requestedPresentation directly, without this flag.
+    private presentationSetByHost = false;
     private activePresentation: ActivePresentation = 'static';
     private animation: StrokeAnimator | null = null;
     private pageAnimations: (PageStrokeAnimation | null)[] = [];
@@ -957,6 +966,10 @@ export class SupernoteViewerElement extends HTMLElement {
         if (value !== 'static' && value !== 'write-on-paused' && value !== 'write-on-playing') {
             throw new TypeError(`Unknown supernote-viewer presentation: ${String(value)}`);
         }
+        // Even a redundant assignment counts as host intent, so the
+        // autoplay attribute stops overriding it from then on (see
+        // presentationSetByHost's own comment).
+        this.presentationSetByHost = true;
         if (value === this.requestedPresentation && this.activePresentation !== 'write-on-preparing') return;
         this.requestedPresentation = value;
         this.applyRequestedPresentation();
@@ -979,10 +992,11 @@ export class SupernoteViewerElement extends HTMLElement {
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
         if (oldValue === newValue) return;
-        if (name === 'src' || name === 'single-page' || name === 'invert-dark') {
-            // All three are consumed at build time (which page(s) to build,
-            // and whether to tag their images for dark-mode inversion), so
-            // there's no cheaper path than a full rebuild when they change.
+        if (name === 'src' || name === 'single-page' || name === 'invert-dark' || name === 'autoplay') {
+            // All of these are consumed at build time (which page(s) to
+            // build, whether to tag their images for dark-mode inversion,
+            // and whether to open in write-on autoplay), so there's no
+            // cheaper path than a full rebuild when they change.
             this.queueRender();
             return;
         }
@@ -1245,7 +1259,17 @@ export class SupernoteViewerElement extends HTMLElement {
         this.animation?.destroy();
         this.animation = null;
         this.activePresentation = 'static';
-        this.animSpeedMult = 4;
+        // Seed the write-on defaults from the autoplay attribute (strict
+        // "<num>x" - see autoplaySpeed): a matching attribute opens the
+        // note blank and immediately replaying at that speed, unless a
+        // host already chose a presentation through the property (which
+        // sets presentationSetByHost). render() runs this before
+        // buildViewer() ever reads requestedPresentation.
+        const autoplay = this.autoplaySpeed;
+        this.animSpeedMult = autoplay ?? 4;
+        if (autoplay !== null && !this.presentationSetByHost) {
+            this.requestedPresentation = 'write-on-playing';
+        }
         this.pageAnimations = [];
         this.animPenBtn = null;
         this.animControlsEl = null;
@@ -1266,6 +1290,12 @@ export class SupernoteViewerElement extends HTMLElement {
         const invertColorsWhenDark = this.hasAttribute('invert-dark');
 
         if (this.hasAttribute('single-page')) {
+            // Write-on is a multi-page timeline feature - single-page mode
+            // deliberately stays static (applyRequestedPresentation has its
+            // own guard). Reset the request too, so the public
+            // `presentation` getter keeps reporting what's actually shown
+            // when an autoplay attribute was present.
+            this.requestedPresentation = 'static';
             this.buildSinglePageViewer(sn, invertColorsWhenDark);
             return;
         }
@@ -2337,7 +2367,7 @@ export class SupernoteViewerElement extends HTMLElement {
         animSpeedBtn.className = 'anim-speed-btn';
         animSpeedBtn.setAttribute('part', 'button');
         animSpeedBtn.setAttribute('aria-label', 'Cycle animation speed');
-        animSpeedBtn.textContent = '4×';
+        animSpeedBtn.textContent = this.formatAnimSpeed(this.animSpeedMult);
         animSpeedBtn.addEventListener('click', () => this.cycleAnimSpeed());
         animControls.appendChild(animSpeedBtn);
         this.animSpeedBtn = animSpeedBtn;
@@ -2670,6 +2700,23 @@ export class SupernoteViewerElement extends HTMLElement {
             : 'static';
     }
 
+    // autoplay="<num>x" - the declarative front door to write-on: open the
+    // note blank and immediately replay its strokes at this speed
+    // multiplier. Strictly "<num>x" (digits, optional ".<digits>", then a
+    // lowercase x) and nothing else - no trimming, no "8X", no "8×", no
+    // bare numbers; anything else parses as absent, silently, because a
+    // malformed attribute should mean "no autoplay", not a console warning
+    // on every load (including a valueless `autoplay`, so there is no
+    // default-speed autoplay form either). Parsed values clamp to
+    // [0.25, 16] so a typo'd "99x" still plays at a sane rate.
+    private static readonly AUTOPLAY_SPEED_RE = /^(\d+(?:\.\d+)?)x$/;
+
+    private get autoplaySpeed(): number | null {
+        const match = SupernoteViewerElement.AUTOPLAY_SPEED_RE.exec(this.getAttribute('autoplay') ?? '');
+        if (!match) return null;
+        return Math.min(16, Math.max(0.25, Number(match[1])));
+    }
+
     private applyRequestedPresentation(): void {
         if (!this.sn || !this.pagesEl || this.hasAttribute('single-page')) return;
         if (this.requestedPresentation === 'static') {
@@ -2853,7 +2900,15 @@ export class SupernoteViewerElement extends HTMLElement {
         const next = speeds[(speeds.indexOf(this.animSpeedMult) + 1) % speeds.length];
         this.animSpeedMult = next;
         if (this.animation) this.animation.speed = next;
-        if (this.animSpeedBtn) this.animSpeedBtn.textContent = next < 1 ? '½×' : `${next}×`;
+        if (this.animSpeedBtn) this.animSpeedBtn.textContent = this.formatAnimSpeed(next);
+    }
+
+    // Both the speed button's initial label (seeded from animSpeedMult,
+    // which the autoplay attribute can start at e.g. 8× or 0.25×) and every
+    // cycle step after it. 0.5 keeps the ½ glyph the cycle list itself
+    // uses; any other fractional speed renders as plain digits.
+    private formatAnimSpeed(speed: number): string {
+        return speed === 0.5 ? '½×' : `${speed}×`;
     }
 
     // ~1 DOM write per second, not per animation frame.
