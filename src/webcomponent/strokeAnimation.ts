@@ -207,7 +207,9 @@ export interface StrokeSegment {
     swapOnComplete?: boolean;
     kind: StrokeSegmentKind;
     // Page-local timeline offsets — the StrokeAnimator below stitches
-    // pages' segments into one global timeline in page order.
+    // pages' segments into one global timeline in page order. A configured
+    // pageTransitionDelay pauses that clock between pages without becoming
+    // part of the stroke timeline itself.
     start: number;
     duration: number;
 }
@@ -406,6 +408,10 @@ export interface StrokeAnimatorCallbacks {
     // soon as playback starts) — for auto-scrolling the active page into
     // view.
     onActivePage?: (page: number) => void;
+    // Fired after a configured real-time hold at a page boundary, while the
+    // next page's SVG is still blank and before its first stroke begins.
+    // The host uses this to bring that page into view.
+    onPageTransition?: (page: number) => void;
     // Current global time (ms), once per animation frame — for a
     // time-remaining label.
     onTime?: (timeMs: number) => void;
@@ -416,18 +422,28 @@ export interface StrokeAnimatorClock {
     now?: () => number;
     requestFrame?: (cb: (t: number) => void) => number;
     cancelFrame?: (id: number) => void;
+    setTimeout?: (cb: () => void, delay: number) => number;
+    clearTimeout?: (id: number) => void;
 }
 
 // One global clock over every page's segments, in page order. Deliberately
 // tiny: a monotonically-advancing pointer (strokes never overlap, so a
 // frame only ever touches the one in-flight segment plus whatever a large
 // delta — a seek, a fast-forward, a background tab's coalesced rAF — let
-// finish at once), and no per-segment timers.
+// finish at once), and no per-segment timers. A page-transition hold is the
+// one deliberate exception: at most one real-time timer between pages.
 export class StrokeAnimator {
     readonly totalDuration: number;
     speed = 1;
+    // A real-time (not speed-scaled) hold after each completed page. The
+    // total shown in the UI remains pure stroke time, so this is deliberately
+    // not folded into totalDuration or the global segment offsets.
+    pageTransitionDelay = 0;
 
     private entries: AnimatorEntry[] = [];
+    private pageTransitions: { start: number; page: number }[] = [];
+    private transitionPointer = 0;
+    private transitionTimer?: number;
     private pointer = 0;
     private time = 0;
     private playing = false;
@@ -436,7 +452,13 @@ export class StrokeAnimator {
     private lastNow = 0;
     private lastVisualUpdateNow = 0;
     private callbacks: StrokeAnimatorCallbacks;
-    private clock: { now: () => number; frame: (cb: (t: number) => void) => number; unframe: (id: number) => void };
+    private clock: {
+        now: () => number;
+        frame: (cb: (t: number) => void) => number;
+        unframe: (id: number) => void;
+        timeout: (cb: () => void, delay: number) => number;
+        untimeout: (id: number) => void;
+    };
 
     constructor(pages: (PageStrokeAnimation | null)[], callbacks: StrokeAnimatorCallbacks = {}, clock: StrokeAnimatorClock = {}) {
         this.callbacks = callbacks;
@@ -444,11 +466,17 @@ export class StrokeAnimator {
             now: clock.now ?? (() => performance.now()),
             frame: clock.requestFrame ?? ((cb) => window.requestAnimationFrame(cb)),
             unframe: clock.cancelFrame ?? ((id) => window.cancelAnimationFrame(id)),
+            timeout: clock.setTimeout ?? ((cb, delay) => window.setTimeout(cb, delay)),
+            untimeout: clock.clearTimeout ?? ((id) => window.clearTimeout(id)),
         };
 
         let offset = 0;
         pages.forEach((page, pageIndex) => {
             if (!page) return;
+            // Every non-null page after the first starts a new timeline
+            // chapter. Null pages have no drawable ink and therefore no
+            // boundary to pause or scroll to.
+            if (this.entries.length > 0) this.pageTransitions.push({ start: offset, page: pageIndex });
             for (const segment of page.segments) {
                 this.entries.push({
                     el: segment.el,
@@ -500,6 +528,7 @@ export class StrokeAnimator {
         if (!this.playing) return;
         this.playing = false;
         if (this.rafId !== undefined) this.clock.unframe(this.rafId);
+        this.clearPageTransitionHold();
     }
 
     toggle(): void {
@@ -512,6 +541,7 @@ export class StrokeAnimator {
     // hidden on a backward seek. O(n) attribute writes on a rare,
     // deliberate action, which is fine.
     seek(time: number): void {
+        this.clearPageTransitionHold();
         const clamped = Math.max(0, Math.min(time, this.totalDuration));
         let pointer = this.entries.length;
         for (let i = 0; i < this.entries.length; i++) {
@@ -528,6 +558,11 @@ export class StrokeAnimator {
             if (pointer === this.entries.length && progress < 1) pointer = i;
         }
         this.pointer = pointer;
+        // A deliberate seek lands immediately, never waits. The next
+        // boundary strictly after its destination is the next one playback
+        // can hold at (a seek exactly onto a boundary counts as past it).
+        this.transitionPointer = this.pageTransitions.findIndex((transition) => transition.start > clamped);
+        if (this.transitionPointer === -1) this.transitionPointer = this.pageTransitions.length;
         this.lastNow = this.clock.now();
         this.lastVisualUpdateNow = this.lastNow;
         this.updateState(clamped, false);
@@ -542,6 +577,17 @@ export class StrokeAnimator {
         this.pause();
     }
 
+    // A transition callback has just scrolled to a blank next page. Reserve
+    // one animation frame for that state before stroke time resumes, so the
+    // browser gets a paint opportunity rather than applying first-page ink
+    // in the same frame as the scroll.
+    private resumeAfterPageTransition = (now: number): void => {
+        if (!this.playing) return;
+        this.lastNow = now;
+        this.lastVisualUpdateNow = now;
+        this.rafId = this.clock.frame(this.frame);
+    };
+
     private frame = (now: number): void => {
         if (!this.playing) return;
         if (now - this.lastVisualUpdateNow < 1000 / MAX_ANIMATION_FPS) {
@@ -551,11 +597,27 @@ export class StrokeAnimator {
         const delta = (now - this.lastNow) * this.speed;
         this.lastNow = now;
         this.lastVisualUpdateNow = now;
-        const time = Math.min(this.time + delta, this.totalDuration);
+        const targetTime = Math.min(this.time + delta, this.totalDuration);
+
+        // Stop precisely at every page boundary the frame would cross. At a
+        // nonzero delay, leave the next page untouched and wait in real wall
+        // time; its first stroke cannot start while the viewer still shows
+        // the completed prior page. A zero delay continues through the
+        // boundary seamlessly, preserving the existing behavior.
+        while (this.transitionPointer < this.pageTransitions.length) {
+            const transition = this.pageTransitions[this.transitionPointer];
+            if (transition.start > targetTime) break;
+            this.transitionPointer++;
+            if (this.pageTransitionDelay <= 0) continue;
+            this.updateState(transition.start, false);
+            this.beginPageTransitionHold(transition.page, this.pageTransitionDelay);
+            return;
+        }
+
         // updateState() owns the end-of-run transition: it stops playback
         // and fires onFinish when the timeline is exhausted, so this frame
         // handler only decides whether there is a next frame to ask for.
-        this.updateState(time, true);
+        this.updateState(targetTime, true);
         if (this.playing) this.rafId = this.clock.frame(this.frame);
     };
 
@@ -591,7 +653,11 @@ export class StrokeAnimator {
         // finished).
         let active: number | null = null;
         for (let i = Math.min(this.pointer, this.entries.length - 1); i >= 0; i--) {
-            if (this.entries[i].start <= time) {
+            // At the exact start of a later page, the prior page remains
+            // active until this animator has completed its transition hold
+            // and time actually advances into the new page. (At t=0 the
+            // fallback below still selects the first page.)
+            if (this.entries[i].start < time) {
                 active = this.entries[i].page;
                 break;
             }
@@ -607,6 +673,26 @@ export class StrokeAnimator {
             this.playing = false;
             this.callbacks.onFinish?.();
         }
+    }
+
+    private beginPageTransitionHold(page: number, delay: number): void {
+        this.transitionTimer = this.clock.timeout(() => {
+            this.transitionTimer = undefined;
+            if (!this.playing) return;
+            // The host scrolls now, while the next page has no revealed ink.
+            this.callbacks.onPageTransition?.(page);
+            if (!this.playing) return; // callback may have paused/destroyed us
+            // Wall-clock time spent waiting must not become stroke time;
+            // resumeAfterPageTransition() resets the clock after one blank
+            // paint frame.
+            this.rafId = this.clock.frame(this.resumeAfterPageTransition);
+        }, delay);
+    }
+
+    private clearPageTransitionHold(): void {
+        if (this.transitionTimer === undefined) return;
+        this.clock.untimeout(this.transitionTimer);
+        this.transitionTimer = undefined;
     }
 
     private apply(entry: AnimatorEntry, progress: number): void {
