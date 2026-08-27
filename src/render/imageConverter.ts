@@ -4,7 +4,14 @@
 // into a standalone web component). SupernoteEmbed/SupernoteView (main.ts)
 // are the Obsidian-side callers; this module itself only ever touches
 // standard Worker/DOM globals and supernote-typescript.
-import { SupernoteX, IRenderableNote, extractPageRenderData, prepareVectorInkPages } from 'supernote-typescript';
+import {
+    SupernoteX,
+    IRenderableNote,
+    extractPageRenderData,
+    prepareVectorInkPages,
+    buildVectorInkBackgroundNote,
+    buildRasterInkOverlayNote,
+} from 'supernote-typescript';
 import type { VectorInkPage } from 'supernote-typescript';
 import { RasterizeWorkerMessage, RasterizeWorkerResponse } from '../rasterize.worker';
 import Worker from 'rasterize.worker';
@@ -51,7 +58,12 @@ function chunkPageNumbers(pageNumbers: number[]): number[][] {
 // that neither DPR capping nor zoom-aware rasterization could ever have
 // addressed, since neither touches what gets sent to a Worker in the first
 // place.
-function extractPagesRenderData(note: SupernoteX, pageNumbers: number[]): IRenderableNote {
+// The public vector-ink builders return a structural note copy rather than a
+// SupernoteX instance, but extractPageRenderData() accepts that same full
+// parsed-note shape.
+type VectorInkRenderNote = ReturnType<typeof buildVectorInkBackgroundNote>;
+
+function extractPagesRenderData(note: VectorInkRenderNote, pageNumbers: number[]): IRenderableNote {
     return {
         pageWidth: note.pageWidth,
         pageHeight: note.pageHeight,
@@ -123,7 +135,15 @@ export class WorkerPool {
     // request in flight) and round-robining across every call (so
     // concurrent single-page requests still spread across every worker,
     // instead of piling onto worker 0) fixes both.
-    private processChunk(note: SupernoteX, pageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[], backgroundOnly?: boolean[]): Promise<string[]> {
+    private processChunk(
+        note: VectorInkRenderNote,
+        pageNumbers: number[],
+        scale?: number,
+        vectorInkPages?: VectorInkPage[],
+        backgroundOnly?: boolean[],
+        rasterOverlayNote?: VectorInkRenderNote,
+        rasterOverlayPageNumbers?: ReadonlySet<number>,
+    ): Promise<RasterizedPageImage[]> {
         const workerIndex = this.nextWorker % this.workers.length;
         this.nextWorker++;
         const worker = this.workers[workerIndex];
@@ -132,13 +152,29 @@ export class WorkerPool {
         // extractPagesRenderData()'s comment for why sending the whole
         // `note` here was a real, serious memory bug (issue #154).
         const renderableNote = extractPagesRenderData(note, pageNumbers);
+        const overlayPageIndexes = rasterOverlayNote && rasterOverlayPageNumbers
+            ? pageNumbers.flatMap((pageNumber, index) => rasterOverlayPageNumbers.has(pageNumber) ? [index] : [])
+            : [];
+        const rasterOverlay = rasterOverlayNote && overlayPageIndexes.length > 0
+            ? {
+                note: extractPagesRenderData(
+                    rasterOverlayNote,
+                    overlayPageIndexes.map((index) => pageNumbers[index]),
+                ),
+                pageIndexes: overlayPageIndexes,
+            }
+            : undefined;
 
-        const send = (): Promise<string[]> => new Promise((resolve, reject) => {
+        const send = (): Promise<RasterizedPageImage[]> => new Promise((resolve, reject) => {
             worker.onmessage = (e: MessageEvent<RasterizeWorkerResponse>) => {
-                if (e.data.type === 'error') {
-                    reject(new Error(e.data.error));
-                } else if (e.data.type === 'result') {
-                    resolve(e.data.images);
+                const response = e.data;
+                if (response.type === 'error') {
+                    reject(new Error(response.error));
+                } else if (response.type === 'result') {
+                    resolve(response.images.map((imageDataUrl, i) => ({
+                        imageDataUrl,
+                        rasterOverlayDataUrl: response.rasterOverlays?.[i],
+                    })));
                 }
             };
 
@@ -153,6 +189,7 @@ export class WorkerPool {
                 scale,
                 vectorInk: vectorInkPages,
                 backgroundOnly,
+                rasterOverlay,
             };
 
             worker.postMessage(message);
@@ -168,10 +205,18 @@ export class WorkerPool {
     }
 
     // `backgroundOnly`, when present, is a parallel array aligned by index
-    // with allPageNumbers (see the `backgroundOnly` comment on
-    // RasterizeWorkerMessage): the worker strips those pages' bitmap ink
-    // layers before rasterizing and returns plain background-only PNGs.
-    async processPages(note: SupernoteX, allPageNumbers: number[], scale?: number, vectorInkPages?: VectorInkPage[], backgroundOnly?: boolean[]): Promise<string[]> {
+    // with allPageNumbers. Vector-ink callers pass a background note already
+    // split by the public upstream API; legacy callers without vector data
+    // retain the worker's historical all-bitmap-layer strip.
+    async processPages(
+        note: VectorInkRenderNote,
+        allPageNumbers: number[],
+        scale?: number,
+        vectorInkPages?: VectorInkPage[],
+        backgroundOnly?: boolean[],
+        rasterOverlayNote?: VectorInkRenderNote,
+        rasterOverlayPageNumbers?: ReadonlySet<number>,
+    ): Promise<RasterizedPageImage[]> {
         //console.time('Total processing time');
 
         const chunks = chunkPageNumbers(allPageNumbers);
@@ -183,7 +228,8 @@ export class WorkerPool {
         // in flight at once (see processChunk()'s comment). vectorInkPages
         // and backgroundOnly, when present, are aligned by index with
         // allPageNumbers, so slice each the same way each chunk slices the
-        // page numbers.
+        // page numbers. The overlay note is separately sliced to just its
+        // bitmap-only pages and carries their local chunk indexes.
         let offset = 0;
         const results = await Promise.all(
             chunks.map((chunk) => {
@@ -191,7 +237,15 @@ export class WorkerPool {
                 offset += chunk.length;
                 const vip = vectorInkPages?.slice(start, start + chunk.length);
                 const bg = backgroundOnly?.slice(start, start + chunk.length);
-                return this.processChunk(note, chunk, scale, vip, bg);
+                return this.processChunk(
+                    note,
+                    chunk,
+                    scale,
+                    vip,
+                    bg,
+                    rasterOverlayNote,
+                    rasterOverlayPageNumbers,
+                );
             })
         );
 
@@ -261,6 +315,21 @@ function scheduleIdleTeardownIfIdle(): void {
     }, WORKER_POOL_IDLE_TEARDOWN_MS);
 }
 
+export interface RasterizedPageImage {
+    imageDataUrl: string;
+    // Present only when this page has bitmap-only text-box/Digest content
+    // which must paint above vector ink.
+    rasterOverlayDataUrl?: string;
+}
+
+function pageMayNeedRasterOverlay(note: SupernoteX, vectorInkPage: VectorInkPage): boolean {
+    const disable = note.pages[vectorInkPage.pageNumber - 1]?.DISABLE;
+    // buildRasterInkOverlayNote() treats malformed values as transparent, so
+    // this inexpensive prefilter can conservatively send an unnecessary page
+    // for malformed metadata without ever losing real overlay ink.
+    return vectorInkPage.useVectorInk && disable !== undefined && disable !== '' && disable !== 'none';
+}
+
 export class ImageConverter {
     // `scale` (default 1, full resolution): a positive integer downsample
     // factor forwarded all the way to supernote-typescript's toImage(),
@@ -281,25 +350,70 @@ export class ImageConverter {
             // downsample) — vector coordinates don't survive a downsample,
             // so thumbnails keep the raster path.
             const vectorInkPages = vectorInk && !scale ? prepareVectorInkPages(note, pages, 1) : undefined;
-            return await getSharedWorkerPool().processPages(note, pages, scale, vectorInkPages);
+            const overlayPageNumbers = vectorInkPages
+                ? new Set(vectorInkPages.filter((page) => pageMayNeedRasterOverlay(note, page)).map((page) => page.pageNumber))
+                : undefined;
+            const backgroundNote = vectorInkPages ? buildVectorInkBackgroundNote(note, vectorInkPages) : note;
+            const rasterOverlayNote = overlayPageNumbers && overlayPageNumbers.size > 0
+                ? buildRasterInkOverlayNote(note, vectorInkPages!)
+                : undefined;
+            const rendered = await getSharedWorkerPool().processPages(
+                backgroundNote,
+                pages,
+                scale,
+                vectorInkPages,
+                undefined,
+                rasterOverlayNote,
+                overlayPageNumbers,
+            );
+            return rendered.map((page) => page.imageDataUrl);
         } finally {
             activeWorkerCalls--;
             scheduleIdleTeardownIfIdle();
         }
     }
 
-    // Background-only raster: strips the bitmap ink layers from each
-    // requested page before toImage (see `backgroundOnly` on
-    // RasterizeWorkerMessage) and returns plain PNG data URLs of the bare
-    // paper/ruling/background, no ink — the base layer the web component's
-    // write-on stroke animation mode (src/webcomponent/strokeAnimation.ts)
-    // draws its animated vector ink over. Same memory model as
-    // convertToImages() (sliced pages, chunked, shared pool).
+    // Background-only raster retained for callers that need a bare page even
+    // when it cannot be vectorized. The worker's no-vectorInk compatibility
+    // path strips every bitmap ink layer as it did before write-on overlays.
     async convertToBackgroundImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
         const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
         activeWorkerCalls++;
         try {
-            return await getSharedWorkerPool().processPages(note, pages, undefined, undefined, pages.map(() => true));
+            const rendered = await getSharedWorkerPool().processPages(note, pages, undefined, undefined, pages.map(() => true));
+            return rendered.map((page) => page.imageDataUrl);
+        } finally {
+            activeWorkerCalls--;
+            scheduleIdleTeardownIfIdle();
+        }
+    }
+
+    // The write-on equivalent of convertToImages(): returns the plain PNG
+    // background below the animator's SVG plus an optional bitmap-only
+    // text-box/Digest image that the component must place above that SVG.
+    // Callers request only animatable pages, so every requested page has
+    // vetted vector ink; keeping this separate avoids changing the legacy
+    // convertToBackgroundImages() contract for other consumers.
+    async convertToAnimationImages(note: SupernoteX, pageNumbers: number[]): Promise<RasterizedPageImage[]> {
+        activeWorkerCalls++;
+        try {
+            const vectorInkPages = prepareVectorInkPages(note, pageNumbers, 1);
+            const overlayPageNumbers = new Set(
+                vectorInkPages.filter((page) => pageMayNeedRasterOverlay(note, page)).map((page) => page.pageNumber),
+            );
+            const backgroundNote = buildVectorInkBackgroundNote(note, vectorInkPages);
+            const rasterOverlayNote = overlayPageNumbers.size > 0
+                ? buildRasterInkOverlayNote(note, vectorInkPages)
+                : undefined;
+            return await getSharedWorkerPool().processPages(
+                backgroundNote,
+                pageNumbers,
+                undefined,
+                vectorInkPages,
+                pageNumbers.map(() => true),
+                rasterOverlayNote,
+                overlayPageNumbers,
+            );
         } finally {
             activeWorkerCalls--;
             scheduleIdleTeardownIfIdle();

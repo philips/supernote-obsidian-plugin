@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // Verifies the vectorInk wiring in buildPdfInWorker() - that the main-thread
-// prep (prepareVectorInkPages + buildRenderNoteForVectorInk) actually strips
+// prep (prepareVectorInkPages + buildVectorInkBackgroundNote) actually strips
 // the bitmap ink layers from vector-replaced pages and produces non-empty
 // strokes/styles for exactly those pages, and that the off path leaves the
 // note untouched.
@@ -23,7 +23,8 @@ import * as path from 'path';
 import {
     SupernoteX,
     prepareVectorInkPages,
-    buildRenderNoteForVectorInk,
+    buildVectorInkBackgroundNote,
+    buildRasterInkOverlayNote,
 } from 'supernote-typescript';
 
 // One '..' (not two like src/render/* and src/webcomponent/* tests use): this
@@ -57,7 +58,7 @@ describe('buildPdfInWorker vectorInk wiring', () => {
         const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
 
         const vectorInkPages = prepareVectorInkPages(sn, pageNumbers, 1);
-        const renderNote = buildRenderNoteForVectorInk(sn, vectorInkPages);
+        const renderNote = buildVectorInkBackgroundNote(sn, vectorInkPages);
 
         // At least one page must have decided to use vector ink for the
         // rest of this test to mean anything.
@@ -88,6 +89,28 @@ describe('buildPdfInWorker vectorInk wiring', () => {
                 }
             }
         }
+    });
+
+    it('keeps bitmap-only DISABLE pixels in an overlay above the PDF vectors', () => {
+        const sn = new SupernoteX(readFixture('textbox-n5-20260016-digest.note'));
+        const pageNumber = 4;
+        const vectorInkPages = prepareVectorInkPages(sn, [pageNumber], 1);
+        const vip = vectorInkPages[0];
+        expect(vip.useVectorInk).toBe(true);
+
+        const background = buildVectorInkBackgroundNote(sn, vectorInkPages);
+        const overlay = buildRasterInkOverlayNote(sn, vectorInkPages);
+        // The vector background has no ordinary bitmap ink. The separately
+        // sent overlay retains the text-box pixels from MAINLAYER so the PDF
+        // worker can hand it to addPdfPage() after the vector primitives.
+        expect(background.pages[pageNumber - 1].MAINLAYER.bitmapBuffer).toBeNull();
+        expect(overlay.pages[pageNumber - 1].MAINLAYER.bitmapBuffer).not.toBeNull();
+
+        const overlayPageIndexes = vectorInkPages.flatMap((page, index) => {
+            const disable = sn.pages[page.pageNumber - 1].DISABLE;
+            return page.useVectorInk && disable !== undefined && disable !== '' && disable !== 'none' ? [index] : [];
+        });
+        expect(overlayPageIndexes).toEqual([0]);
     });
 
     it('builds non-empty strokes/strokeStyles for exactly the useVectorInk pages', () => {
@@ -128,7 +151,7 @@ describe('buildPdfInWorker vectorInk wiring', () => {
         for (const page of sn.pages) {
             for (const layerName of INK_LAYERS) {
                 // Whatever the note carries, the off path carries it too:
-                // buildRenderNoteForVectorInk is never called, so nothing
+                // buildVectorInkBackgroundNote is never called, so nothing
                 // is nulled. Only assert for layers the note actually has.
                 const buf = page[layerName]?.bitmapBuffer;
                 if (buf) {

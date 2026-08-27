@@ -1296,10 +1296,12 @@ describe('<supernote-viewer>', () => {
         // Same setup as the rest of this file (real note parsed off disk,
         // faked rasterizer) plus a faked rasterizeBackgrounds - its real
         // implementation is the same Worker pipeline as rasterizePage (see
-        // convertToBackgroundImages()), which happy-dom can't run.
+        // convertToAnimationImages()), which happy-dom can't run.
         function createAnimationViewer() {
             const el = createViewer();
-            el.rasterizeBackgrounds = vi.fn(async (_sn, pageNumbers: number[]) => pageNumbers.map((n) => `data:image/png;base64,bg${n}`));
+            el.rasterizeBackgrounds = vi.fn(async (_sn, pageNumbers: number[]) =>
+                pageNumbers.map((n) => ({ imageDataUrl: `data:image/png;base64,bg${n}` })),
+            );
             return el;
         }
 
@@ -1355,6 +1357,34 @@ describe('<supernote-viewer>', () => {
             expect(el.shadowRoot!.querySelector('button[aria-label="Play write-on animation"]')).not.toBeNull();
         });
 
+        it('places a bitmap-only overlay above animation ink and removes it on return to static', async () => {
+            const el = createViewer();
+            el.setAttribute('invert-dark', '');
+            el.rasterizeBackgrounds = vi.fn(async () => [{
+                imageDataUrl: 'data:image/png;base64,bg1',
+                rasterOverlayDataUrl: 'data:image/png;base64,overlay1',
+            }]);
+            el.presentation = 'write-on-paused';
+            document.body.appendChild(el);
+            const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
+            el.noteData = readFixture('turkish-a6x-20230015-handwriting-erase.note');
+            await loaded;
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+            const container = el.shadowRoot!.querySelector('.page-container')!;
+            const image = container.querySelector('img')!;
+            const svg = container.querySelector('svg.stroke-animation-svg')!;
+            const overlay = container.querySelector<HTMLImageElement>('img.stroke-animation-raster-overlay')!;
+            expect(overlay.src).toContain('data:image/png;base64,overlay1');
+            expect(overlay.classList.contains('supernote-invert-dark')).toBe(true);
+            expect(Array.from(container.children).indexOf(svg)).toBeGreaterThan(Array.from(container.children).indexOf(image));
+            expect(Array.from(container.children).indexOf(overlay)).toBeGreaterThan(Array.from(container.children).indexOf(svg));
+
+            el.presentation = 'static';
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            expect(container.querySelector('.stroke-animation-raster-overlay')).toBeNull();
+        });
+
         it('write-on-paused opens primed at t=0 - blank until play is pressed', async () => {
             const el = createAnimationViewer();
             el.presentation = 'write-on-paused';
@@ -1406,8 +1436,8 @@ describe('<supernote-viewer>', () => {
 
         it('claims write-on pages before background rasterization, so a forced static load cannot reveal ink mid-entry', async () => {
             const el = createAnimationViewer();
-            let resolveBackgrounds!: (urls: string[]) => void;
-            el.rasterizeBackgrounds = vi.fn(() => new Promise<string[]>((resolve) => { resolveBackgrounds = resolve; }));
+            let resolveBackgrounds!: (layers: { imageDataUrl: string }[]) => void;
+            el.rasterizeBackgrounds = vi.fn(() => new Promise<{ imageDataUrl: string }[]>((resolve) => { resolveBackgrounds = resolve; }));
             el.presentation = 'write-on-paused';
             document.body.appendChild(el);
             const loaded = waitForEvent<{ pageCount: number }>(el, 'supernote-load');
@@ -1421,7 +1451,7 @@ describe('<supernote-viewer>', () => {
             await Promise.resolve();
             expect(el.rasterizePage).not.toHaveBeenCalled();
 
-            resolveBackgrounds(['data:image/png;base64,bg1']);
+            resolveBackgrounds([{ imageDataUrl: 'data:image/png;base64,bg1' }]);
             await new Promise((resolve) => window.setTimeout(resolve, 0));
             expect(el.shadowRoot!.querySelector('.page-container img')!.getAttribute('src')).toBe('data:image/png;base64,bg1');
         });

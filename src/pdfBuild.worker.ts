@@ -33,6 +33,11 @@ export type PdfBuildWorkerMessage =
         pages: IPdfPage[];
         strokes?: (IStroke[] | undefined)[];
         strokeStyles?: (StrokeStyle[] | undefined)[];
+        // The small subset of transparent text-box/Digest overlay pages.
+        // These are parallel: each page belongs at the corresponding global
+        // index in rasterOverlayPageIndexes, not at this array's own index.
+        rasterOverlayPages?: IPdfPage[];
+        rasterOverlayPageIndexes?: number[];
         // Device family (`header.APPLY_EQUIPMENT`) and native pageWidth for
         // the invisible recognition-text layer's coordinate scale — see
         // recognitionCoordinateScale in supernote-typescript. N6/A6X use
@@ -98,6 +103,28 @@ self.onmessage = async (e: MessageEvent<PdfBuildWorkerMessage>) => {
             const batch = data.pages.slice(start, start + PDF_ASSEMBLY_BATCH_SIZE);
             const note: IRenderableNote = { pageWidth: data.pageWidth, pageHeight: data.pageHeight, pages: batch };
             const images = await toImage(note);
+            // The main thread sends only pages that actually carry a
+            // bitmap-only DISABLE overlay. Select this batch's compact subset
+            // and retain its global indexes so an overlay never drifts to a
+            // neighboring PDF page.
+            const overlayEntries = data.rasterOverlayPages?.flatMap((page, i) => {
+                const pageIndex = data.rasterOverlayPageIndexes?.[i];
+                return pageIndex !== undefined && pageIndex >= start && pageIndex < start + batch.length
+                    ? [{ page, pageIndex }]
+                    : [];
+            }) ?? [];
+            const overlayImages = overlayEntries.length > 0
+                ? await toImage({
+                    pageWidth: data.pageWidth,
+                    pageHeight: data.pageHeight,
+                    pages: overlayEntries.map((entry) => entry.page),
+                })
+                : [];
+            const overlayByPageIndex = new Map<number, NonNullable<typeof overlayImages>[number]>();
+            overlayEntries.forEach((entry, i) => {
+                const image = overlayImages[i];
+                if (image) overlayByPageIndex.set(entry.pageIndex, image);
+            });
             for (let i = 0; i < batch.length; i++) {
                 // flattenToWhite(), not just discarding the alpha
                 // channel: background/unwritten pixels are packed with
@@ -118,6 +145,10 @@ self.onmessage = async (e: MessageEvent<PdfBuildWorkerMessage>) => {
                     // no-ops on empty/absent strokes either way.
                     strokes: data.strokes?.[start + i],
                     strokeStyles: data.strokeStyles?.[start + i],
+                    // Deliberately not flattenToWhite(): this PNG is
+                    // transparent outside DISABLE regions and must remain so
+                    // when addPdfPage paints it after the vector primitives.
+                    overlayImage: overlayByPageIndex.get(start + i),
                     equipment: data.equipment,
                     nativePageWidth: data.nativePageWidth,
                 });
