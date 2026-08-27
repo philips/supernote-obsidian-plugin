@@ -11,6 +11,7 @@
 // not Obsidian's vault-write APIs this codebase otherwise uses).
 import { ILink, SupernoteX } from 'supernote-typescript';
 import { ImageConverter } from '../render/imageConverter';
+import type { RasterizedPageImage } from '../render/imageConverter';
 import { RenderedNotePage, buildNotePagePlaceholders, evictNotePageImage, fillNotePagePlaceholder, parseNote } from '../render/noteRenderer';
 import { WordOverlayEntry, buildWordOverlay, buildWordSearchText, repositionWordOverlay } from '../render/wordOverlay';
 import { LinkOverlayEntry, bucketLinksByPage, buildLinkOverlay, repositionLinkOverlay } from '../render/linkOverlay';
@@ -383,7 +384,8 @@ button[aria-pressed="true"] {
    is an exact fit that tracks every zoom/fit-width resize the container
    goes through. pointer-events: none so find-in-note's word spans and the
    link rects (sibling elements) keep receiving their own clicks. */
-.pages .page-container > .stroke-animation-svg {
+.pages .page-container > .stroke-animation-svg,
+.pages .page-container > .stroke-animation-raster-overlay {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -750,12 +752,14 @@ button[aria-pressed="true"] {
 @media (prefers-color-scheme: dark) {
     :host(:not([dark])) .pages .page-container > img.supernote-invert-dark,
     :host(:not([dark])) .pages .page-container > .stroke-animation-svg.supernote-invert-dark,
+    :host(:not([dark])) .pages .page-container > .stroke-animation-raster-overlay.supernote-invert-dark,
     :host(:not([dark])) .sidebar-list-thumb.supernote-invert-dark {
         filter: invert(1);
     }
 }
 :host([dark]:not([dark="false"])) .pages .page-container > img.supernote-invert-dark,
 :host([dark]:not([dark="false"])) .pages .page-container > .stroke-animation-svg.supernote-invert-dark,
+:host([dark]:not([dark="false"])) .pages .page-container > .stroke-animation-raster-overlay.supernote-invert-dark,
 :host([dark]:not([dark="false"])) .sidebar-list-thumb.supernote-invert-dark {
     filter: invert(1);
 }
@@ -803,10 +807,10 @@ export class SupernoteViewerElement extends HTMLElement {
     };
 
     // Overridable for the same reason rasterizePage is - the write-on
-    // animation's background-only base layers go through the same real
-    // ImageConverter/Worker pipeline via convertToBackgroundImages().
-    rasterizeBackgrounds: (sn: SupernoteX, pageNumbers: number[]) => Promise<string[]> = async (sn, pageNumbers) => {
-        return new ImageConverter().convertToBackgroundImages(sn, pageNumbers);
+    // animation's background bases and optional bitmap-only text/Digest
+    // overlays go through the same real ImageConverter/Worker pipeline.
+    rasterizeBackgrounds: (sn: SupernoteX, pageNumbers: number[]) => Promise<RasterizedPageImage[]> = async (sn, pageNumbers) => {
+        return new ImageConverter().convertToAnimationImages(sn, pageNumbers);
     };
 
     // Overridable hook applied to each page's raw recognized text before
@@ -2818,7 +2822,7 @@ export class SupernoteViewerElement extends HTMLElement {
             // loader's page eligibility check cannot touch animated pages.
             this.startFullInkPageLoading(sn, this.pageStates);
 
-            const backgroundUrls = await this.rasterizeBackgrounds(sn, animIndexes.map((index) => index + 1));
+            const backgroundLayers = await this.rasterizeBackgrounds(sn, animIndexes.map((index) => index + 1));
             // A property change to static, a rerender, or disconnection
             // cancels this transition without allowing stale URLs to land.
             if (token !== this.renderToken || this.activePresentation !== 'write-on-preparing') return;
@@ -2828,15 +2832,26 @@ export class SupernoteViewerElement extends HTMLElement {
                 // This image now belongs to write-on presentation, not the
                 // static lazy-load/evict cycle.
                 state.loaded = true;
-                fillNotePagePlaceholder(state, backgroundUrls[k]);
+                const layer = backgroundLayers[k];
+                fillNotePagePlaceholder(state, layer.imageDataUrl);
                 const svg = this.pageAnimations[index]!.svg;
                 // The worker background inherits this class from the page
                 // placeholder. Keep the separately-rendered animation ink
-                // in the same dark-mode color space.
-                if (state.imageEl.classList.contains('supernote-invert-dark')) {
-                    svg.classList.add('supernote-invert-dark');
-                }
+                // and any bitmap-only text/Digest overlay in the same
+                // dark-mode color space.
+                const invertDark = state.imageEl.classList.contains('supernote-invert-dark');
+                if (invertDark) svg.classList.add('supernote-invert-dark');
+                state.containerEl.querySelector('.stroke-animation-raster-overlay')?.remove();
                 state.containerEl.appendChild(svg);
+                if (layer.rasterOverlayDataUrl) {
+                    const overlay = document.createElement('img');
+                    overlay.classList.add('stroke-animation-raster-overlay');
+                    if (invertDark) overlay.classList.add('supernote-invert-dark');
+                    overlay.src = layer.rasterOverlayDataUrl;
+                    // Appended after the SVG: bitmap-only text/Digest pixels
+                    // must remain above an animated vector highlighter.
+                    state.containerEl.appendChild(overlay);
+                }
             });
             // fillNotePagePlaceholder() reset each page's container width -
             // reapply whatever zoom/fit-width is currently active, exactly
@@ -2883,6 +2898,7 @@ export class SupernoteViewerElement extends HTMLElement {
         this.pageStates.forEach((state, index) => {
             const pageAnim = this.pageAnimations[index];
             pageAnim?.svg.remove();
+            state.containerEl.querySelector('.stroke-animation-raster-overlay')?.remove();
             if (wasWriteOn && pageAnim && sn) {
                 state.loaded = false;
                 evictNotePageImage(state, sn.pageWidth, sn.pageHeight);

@@ -16,11 +16,14 @@
 // feeds the on-screen note view and image export.
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
+import { pageMayNeedRasterOverlay } from './render/imageConverter';
 import * as path from 'path';
 import {
     SupernoteX,
     extractPageRenderData,
     prepareVectorInkPages,
+    buildVectorInkBackgroundNote,
+    buildRasterInkOverlayNote,
     toImage,
     addSvgPage,
 } from 'supernote-typescript';
@@ -38,29 +41,29 @@ function readFixture(name: string): Uint8Array {
     return new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
 }
 
-// The ink layers the worker nulls on a vector-ink page's slice before
-// rasterizing — matches INK_LAYER_NAMES in rasterize.worker.ts.
-const INK_LAYER_NAMES = ['MAINLAYER', 'LAYER1', 'LAYER2', 'LAYER3'] as const;
-
-// Replays the worker's per-page logic: slice the page, strip ink layers if
-// vectorInk, rasterize, then assemble (SVG for vector pages, raw image for
-// the fallback). Returns the SVG string from addSvgPage (the meaningful
-// artifact; the btoa data-URL wrapping the worker does is trivial).
+// Replays the worker's per-page logic: derive the public vector background
+// and optional compact raster-overlay notes on the full parsed note, slice
+// them for the worker, rasterize, then assemble. Returns the SVG string from
+// addSvgPage (the meaningful artifact; the btoa data-URL wrapping the worker
+// does is trivial).
 async function renderPage(sn: SupernoteX, pageNumber: number, vectorInk: boolean): Promise<{ svg: string; strippedInk: boolean }> {
-    const slice = extractPageRenderData(sn, pageNumber).pages[0];
     const vip = vectorInk ? prepareVectorInkPages(sn, [pageNumber], 1)[0] : undefined;
     const useVector = vip?.useVectorInk ?? false;
-    if (useVector) {
-        for (const name of INK_LAYER_NAMES) {
-            const layer = slice[name];
-            if (layer) slice[name] = { ...layer, bitmapBuffer: null };
-        }
-    }
+    const vectorPages = vip ? [vip] : [];
+    const backgroundNote = useVector ? buildVectorInkBackgroundNote(sn, vectorPages) : sn;
+    const disable = sn.pages[pageNumber - 1].DISABLE;
+    const overlayNote = useVector && disable !== undefined && disable !== '' && disable !== 'none'
+        ? buildRasterInkOverlayNote(sn, vectorPages)
+        : undefined;
+    const slice = extractPageRenderData(backgroundNote, pageNumber).pages[0];
     const [image] = await toImage({
         pageWidth: sn.pageWidth,
         pageHeight: sn.pageHeight,
         pages: [slice],
     });
+    const [overlayImage] = overlayNote
+        ? await toImage(extractPageRenderData(overlayNote, pageNumber))
+        : [];
     const svg = addSvgPage(
         { ...slice, recognitionElements: [] },
         image,
@@ -69,6 +72,7 @@ async function renderPage(sn: SupernoteX, pageNumber: number, vectorInk: boolean
         {
             strokes: useVector ? vip!.strokes : undefined,
             strokeStyles: useVector ? vip!.styles : undefined,
+            overlayImage,
             includeText: false,
         },
     );
@@ -87,6 +91,32 @@ describe('rasterize worker vectorInk wiring', () => {
         // And the background <image> is still there beneath them.
         expect(svg).toContain('<image');
         expect(svg).toContain('</svg>');
+        expect(svg).not.toContain('data-raster-ink-overlay="true"');
+    });
+
+    it('keeps bitmap-only text boxes above vector paths', async () => {
+        const sn = new SupernoteX(readFixture('textbox-n5-20260016-digest.note'));
+        const { svg, strippedInk } = await renderPage(sn, 4, true);
+
+        expect(strippedInk).toBe(true);
+        expect(svg).toContain('<path');
+        expect(svg).toContain('data-raster-ink-overlay="true"');
+        expect(svg.indexOf('<path')).toBeLessThan(svg.indexOf('data-raster-ink-overlay="true"'));
+    }, 30000);
+
+    it('routes a typeset PDF-link label to the overlay without a DISABLE rectangle', () => {
+        const sn = new SupernoteX(readFixture('textbox-n5-20260016-digest.note'));
+        const pageNumber = 5;
+        // This makes the routing decision depend only on the FONTSIZE > 0
+        // label. The upstream builder derives its retained rectangle from
+        // note.links, not from this page's Digest DISABLE metadata.
+        sn.pages[pageNumber - 1].DISABLE = 'none';
+        const vip = prepareVectorInkPages(sn, [pageNumber], 1)[0];
+
+        expect(vip.useVectorInk).toBe(true);
+        expect(pageMayNeedRasterOverlay(sn, vip)).toBe(true);
+        const overlay = buildRasterInkOverlayNote(sn, [vip]);
+        expect(overlay.pages[pageNumber - 1].MAINLAYER.bitmapBuffer).not.toBeNull();
     });
 
     it('leaves ink as a plain raster image (no vector <path>) when vectorInk is off', async () => {

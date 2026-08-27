@@ -1,14 +1,14 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
-import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildRenderNoteForVectorInk, toSvg } from 'supernote-typescript';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildVectorInkBackgroundNote, buildRasterInkOverlayNote, toSvg } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
 import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
 import PdfBuildWorker from 'pdfBuild.worker';
-import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
+import { ImageConverter, pageMayNeedRasterOverlay, terminateSharedWorkerPool } from './render/imageConverter';
 // Side-effect import: registers <supernote-viewer> (customElements.define)
 // - see SupernoteEmbed below, which is now a thin wrapper around it rather
 // than its own separate rendering implementation.
@@ -117,17 +117,26 @@ async function buildPdfInWorker(sn: SupernoteX, vectorInk: boolean): Promise<Uin
     // When vectorInk is on, prepare the per-page vector strokes/styles on the
     // main thread: the worker only receives structured-clone-safe IPdfPage
     // slices (extractPdfPageData), which don't carry the TOTALPATH buffer or
-    // note.titles the vector-ink decode reads. buildRenderNoteForVectorInk
-    // returns a copy of `sn` with the bitmap ink layers stripped from every
-    // page whose ink the vectors replace, so extractPdfPageData slices that
-    // stripped note and the worker's toImage() rasterizes only the
-    // background for those pages - addPdfPage() then draws the strokes on top.
+    // note.titles the vector-ink decode reads. The upstream background/overlay
+    // pair leaves templates below the vector paths and keeps bitmap-only
+    // DISABLE text boxes/Digests for a transparent image painted afterward.
     // Coordinates share toImage()'s native page-pixel space (this export never
     // upscales). See supernote-typescript's README, "Vector ink from the
     // parallel/Worker path".
     const vectorInkPages = vectorInk ? prepareVectorInkPages(sn, pageNumbers, 1) : [];
-    const renderNote = vectorInk ? buildRenderNoteForVectorInk(sn, vectorInkPages) : sn;
-    const pages = pageNumbers.map((n) => extractPdfPageData(renderNote, n).pages[0]);
+    const backgroundNote = vectorInk ? buildVectorInkBackgroundNote(sn, vectorInkPages) : sn;
+    const overlayPageIndexes = vectorInkPages.flatMap((vip, index) =>
+        pageMayNeedRasterOverlay(sn, vip) ? [index] : [],
+    );
+    const rasterOverlayNote = overlayPageIndexes.length > 0
+        ? buildRasterInkOverlayNote(sn, vectorInkPages)
+        : undefined;
+    const pages = pageNumbers.map((n) => extractPdfPageData(backgroundNote, n).pages[0]);
+    // Sent as compact, global-indexed slices rather than a transparent overlay
+    // for every vector page. The worker maps them back into its 8-page batches.
+    const rasterOverlayPages = rasterOverlayNote
+        ? overlayPageIndexes.map((index) => extractPdfPageData(rasterOverlayNote, pageNumbers[index]).pages[0])
+        : undefined;
     // Parallel to `pages` by position; undefined entries fall back to the
     // raster the worker already embedded (addPdfPage no-ops on empty/absent
     // strokes), so a page whose ink didn't decode keeps its rasterized ink.
@@ -149,6 +158,8 @@ async function buildPdfInWorker(sn: SupernoteX, vectorInk: boolean): Promise<Uin
                 pages,
                 strokes,
                 strokeStyles,
+                rasterOverlayPages,
+                rasterOverlayPageIndexes: rasterOverlayPages ? overlayPageIndexes : undefined,
                 // The note's device family + native pageWidth drive the
                 // recognition-coordinate scale of the invisible text layer
                 // (N6/A6X use their own pageWidth as the recognition canvas,

@@ -12,6 +12,7 @@ function fakeLink(overrides: Partial<ILink> = {}): ILink {
         LINKBITMAP: '0',
         LINKSTYLE: '0',
         LINKTIMESTAMP: '0',
+        FONTSIZE: '0',
         LINKRECT: '10,20,30,40',
         LINKRECTORI: '0',
         LINKPROTOCAL: 'RATTA_RLE',
