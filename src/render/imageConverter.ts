@@ -322,12 +322,24 @@ export interface RasterizedPageImage {
     rasterOverlayDataUrl?: string;
 }
 
-function pageMayNeedRasterOverlay(note: SupernoteX, vectorInkPage: VectorInkPage): boolean {
-    const disable = note.pages[vectorInkPage.pageNumber - 1]?.DISABLE;
+// Exported for the worker-routing regression test; it is not part of the
+// standalone component API.
+export function pageMayNeedRasterOverlay(note: SupernoteX, vectorInkPage: VectorInkPage): boolean {
+    const pageNumber = vectorInkPage.pageNumber;
+    const disable = note.pages[pageNumber - 1]?.DISABLE;
+    // A FONTSIZE > 0 link is an on-device typeset PDF-link label. It has no
+    // TOTALPATH entry and can sit immediately outside a Digest's DISABLE
+    // rectangle, so the upstream overlay builder retains it as raster ink.
+    // Ordinary link tags use FONTSIZE 0 and can enclose real vector strokes.
+    const hasTypesetLinkLabel = Object.entries(note.links).some(([key, links]) =>
+        Number(key.slice(0, 4)) === pageNumber && links.some((link) => Number(link.FONTSIZE) > 0),
+    );
     // buildRasterInkOverlayNote() treats malformed values as transparent, so
     // this inexpensive prefilter can conservatively send an unnecessary page
     // for malformed metadata without ever losing real overlay ink.
-    return vectorInkPage.useVectorInk && disable !== undefined && disable !== '' && disable !== 'none';
+    return vectorInkPage.useVectorInk && (
+        (disable !== undefined && disable !== '' && disable !== 'none') || hasTypesetLinkLabel
+    );
 }
 
 export class ImageConverter {

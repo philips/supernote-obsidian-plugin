@@ -16,6 +16,7 @@
 // feeds the on-screen note view and image export.
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
+import { pageMayNeedRasterOverlay } from './render/imageConverter';
 import * as path from 'path';
 import {
     SupernoteX,
@@ -102,6 +103,21 @@ describe('rasterize worker vectorInk wiring', () => {
         expect(svg).toContain('data-raster-ink-overlay="true"');
         expect(svg.indexOf('<path')).toBeLessThan(svg.indexOf('data-raster-ink-overlay="true"'));
     }, 30000);
+
+    it('routes a typeset PDF-link label to the overlay without a DISABLE rectangle', () => {
+        const sn = new SupernoteX(readFixture('textbox-n5-20260016-digest.note'));
+        const pageNumber = 5;
+        // This makes the routing decision depend only on the FONTSIZE > 0
+        // label. The upstream builder derives its retained rectangle from
+        // note.links, not from this page's Digest DISABLE metadata.
+        sn.pages[pageNumber - 1].DISABLE = 'none';
+        const vip = prepareVectorInkPages(sn, [pageNumber], 1)[0];
+
+        expect(vip.useVectorInk).toBe(true);
+        expect(pageMayNeedRasterOverlay(sn, vip)).toBe(true);
+        const overlay = buildRasterInkOverlayNote(sn, [vip]);
+        expect(overlay.pages[pageNumber - 1].MAINLAYER.bitmapBuffer).not.toBeNull();
+    });
 
     it('leaves ink as a plain raster image (no vector <path>) when vectorInk is off', async () => {
         const sn = new SupernoteX(readFixture(VECTOR_INK_FIXTURE));

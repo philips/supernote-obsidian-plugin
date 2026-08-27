@@ -8,7 +8,7 @@ import { ImportTodayModal } from './ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
 import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
 import PdfBuildWorker from 'pdfBuild.worker';
-import { ImageConverter, terminateSharedWorkerPool } from './render/imageConverter';
+import { ImageConverter, pageMayNeedRasterOverlay, terminateSharedWorkerPool } from './render/imageConverter';
 // Side-effect import: registers <supernote-viewer> (customElements.define)
 // - see SupernoteEmbed below, which is now a thin wrapper around it rather
 // than its own separate rendering implementation.
@@ -125,10 +125,9 @@ async function buildPdfInWorker(sn: SupernoteX, vectorInk: boolean): Promise<Uin
     // parallel/Worker path".
     const vectorInkPages = vectorInk ? prepareVectorInkPages(sn, pageNumbers, 1) : [];
     const backgroundNote = vectorInk ? buildVectorInkBackgroundNote(sn, vectorInkPages) : sn;
-    const overlayPageIndexes = vectorInkPages.flatMap((vip, index) => {
-        const disable = sn.pages[vip.pageNumber - 1]?.DISABLE;
-        return vip.useVectorInk && disable !== undefined && disable !== '' && disable !== 'none' ? [index] : [];
-    });
+    const overlayPageIndexes = vectorInkPages.flatMap((vip, index) =>
+        pageMayNeedRasterOverlay(sn, vip) ? [index] : [],
+    );
     const rasterOverlayNote = overlayPageIndexes.length > 0
         ? buildRasterInkOverlayNote(sn, vectorInkPages)
         : undefined;
