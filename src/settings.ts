@@ -131,7 +131,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
         return [
             {
                 name: 'Supernote IP address',
-                desc: '(Optional) when using the supernote "browse and access" for document upload/download or "screen mirroring" screenshot attachment this is the IP of the supernote device',
+                desc: 'The IP address of your Supernote is needed to sync notes, attach files, upload files, or attach screenshots. To find your IP address swipe down on your Supernote device and enable Screen Mirroring and/or Browse & Access; then the IP will be displayed',
                 control: {
                     type: 'text',
                     key: 'directConnectIP',
