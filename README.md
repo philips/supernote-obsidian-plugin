@@ -40,6 +40,8 @@ To test Beta builds of this plugin follow these steps:
 - [Read the docs](https://tfthacker.com/BRAT)
 - Add `https://github.com/philips/supernote-obsidian-plugin`
 
+If you are testing a Beta for a bug fix please close and re-open your Obsidian vault OR run the Obsidian command "Reload app without saving". Otherwise, not all of the code will be reloaded and your testing will not work.
+
 ## Manually installing the plugin
 
 - Copy over `main.js`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/obsidian-plugin-supernote/` from [https://github.com/philips/supernote-obsidian-plugin/releases](https://github.com/philips/supernote-obsidian-plugin)
