@@ -19,6 +19,7 @@ import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
+import { markToAnnotatedPdf } from './markPdf';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -584,6 +585,45 @@ class VaultWriter {
 		this.notifyExportComplete(pdfFile);
 	}
 
+	private annotatedSiblingPath(pdf: TFile): string {
+		const parent = pdf.parent?.path;
+		return `${parent ? `${parent}/` : ''}${pdf.basename} - annotated.pdf`;
+	}
+
+	async exportMarkToAnnotatedPdf(file: TFile, notify = true): Promise<TFile | null> {
+		if (!/\.pdf\.mark$/i.test(file.path)) {
+			throw new Error('This command expects a .pdf.mark file.');
+		}
+
+		const pdfPath = file.path.replace(/\.mark$/i, '');
+		const siblingPdf = this.app.vault.getAbstractFileByPath(pdfPath);
+		if (!(siblingPdf instanceof TFile) || siblingPdf.extension.toLowerCase() !== 'pdf') {
+			throw new Error(`No sibling PDF found for "${file.name}".`);
+		}
+
+		const markBytes = await this.app.vault.readBinary(file);
+		const mark = new SupernoteX(new Uint8Array(markBytes));
+		const originalPdf = new Uint8Array(await this.app.vault.readBinary(siblingPdf));
+		const annotatedPdf = await markToAnnotatedPdf(mark, originalPdf);
+
+		if (annotatedPdf === null) {
+			new Notice(`No visible ink found in "${file.name}".`);
+			return null;
+		}
+
+		const outPath = this.annotatedSiblingPath(siblingPdf);
+		const existing = this.app.vault.getAbstractFileByPath(outPath);
+		let outFile: TFile;
+		if (existing instanceof TFile) {
+			await this.app.vault.modifyBinary(existing, toArrayBuffer(annotatedPdf));
+			outFile = existing;
+		} else {
+			outFile = await this.app.vault.createBinary(outPath, toArrayBuffer(annotatedPdf));
+		}
+		if (notify) this.notifyExportComplete(outFile);
+		return outFile;
+	}
+
 	// `.spd` (Supernote Atelier) equivalents of the exports above. Unlike
 	// `.note`, `.spd` has no pages and no recognized/OCR text — just one
 	// flattened composite image (see renderAtelierCompositeDataUrl).
@@ -706,6 +746,16 @@ export class SupernoteView extends FileView {
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
+		if (file.extension === 'mark') {
+			const annotatedPdf = await vw.exportMarkToAnnotatedPdf(file, false);
+			if (annotatedPdf) {
+				// Opening another file while Obsidian is still committing this
+				// FileView's load can be overwritten by that in-flight transition.
+				window.setTimeout(() => void this.leaf.openFile(annotatedPdf), 0);
+			}
+			return;
+		}
+
 		const container = this.contentEl;
 		container.empty();
 		this.viewerEl = null;
@@ -740,6 +790,9 @@ export class SupernoteView extends FileView {
 		const bytes = await this.app.vault.readBinary(file);
 
 		const viewer = container.createEl('supernote-viewer');
+		if (file.extension === 'mark') {
+			viewer.style.setProperty('--supernote-viewer-page-background', '#ffffff');
+		}
 		// Applies the plugin's custom-dictionary substitution (if enabled)
 		// to recognized text shown in the component's own text mode - the
 		// one piece of SupernoteView's previous behavior <supernote-viewer>
@@ -1050,6 +1103,9 @@ export class SupernoteEmbed extends Component {
 		}
 
 		const viewer = this.containerEl.createEl('supernote-viewer');
+		if (this.file.extension === 'mark') {
+			viewer.style.setProperty('--supernote-viewer-page-background', '#ffffff');
+		}
 		// The outer .supernote-embed container (see styles.css) already
 		// supplies a bordered, resizable frame - `bare` drops the component's
 		// own default chrome so the two don't visually double up.
@@ -1198,7 +1254,7 @@ export default class SupernotePlugin extends Plugin {
 			VIEW_TYPE_SUPERNOTE,
 			(leaf) => new SupernoteView(leaf, this.settings)
 		);
-		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
+		this.registerExtensions(['note', 'mark'], VIEW_TYPE_SUPERNOTE);
 
 		// `.spd` files (Supernote Atelier app) — see atelierView.ts.
 		this.registerView(
@@ -1219,6 +1275,11 @@ export default class SupernotePlugin extends Plugin {
 				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
 			);
 			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+
+			this.app.embedRegistry.registerExtension('mark', (context, file, subpath) =>
+				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
+			);
+			this.register(() => this.app.embedRegistry?.unregisterExtension('mark'));
 
 			this.app.embedRegistry.registerExtension('spd', (context, file) =>
 				new SupernoteAtelierEmbed(this.app, this.settings, context.containerEl, file)
@@ -1268,6 +1329,26 @@ export default class SupernotePlugin extends Plugin {
 				} catch (err) {
 					new DirectConnectErrorModal(this.app, this.settings, err instanceof Error ? err : new Error(String(err))).open();
 				}
+			},
+		});
+
+		this.addCommand({
+			id: 'export-mark-as-annotated-pdf',
+			name: 'Export this .pdf.mark file as an annotated PDF',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== 'mark' || !/\.pdf$/i.test(file.basename)) {
+					return false;
+				}
+
+				if (checking) {
+					return true;
+				}
+
+				vw.exportMarkToAnnotatedPdf(file).catch((err: unknown) => {
+					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+				});
+				return true;
 			},
 		});
 
