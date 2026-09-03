@@ -1554,9 +1554,15 @@ export default class SupernotePlugin extends Plugin {
 			name: 'Sync supernote notes now',
 			callback: () => { void this.runSync(); },
 		});
+
+		this.addCommand({
+			id: 'sync-pdf-annotations-from-device',
+			name: 'Sync PDF annotations from device',
+			callback: () => { void this.runSync(true); },
+		});
 	}
 
-	async runSync(): Promise<void> {
+	async runSync(pdfAnnotationsOnly = false): Promise<void> {
 		if (this.settings.directConnectIP.length === 0) {
 			new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
 			return;
@@ -1572,13 +1578,19 @@ export default class SupernotePlugin extends Plugin {
 
 		this.syncInFlight = true;
 		try {
-			const result = await runDeviceSync(this.app, this.settings, () => this.saveSettings());
+			const result = await runDeviceSync(
+				this.app,
+				this.settings,
+				() => this.saveSettings(),
+				pdfAnnotationsOnly,
+			);
 
 			const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
 			if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
 			if (result.skippedConflicts.length > 0) parts.push(`${result.skippedConflicts.length} skipped (locally edited)`);
 			if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
-			new Notice(`Supernote sync: ${parts.join(', ')}`);
+			const label = pdfAnnotationsOnly ? 'Supernote PDF annotation sync' : 'Supernote sync';
+			new Notice(`${label}: ${parts.join(', ')}`);
 
 			if (result.skippedConflicts.length > 0) {
 				console.warn('Supernote sync skipped these files because they were edited locally since the last sync:', result.skippedConflicts);

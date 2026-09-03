@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { scanDevicePdfAnnotationTree, scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice } from './deviceFetch';
 
 vi.mock('obsidian', () => ({
@@ -58,11 +58,38 @@ describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', 
         vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
             { name: 'diary.note' },
             { name: 'sketch.spd' },
+            { name: 'paper.pdf' },
+            { name: 'paper.pdf.mark' },
         ]));
 
         const files = await scanDeviceSupernoteTree('192.168.1.50');
 
         expect(files.map((f) => f.name).sort()).toEqual(['diary.note', 'sketch.spd']);
+    });
+
+    it('finds PDF documents and mark sidecars for annotation sync', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'diary.note' },
+            { name: 'paper.pdf' },
+            { name: 'paper.pdf.mark' },
+        ]));
+
+        const files = await scanDevicePdfAnnotationTree('192.168.1.50');
+
+        expect(files.map((f) => f.name).sort()).toEqual(['paper.pdf', 'paper.pdf.mark']);
+    });
+
+    it('ignores PDFs and mark sidecars without their matching companion', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'paired.pdf' },
+            { name: 'paired.pdf.mark' },
+            { name: 'plain.pdf' },
+            { name: 'orphan.pdf.mark' },
+        ]));
+
+        const files = await scanDevicePdfAnnotationTree('192.168.1.50');
+
+        expect(files.map((f) => f.name).sort()).toEqual(['paired.pdf', 'paired.pdf.mark']);
     });
 
     it('keeps entries whose uri percent-encodes spaces in the filename', async () => {
