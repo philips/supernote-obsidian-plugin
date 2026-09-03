@@ -534,6 +534,7 @@ button[aria-pressed="true"] {
 .pages .page-container {
     position: relative;
     max-width: 100%;
+	background: var(--supernote-viewer-page-background, transparent);
     /* Centers a page narrower than .pages via auto-margin absorption
        instead of relying on .pages' own align-items: center - real,
        reported bug: a flex/grid item centered via the *container's* own
