@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
+import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon, loadPdfJs } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
 import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildVectorInkBackgroundNote, buildRasterInkOverlayNote, toSvg } from 'supernote-typescript';
 import { encode } from 'image-js';
@@ -19,6 +19,129 @@ import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
 import { formatSyncFailureLogEntry } from './deviceSync';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
+import { markToAnnotatedPdf } from './markPdf';
+
+interface PdfJsViewport {
+	width: number;
+	height: number;
+}
+
+interface PdfJsPage {
+	getViewport(params: { scale: number }): PdfJsViewport;
+	render(params: { canvasContext: CanvasRenderingContext2D; viewport: PdfJsViewport }): { promise: Promise<void> };
+}
+
+interface PdfJsDocument {
+	numPages: number;
+	getPage(pageNumber: number): Promise<PdfJsPage>;
+}
+
+interface PdfJsLib {
+	getDocument(params: { data: Uint8Array | ArrayBuffer }): { promise: Promise<PdfJsDocument> };
+}
+
+async function renderMarkViewer(
+	app: App,
+	file: TFile,
+	viewer: SupernoteViewerElement,
+): Promise<boolean> {
+	if (file.extension !== 'mark') return false;
+
+	const pdfPath = file.path.replace(/\.mark$/i, '');
+	const siblingPdf = app.vault.getAbstractFileByPath(pdfPath);
+	if (!(siblingPdf instanceof TFile) || siblingPdf.extension.toLowerCase() !== 'pdf') {
+		return false;
+	}
+
+	try {
+		const markBytes = await app.vault.readBinary(file);
+		const mark = new SupernoteX(new Uint8Array(markBytes));
+		const originalPdf = new Uint8Array(await app.vault.readBinary(siblingPdf));
+		const annotatedPdf = await markToAnnotatedPdf(mark, originalPdf);
+		const pdfBytes = annotatedPdf ?? originalPdf;
+
+		const pdfjsRaw: unknown = await loadPdfJs();
+		const pdfjs = pdfjsRaw as PdfJsLib;
+		const pdfDoc = await pdfjs.getDocument({ data: pdfBytes }).promise;
+		const numPages = pdfDoc.numPages;
+		if (numPages <= 0) return false;
+
+		const firstPage = await pdfDoc.getPage(1);
+		const vp1 = firstPage.getViewport({ scale: 1.0 });
+		const pageWidth = Math.round(vp1.width * 2);
+		const pageHeight = Math.round(vp1.height * 2);
+
+		const emptyLayer = {
+			LAYERTYPE: 'NOTE',
+			LAYERPROTOCOL: 'RATTA_RLE',
+			LAYERNAME: 'MAINLAYER',
+			LAYERPATH: '',
+			LAYERBITMAP: '',
+			LAYERVECTORGRAPH: '',
+			LAYERRECOGN: '',
+			bitmapBuffer: null,
+		};
+
+		const pages = Array.from({ length: numPages }, (_, i) => ({
+			PAGESTYLE: '0',
+			PAGESTYLEMD5: '0',
+			LAYERSWITCH: '0',
+			TOTALPATH: '0',
+			THUMBNAILTYPE: '0',
+			RECOGNSTATUS: RecognitionStatuses.NONE,
+			RECOGNTEXT: '0',
+			RECOGNFILE: '0',
+			RECOGNFILESTATUS: RecognitionStatuses.NONE,
+			ORIENTATION: '0',
+			MAINLAYER: emptyLayer,
+			LAYER1: emptyLayer,
+			LAYER2: emptyLayer,
+			LAYER3: emptyLayer,
+			BGLAYER: emptyLayer,
+			LAYERINFO: [],
+			LAYERSEQ: [],
+			recognitionElements: [],
+			paragraphs: '',
+			text: '',
+			totalPathBuffer: null,
+			PAGEID: mark.pages[i]?.PAGEID ?? `pdf-page-${i + 1}`,
+		}));
+
+		const markNote = {
+			pageWidth,
+			pageHeight,
+			addressSize: 4,
+			lengthFieldSize: 4,
+			signature: 'mark',
+			version: 20260016,
+			defaultLayers: ['MAINLAYER'],
+			header: mark.header,
+			footer: mark.footer,
+			keywords: {},
+			titles: {},
+			links: mark.links,
+			pages,
+		} as unknown as SupernoteX;
+
+		viewer.rasterizePage = async (_sn, pageNumber) => {
+			const page = await pdfDoc.getPage(pageNumber);
+			const vp = page.getViewport({ scale: 2.0 });
+			const canvas = activeWindow.document.createElement('canvas');
+			canvas.width = Math.round(vp.width);
+			canvas.height = Math.round(vp.height);
+			const ctx = canvas.getContext('2d');
+			if (!ctx) throw new Error('Could not get 2d context');
+			await page.render({ canvasContext: ctx, viewport: vp }).promise;
+			return canvas.toDataURL('image/png');
+		};
+
+		viewer.noteObject = markNote;
+		return true;
+	} catch (err) {
+		console.error('Failed to render mark overlay in viewer:', err);
+		return false;
+	}
+}
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -584,6 +707,45 @@ class VaultWriter {
 		this.notifyExportComplete(pdfFile);
 	}
 
+	private annotatedSiblingPath(pdf: TFile): string {
+		const parent = pdf.parent?.path;
+		return `${parent ? `${parent}/` : ''}${pdf.basename} - annotated.pdf`;
+	}
+
+	async exportMarkToAnnotatedPdf(file: TFile, notify = true): Promise<TFile | null> {
+		if (!/\.pdf\.mark$/i.test(file.path)) {
+			throw new Error('This command expects a .pdf.mark file.');
+		}
+
+		const pdfPath = file.path.replace(/\.mark$/i, '');
+		const siblingPdf = this.app.vault.getAbstractFileByPath(pdfPath);
+		if (!(siblingPdf instanceof TFile) || siblingPdf.extension.toLowerCase() !== 'pdf') {
+			throw new Error(`No sibling PDF found for "${file.name}".`);
+		}
+
+		const markBytes = await this.app.vault.readBinary(file);
+		const mark = new SupernoteX(new Uint8Array(markBytes));
+		const originalPdf = new Uint8Array(await this.app.vault.readBinary(siblingPdf));
+		const annotatedPdf = await markToAnnotatedPdf(mark, originalPdf);
+
+		if (annotatedPdf === null) {
+			new Notice(`No visible ink found in "${file.name}".`);
+			return null;
+		}
+
+		const outPath = this.annotatedSiblingPath(siblingPdf);
+		const existing = this.app.vault.getAbstractFileByPath(outPath);
+		let outFile: TFile;
+		if (existing instanceof TFile) {
+			await this.app.vault.modifyBinary(existing, toArrayBuffer(annotatedPdf));
+			outFile = existing;
+		} else {
+			outFile = await this.app.vault.createBinary(outPath, toArrayBuffer(annotatedPdf));
+		}
+		if (notify) this.notifyExportComplete(outFile);
+		return outFile;
+	}
+
 	// `.spd` (Supernote Atelier) equivalents of the exports above. Unlike
 	// `.note`, `.spd` has no pages and no recognized/OCR text — just one
 	// flattened composite image (see renderAtelierCompositeDataUrl).
@@ -737,9 +899,10 @@ export class SupernoteView extends FileView {
 			});
 		}
 
-		const bytes = await this.app.vault.readBinary(file);
-
 		const viewer = container.createEl('supernote-viewer');
+		if (file.extension === 'mark') {
+			viewer.setCssProps({ '--supernote-viewer-page-background': '#ffffff' });
+		}
 		// Applies the plugin's custom-dictionary substitution (if enabled)
 		// to recognized text shown in the component's own text mode - the
 		// one piece of SupernoteView's previous behavior <supernote-viewer>
@@ -832,7 +995,12 @@ export class SupernoteView extends FileView {
 				if (e.detail.pageNumber === undefined) resolve();
 			}) as EventListener, { once: true });
 		});
-		viewer.noteData = bytes;
+
+		const isMarkWithPdf = await renderMarkViewer(this.app, file, viewer);
+		if (!isMarkWithPdf) {
+			const bytes = await this.app.vault.readBinary(file);
+			viewer.noteData = bytes;
+		}
 		await loaded;
 	}
 
@@ -1050,6 +1218,9 @@ export class SupernoteEmbed extends Component {
 		}
 
 		const viewer = this.containerEl.createEl('supernote-viewer');
+		if (this.file.extension === 'mark') {
+			viewer.setCssProps({ '--supernote-viewer-page-background': '#ffffff' });
+		}
 		// The outer .supernote-embed container (see styles.css) already
 		// supplies a bordered, resizable frame - `bare` drops the component's
 		// own default chrome so the two don't visually double up.
@@ -1086,10 +1257,10 @@ export class SupernoteEmbed extends Component {
 			void handleNoteLinkClick(this.app, this.file.basename, this.pageIds, this.viewerEl, e.detail.link);
 		}) as EventListener);
 
-		// createEl() above already appended (and thus connected) it - matters
-		// for its own queueRender() (see SupernoteViewerElement.ts), which
-		// this kicks off via the fetch-free "bytes already in hand" path.
-		viewer.noteData = bytes;
+		const isMarkWithPdf = await renderMarkViewer(this.app, this.file, viewer);
+		if (!isMarkWithPdf) {
+			viewer.noteData = bytes;
+		}
 	}
 
 	// Obsidian's PDF embed never lets the embed shrink below one full page —
@@ -1198,7 +1369,7 @@ export default class SupernotePlugin extends Plugin {
 			VIEW_TYPE_SUPERNOTE,
 			(leaf) => new SupernoteView(leaf, this.settings)
 		);
-		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
+		this.registerExtensions(['note', 'mark'], VIEW_TYPE_SUPERNOTE);
 
 		// `.spd` files (Supernote Atelier app) — see atelierView.ts.
 		this.registerView(
@@ -1219,6 +1390,11 @@ export default class SupernotePlugin extends Plugin {
 				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
 			);
 			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+
+			this.app.embedRegistry.registerExtension('mark', (context, file, subpath) =>
+				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
+			);
+			this.register(() => this.app.embedRegistry?.unregisterExtension('mark'));
 
 			this.app.embedRegistry.registerExtension('spd', (context, file) =>
 				new SupernoteAtelierEmbed(this.app, this.settings, context.containerEl, file)
@@ -1268,6 +1444,26 @@ export default class SupernotePlugin extends Plugin {
 				} catch (err) {
 					new DirectConnectErrorModal(this.app, this.settings, err instanceof Error ? err : new Error(String(err))).open();
 				}
+			},
+		});
+
+		this.addCommand({
+			id: 'export-mark-as-annotated-pdf',
+			name: 'Export this .pdf.mark file as an annotated PDF',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== 'mark' || !/\.pdf$/i.test(file.basename)) {
+					return false;
+				}
+
+				if (checking) {
+					return true;
+				}
+
+				vw.exportMarkToAnnotatedPdf(file).catch((err: unknown) => {
+					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+				});
+				return true;
 			},
 		});
 
@@ -1473,9 +1669,15 @@ export default class SupernotePlugin extends Plugin {
 			name: 'Sync supernote notes now',
 			callback: () => { void this.runSync(); },
 		});
+
+		this.addCommand({
+			id: 'sync-pdf-annotations-from-device',
+			name: 'Sync PDF annotations from device',
+			callback: () => { void this.runSync(true); },
+		});
 	}
 
-	async runSync(): Promise<void> {
+	async runSync(pdfAnnotationsOnly = false): Promise<void> {
 		if (this.settings.directConnectIP.length === 0) {
 			new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
 			return;
@@ -1491,13 +1693,19 @@ export default class SupernotePlugin extends Plugin {
 
 		this.syncInFlight = true;
 		try {
-			const result = await runDeviceSync(this.app, this.settings, () => this.saveSettings());
+			const result = await runDeviceSync(
+				this.app,
+				this.settings,
+				() => this.saveSettings(),
+				pdfAnnotationsOnly,
+			);
 
 			const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
 			if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
 			if (result.skippedConflicts.length > 0) parts.push(`${result.skippedConflicts.length} skipped (locally edited)`);
 			if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
-			new Notice(`Supernote sync: ${parts.join(', ')}`);
+			const label = pdfAnnotationsOnly ? 'Supernote PDF annotation sync' : 'Supernote sync';
+			new Notice(`${label}: ${parts.join(', ')}`);
 
 			if (result.skippedConflicts.length > 0) {
 				console.warn('Supernote sync skipped these files because they were edited locally since the last sync:', result.skippedConflicts);

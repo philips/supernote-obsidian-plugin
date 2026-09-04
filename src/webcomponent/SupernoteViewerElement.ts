@@ -534,6 +534,7 @@ button[aria-pressed="true"] {
 .pages .page-container {
     position: relative;
     max-width: 100%;
+	background: var(--supernote-viewer-page-background, transparent);
     /* Centers a page narrower than .pages via auto-margin absorption
        instead of relying on .pages' own align-items: center - real,
        reported bug: a flex/grid item centered via the *container's* own
@@ -875,6 +876,7 @@ export class SupernoteViewerElement extends HTMLElement {
     private renderQueued = false;
     private renderToken = 0;
     private _noteData: ArrayBuffer | Uint8Array | null = null;
+    private _noteObject: SupernoteX | null = null;
     private findBarEl: HTMLElement | null = null;
     private findInputEl: HTMLInputElement | null = null;
     private findCountEl: HTMLElement | null = null;
@@ -953,6 +955,15 @@ export class SupernoteViewerElement extends HTMLElement {
 
     set noteData(value: ArrayBuffer | Uint8Array | null) {
         this._noteData = value;
+        this.queueRender();
+    }
+
+    get noteObject(): SupernoteX | null {
+        return this._noteObject;
+    }
+
+    set noteObject(value: SupernoteX | null) {
+        this._noteObject = value;
         this.queueRender();
     }
 
@@ -1190,32 +1201,36 @@ export class SupernoteViewerElement extends HTMLElement {
         const token = ++this.renderToken;
         this.teardownForRerender();
 
-        if (!this._noteData && !this.getAttribute('src')) {
+        if (!this._noteObject && !this._noteData && !this.getAttribute('src')) {
             this.showStatus('No Supernote file loaded — set the "src" attribute or the noteData property.');
             return;
         }
 
         this.showStatus('Loading…');
 
-        let bytes: ArrayBuffer;
-        try {
-            bytes = await this.loadBytes();
-        } catch (err) {
-            if (token !== this.renderToken) return;
-            this.handleLoadError(err);
-            return;
-        }
-        if (token !== this.renderToken) return;
-
         let sn: SupernoteX;
-        try {
-            sn = parseNote(bytes);
-        } catch (err) {
+        if (this._noteObject) {
+            sn = this._noteObject;
+        } else {
+            let bytes: ArrayBuffer;
+            try {
+                bytes = await this.loadBytes();
+            } catch (err) {
+                if (token !== this.renderToken) return;
+                this.handleLoadError(err);
+                return;
+            }
             if (token !== this.renderToken) return;
-            this.handleLoadError(err);
-            return;
+
+            try {
+                sn = parseNote(bytes);
+            } catch (err) {
+                if (token !== this.renderToken) return;
+                this.handleLoadError(err);
+                return;
+            }
+            if (token !== this.renderToken) return;
         }
-        if (token !== this.renderToken) return;
 
         this.sn = sn;
         this.buildViewer(sn);

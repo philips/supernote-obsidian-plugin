@@ -1,6 +1,6 @@
 import { App, TFile } from 'obsidian';
 import { SupernotePluginSettings } from './settings';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { scanDevicePdfAnnotationTree, scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
     DeviceNoteListing,
@@ -101,26 +101,42 @@ export async function runDeviceSync(
     app: App,
     settings: SupernotePluginSettings,
     saveSettings: () => Promise<void>,
+    pdfAnnotationsOnly = false,
 ): Promise<DeviceSyncResult> {
     const ip = settings.directConnectIP;
     if (!ip) {
         throw new Error('Supernote IP is unset');
     }
 
-    const deviceFiles = await scanDeviceSupernoteTree(ip);
+    const deviceFiles = pdfAnnotationsOnly
+        ? await scanDevicePdfAnnotationTree(ip)
+        : await scanDeviceSupernoteTree(ip);
     const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({ uri: f.uri, date: f.date, size: f.size }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
     const plan = planSync(listings, settings.noteSyncState, patterns);
+    // A device listing can be unchanged while its vault copy was deleted.
+    // Restore those files from the unchanged bucket; a missing file is safe to
+    // create, unlike a present file whose hash no longer matches the manifest.
+    const toSync = [...plan.toSync];
+    const unchanged: DeviceNoteListing[] = [];
+    for (const listing of plan.unchanged) {
+        const record = settings.noteSyncState[listing.uri];
+        if (record && await currentHash(app, record.vaultPath) === null) {
+            toSync.push(listing);
+        } else {
+            unchanged.push(listing);
+        }
+    }
 
     const result: DeviceSyncResult = {
         synced: 0,
-        unchanged: plan.unchanged.length,
+        unchanged: unchanged.length,
         excluded: plan.excluded.length,
         skippedConflicts: [],
         failed: [],
     };
 
-    for (const listing of plan.toSync) {
+    for (const listing of toSync) {
         try {
             const deviceFile = deviceFiles.find((f) => f.uri === listing.uri);
             if (!deviceFile) continue; // Listing changed between the scan and here; pick it up next run.
@@ -161,16 +177,16 @@ export async function runDeviceSync(
         }
     }
 
-    // The loop above only ever looks at plan.toSync — files the *device*
+    // The loop above only ever looks at toSync — files the *device*
     // reports as new or changed. A file the user edited locally (in the
     // vault, or directly on disk) whose device counterpart hasn't changed
     // would otherwise go completely unnoticed: nothing threatens to
     // overwrite it, but nothing flags the drift either, until the device
-    // copy eventually changes too and the file re-enters plan.toSync. Since
+    // copy eventually changes too and the file re-enters toSync. Since
     // this only reads vault-local files (no device/network round-trip — the
     // actual cost planSync's change detection avoids), it's cheap enough to
     // check on every run rather than waiting for that.
-    for (const listing of plan.unchanged) {
+    for (const listing of unchanged) {
         const record = settings.noteSyncState[listing.uri];
         if (!record) continue; // 'unchanged' implies a record exists; defensive only.
 
