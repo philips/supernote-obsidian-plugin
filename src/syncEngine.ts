@@ -114,13 +114,27 @@ export async function runDeviceSync(
     // A device listing can be unchanged while its vault copy was deleted.
     // Restore those files from the unchanged bucket; a missing file is safe to
     // create, unlike a present file whose hash no longer matches the manifest.
+    // Guarded per-file like the loops below: a vault file that can't even be
+    // read is one listing's problem, not a reason to abort the whole run —
+    // keep it in unchanged (conservatively: don't try to restore over a file
+    // we couldn't inspect) and let the drift-check loop report it on its own
+    // guarded pass.
     const toSync = [...plan.toSync];
     const unchanged: DeviceNoteListing[] = [];
     for (const listing of plan.unchanged) {
         const record = settings.noteSyncState[listing.uri];
-        if (record && await currentHash(app, record.vaultPath) === null) {
-            toSync.push(listing);
-        } else {
+        if (!record) {
+            unchanged.push(listing); // 'unchanged' implies a record exists; defensive only.
+            continue;
+        }
+        try {
+            if (await currentHash(app, record.vaultPath) === null) {
+                toSync.push(listing);
+            } else {
+                unchanged.push(listing);
+            }
+        } catch (err) {
+            console.error(`Failed to check ${record.vaultPath} for local deletion:`, err);
             unchanged.push(listing);
         }
     }

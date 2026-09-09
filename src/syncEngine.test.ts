@@ -280,15 +280,14 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Review finding: the PR's re-partition pass calls currentHash() outside any
-// try/catch, so one unreadable vault file now aborts the entire sync run.
-// The toSync loop and the drift-check loop both isolate per-file failures;
-// this skipped test encodes the behavior the pass should have (unskip once
-// fixed).
+// Fault isolation: every pass over vault files (toSync download, the
+// deleted-file restore check, the drift check) must degrade per-file when one
+// file can't be read — a single unreadable file must never abort the whole
+// sync run.
 // ---------------------------------------------------------------------------
 
 describe('runDeviceSync: fault isolation', () => {
-    it.skip('keeps syncing when an unchanged vault file cannot be read', async () => {
+    it('keeps syncing when an unchanged vault file cannot be read', async () => {
         const vault = makeVault();
         const unreadable = deviceFile('unreadable.note', 'device version');
         const healthy = deviceFile('healthy.note', 'fine');
@@ -311,6 +310,9 @@ describe('runDeviceSync: fault isolation', () => {
         const result = await runDeviceSync(vault.app, settings, async () => {});
 
         expect(result.synced).toBe(0);
+        // Conservatively kept in the unchanged bucket on error — never
+        // restored over a file we couldn't inspect.
+        expect(result.unchanged).toBe(2);
         expect(vault.readText(vaultPathFor('healthy.note'))).toBe('fine');
     });
 });
