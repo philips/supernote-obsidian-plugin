@@ -111,16 +111,43 @@ export async function runDeviceSync(
     const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({ uri: f.uri, date: f.date, size: f.size }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
     const plan = planSync(listings, settings.noteSyncState, patterns);
+    // A device listing can be unchanged while its vault copy was deleted.
+    // Restore those files from the unchanged bucket; a missing file is safe to
+    // create, unlike a present file whose hash no longer matches the manifest.
+    // Guarded per-file like the loops below: a vault file that can't even be
+    // read is one listing's problem, not a reason to abort the whole run —
+    // keep it in unchanged (conservatively: don't try to restore over a file
+    // we couldn't inspect) and let the drift-check loop report it on its own
+    // guarded pass.
+    const toSync = [...plan.toSync];
+    const unchanged: DeviceNoteListing[] = [];
+    for (const listing of plan.unchanged) {
+        const record = settings.noteSyncState[listing.uri];
+        if (!record) {
+            unchanged.push(listing); // 'unchanged' implies a record exists; defensive only.
+            continue;
+        }
+        try {
+            if (await currentHash(app, record.vaultPath) === null) {
+                toSync.push(listing);
+            } else {
+                unchanged.push(listing);
+            }
+        } catch (err) {
+            console.error(`Failed to check ${record.vaultPath} for local deletion:`, err);
+            unchanged.push(listing);
+        }
+    }
 
     const result: DeviceSyncResult = {
         synced: 0,
-        unchanged: plan.unchanged.length,
+        unchanged: unchanged.length,
         excluded: plan.excluded.length,
         skippedConflicts: [],
         failed: [],
     };
 
-    for (const listing of plan.toSync) {
+    for (const listing of toSync) {
         try {
             const deviceFile = deviceFiles.find((f) => f.uri === listing.uri);
             if (!deviceFile) continue; // Listing changed between the scan and here; pick it up next run.
@@ -161,16 +188,16 @@ export async function runDeviceSync(
         }
     }
 
-    // The loop above only ever looks at plan.toSync — files the *device*
+    // The loop above only ever looks at toSync — files the *device*
     // reports as new or changed. A file the user edited locally (in the
     // vault, or directly on disk) whose device counterpart hasn't changed
     // would otherwise go completely unnoticed: nothing threatens to
     // overwrite it, but nothing flags the drift either, until the device
-    // copy eventually changes too and the file re-enters plan.toSync. Since
+    // copy eventually changes too and the file re-enters toSync. Since
     // this only reads vault-local files (no device/network round-trip — the
     // actual cost planSync's change detection avoids), it's cheap enough to
     // check on every run rather than waiting for that.
-    for (const listing of plan.unchanged) {
+    for (const listing of unchanged) {
         const record = settings.noteSyncState[listing.uri];
         if (!record) continue; // 'unchanged' implies a record exists; defensive only.
 
