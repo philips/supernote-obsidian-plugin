@@ -6,13 +6,15 @@ But, I also use Obsidian for organizing and capturing all of my digital notes.
 
 This plugin enables me (and now you!) to import handwritten notes directly from your device (no cloud!) into Obsidian and view/export/organize them on a desktop, phone or tablet.
 
-This plugin has seven main features:
+This plugin has eight main features:
 
 - 📝 View Supernote `*.note` files in your Obsidian Vault. You can link to these notes from your Markdown notes too `[My Note](example.note)`.
 
 - 🔗 Embed a note inline in another note with `![[example.note]]` (scrollable, with page nav), or just one page with `![[example.note#page=2]]`.
 
 - ➡️  Export Supernote `*.note` files as PNGs, SVGs, PDFs and/or markdown files and attach them to your Vault.
+
+- ✍️ View Supernote `*.mark` annotation sidecars in-memory directly on top of their original PDF documents in the note viewer without creating any new files. The original PDF and `.mark` file remain unchanged.
 
 - 🧠 Attach all of today's modified Supernote notes and text to the current Obsidian note with the "Import notes edited today" command (great when paired with [daily notes](https://obsidian.md/help/plugins/daily-notes))
 
@@ -63,6 +65,10 @@ Thank you to [Tiemen Schuijbroek](https://gitlab.com/Tiemen/supernote) for devel
 **Q** The on-screen note's or exported PDF's ink looks different from the device / renders wrong. Can I turn vector ink off?
 
 **A** Yes. The note viewer and exported PDFs/SVGs draw pen strokes as crisp vector paths by default (instead of rasterizing the ink), so they stay sharp at any zoom. If ink renders incorrectly or differently from your device, disable **Settings → Supernote → Vector ink** — the view and exports then fall back to the original rasterized ink. The setting is on by default. (PNG export and the thumbnail sidebar stay rasterized either way, since a PNG is pixels and a tiny preview gains nothing from vector paths.)
+
+**Q** How do I view or export PDF annotations (`.mark` files)?
+
+**A** Keep the original PDF and its device-created `.pdf.mark` sidecar file together in the vault. When you open the `.pdf.mark` file, the plugin renders your handwritten annotations directly on top of the original PDF in memory—no extra files are generated. If you want to save a standalone annotated PDF file into your vault, run the command **Export this .pdf.mark file as an annotated PDF**. To sync companion PDF and `.mark` pairs from your device, run **Sync PDF annotations from device**.
 
 ## Relevant Resources
 

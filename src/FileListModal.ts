@@ -52,12 +52,12 @@ export async function fetchSupernoteDirectory(
 }
 
 const SYNCABLE_EXTENSION_PATTERN = /\.(note|spd)$/i;
+const PDF_ANNOTATION_EXTENSION_PATTERN = /\.pdf(?:\.mark)?$/i;
 
 // Recursively walks the whole device tree starting at `path`, collecting
 // every `.note`/`.spd` file found. Shared by ImportTodayModal (which further
-// filters by date) and the device auto-sync engine (which filters by the
-// configured path patterns) — both need the same "list everything once"
-// traversal, just with different downstream filtering.
+// filters by date) and the standard device auto-sync engine (which filters by
+// configured path patterns).
 export async function scanDeviceSupernoteTree(
     ip: string,
     path = '/',
@@ -65,6 +65,7 @@ export async function scanDeviceSupernoteTree(
     pathLeafName?: string,
     directoryNames: string[] = [],
     directoryNamesByUri: Map<string, string[]> = new Map(),
+    includeFile: (file: SupernoteFile) => boolean = (file) => SYNCABLE_EXTENSION_PATTERN.test(file.name),
 ): Promise<SupernoteFile[]> {
     if (visited.has(path)) return [];
     visited.add(path);
@@ -91,12 +92,35 @@ export async function scanDeviceSupernoteTree(
                 entry.name,
                 entryDirectoryNames,
                 directoryNamesByUri,
+                includeFile,
             ));
-        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && isTrustedListingEntry(entry)) {
+        } else if (includeFile(entry) && isTrustedListingEntry(entry)) {
             results.push({ ...entry, directoryNames: parentNames });
         }
     }
     return results;
+}
+
+// PDF annotations are a two-file unit on a Supernote: the original `.pdf`
+// and its `.pdf.mark` sidecar. Ignore lone PDFs and lone sidecars so the
+// annotation-specific sync only mirrors documents it can actually render.
+// This separate traversal leaves the normal note sync and the "Import notes
+// edited today" workflow limited to their original `.note`/`.spd` scope.
+export async function scanDevicePdfAnnotationTree(ip: string): Promise<SupernoteFile[]> {
+    const candidates = await scanDeviceSupernoteTree(
+        ip,
+        '/',
+        new Set(),
+        undefined,
+        [],
+        new Map(),
+        (file) => PDF_ANNOTATION_EXTENSION_PATTERN.test(file.name),
+    );
+
+    const uris = new Set(candidates.map((file) => file.uri));
+    return candidates.filter((file) => file.name.toLowerCase().endsWith('.mark')
+        ? uris.has(file.uri.slice(0, -'.mark'.length))
+        : uris.has(`${file.uri}.mark`));
 }
 
 function parentUri(uri: string): string {

@@ -1,6 +1,6 @@
 import { App, TFile } from 'obsidian';
 import { SupernotePluginSettings } from './settings';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { scanDevicePdfAnnotationTree, scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
     DeviceNoteListing,
@@ -101,13 +101,16 @@ export async function runDeviceSync(
     app: App,
     settings: SupernotePluginSettings,
     saveSettings: () => Promise<void>,
+    pdfAnnotationsOnly = false,
 ): Promise<DeviceSyncResult> {
     const ip = settings.directConnectIP;
     if (!ip) {
         throw new Error('Supernote IP is unset');
     }
 
-    const deviceFiles = await scanDeviceSupernoteTree(ip);
+    const deviceFiles = pdfAnnotationsOnly
+        ? await scanDevicePdfAnnotationTree(ip)
+        : await scanDeviceSupernoteTree(ip);
     const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({ uri: f.uri, date: f.date, size: f.size }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
     const plan = planSync(listings, settings.noteSyncState, patterns);
