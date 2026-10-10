@@ -100,6 +100,9 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
      * the overwrite-safety guard (never clobber a local edit).
      */
     noteSyncState: SyncManifest;
+    isAutoSyncMarkdownEnabled: boolean;
+    noteWatchFolder: string;
+    markdownMirrorFolder: string;
 }
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
@@ -113,6 +116,9 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     syncFolder: 'Supernote sync',
     syncPathFiltersRaw: '',
     noteSyncState: {},
+    isAutoSyncMarkdownEnabled: false,
+    noteWatchFolder: '',
+    markdownMirrorFolder: '',
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
 
@@ -230,6 +236,32 @@ export class SupernoteSettingTab extends PluginSettingTab {
                                 new Notice('Supernote sync history cleared');
                             });
                         });
+                },
+            },
+            {
+                name: 'Auto-sync .note files to markdown',
+                desc: 'Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.',
+                control: {
+                    type: 'toggle',
+                    key: 'isAutoSyncMarkdownEnabled',
+                },
+            },
+            {
+                name: 'Auto-sync watched folder',
+                desc: 'Only auto-sync .note files inside this vault folder. Leave empty to watch the whole vault. Example: Supernote',
+                control: {
+                    type: 'text',
+                    key: 'noteWatchFolder',
+                    placeholder: 'Supernote',
+                },
+            },
+            {
+                name: 'Markdown mirror folder',
+                desc: 'Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: Supernote Markdown',
+                control: {
+                    type: 'text',
+                    key: 'markdownMirrorFolder',
+                    placeholder: 'Supernote Markdown',
                 },
             },
             {
@@ -384,6 +416,41 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     this.plugin.settings.noteSyncState = {};
                     await this.plugin.saveSettings();
                     new Notice('Supernote sync history cleared');
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Auto-sync .note files to markdown')
+            .setDesc('Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.isAutoSyncMarkdownEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.isAutoSyncMarkdownEnabled = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Auto-sync watched folder')
+            .setDesc('Only auto-sync .note files inside this vault folder. Leave empty to watch the whole vault. Example: Supernote')
+            .addText(text => text
+                .setPlaceholder('Supernote')
+                .setValue(this.plugin.settings.noteWatchFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.noteWatchFolder = value.trim().replace(/\/$/, '');
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Markdown mirror folder')
+            .setDesc('Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: Supernote Markdown')
+            .addText(text => text
+                .setPlaceholder('Supernote Markdown')
+                .setValue(this.plugin.settings.markdownMirrorFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.markdownMirrorFolder = value.trim().replace(/\/$/, '');
+                    await this.plugin.saveSettings();
                 })
             );
 

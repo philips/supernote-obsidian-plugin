@@ -374,15 +374,43 @@ class VaultWriter {
 	// of `imgs` (vault TFiles, for the embedded image links) — a markdown-only
 	// export passes `imgs: null` but can still pass `images` so registered
 	// processors run, even though no image attachment gets saved.
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null): Promise<TFile> {
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null, overwrite = false): Promise<TFile> {
 		let content = '';
 
-		// Generate a non-conflicting filename - it has a bit of a race but that is OK
-		let filename = `${file.parent?.path}/${file.basename}.md`;
-		let i = 0;
-		while (this.app.vault.getFileByPath(filename) !== null) {
-			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
+		// Derive the output path from the .note file's own vault path rather than
+		// `${file.parent?.path}/${file.basename}.md`: for vault-root files
+		// file.parent.path is "/", which produced a "//name.md" double-slash bug.
+		const relMdPath = file.path.replace(/\.note$/i, '.md');
+		// The mirror folder applies only when the file is inside the watched
+		// folder (or no watched folder is set) - files outside it always save
+		// alongside the note. When both are set, the watched folder prefix is
+		// stripped from the mirror path to avoid duplicating it.
+		const mirrorFolder = this.settings.markdownMirrorFolder;
+		const watchFolder = this.settings.noteWatchFolder.replace(/\/$/, '');
+		let baseFilename: string;
+		if (mirrorFolder && (!watchFolder || file.path.startsWith(watchFolder + '/'))) {
+			let mirrorRelPath = relMdPath;
+			if (watchFolder) {
+				const prefix = watchFolder + '/';
+				if (mirrorRelPath.startsWith(prefix)) mirrorRelPath = mirrorRelPath.slice(prefix.length);
+			}
+			baseFilename = `${mirrorFolder}/${mirrorRelPath}`;
+		} else {
+			baseFilename = relMdPath;
 		}
+		const dir = baseFilename.slice(0, baseFilename.length - `${file.basename}.md`.length);
+		let filename = baseFilename;
+
+		if (!overwrite) {
+			// Generate a non-conflicting filename - it has a bit of a race but that is OK
+			let i = 0;
+			while (this.app.vault.getFileByPath(filename) !== null) {
+				filename = `${dir}${file.basename} ${++i}.md`;
+			}
+		}
+
+		// Create any missing parent folders (e.g. the mirror folder) before writing.
+		if (dir) await this.ensureFolderExists(dir.replace(/\/$/, ''));
 
 		content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
@@ -407,7 +435,43 @@ class VaultWriter {
 			}
 		}
 
+		if (overwrite) {
+			const existing = this.app.vault.getFileByPath(baseFilename);
+			if (existing) {
+				await this.app.vault.modify(existing, content);
+				return existing;
+			} else {
+				try {
+					return await this.app.vault.create(baseFilename, content);
+				} catch (error) {
+					// Race condition: Obsidian fires both 'create' and 'modify' vault
+					// events in quick succession when a .note file syncs, and both
+					// handlers call attachMarkdownFile(). The file may have been
+					// created between the getFileByPath check above and this
+					// vault.create() call - fetch it again and update it instead.
+					const raceFile = this.app.vault.getFileByPath(baseFilename);
+					if (!raceFile) throw error;
+					await this.app.vault.modify(raceFile, content);
+					return raceFile;
+				}
+			}
+		}
 		return this.app.vault.create(filename, content);
+	}
+
+	private async ensureFolderExists(path: string): Promise<void> {
+		const parts = path.split('/').filter(Boolean);
+		let current = '';
+		for (const part of parts) {
+			current = current ? `${current}/${part}` : part;
+			if (!this.app.vault.getAbstractFileByPath(current)) {
+				try {
+					await this.app.vault.createFolder(current);
+				} catch {
+					// Folder may have been created concurrently by another sync event; ignore.
+				}
+			}
+		}
 	}
 
 	// `images` is already-rasterized page data URLs (see rasterizePages()) —
@@ -437,7 +501,7 @@ class VaultWriter {
 		return imgs;
 	}
 
-	async attachMarkdownFile(file: TFile) {
+	async attachMarkdownFile(file: TFile, overwrite = false) {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
@@ -445,8 +509,8 @@ class VaultWriter {
 		// processor still needs one to work with — rasterize only when
 		// there's actually a processor to hand it to.
 		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
-		const mdFile = await this.writeMarkdownFile(file, sn, null, images);
-		this.notifyExportComplete(mdFile);
+		const mdFile = await this.writeMarkdownFile(file, sn, null, images, overwrite);
+		if (!overwrite) this.notifyExportComplete(mdFile);
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -1473,6 +1537,46 @@ export default class SupernotePlugin extends Plugin {
 			name: 'Sync supernote notes now',
 			callback: () => { void this.runSync(); },
 		});
+
+		// Auto-sync: keep each watched .note file's markdown export up to date as
+		// the .note file changes, e.g. via a mobile sync tool dropping updated
+		// files into the vault. 'modify' fires on every incremental write during
+		// a sync, so debounce it rather than re-exporting on each one.
+		const syncDebounceMap = new Map<string, ReturnType<typeof window.setTimeout>>();
+		this.register(() => {
+			for (const timeout of syncDebounceMap.values()) window.clearTimeout(timeout);
+			syncDebounceMap.clear();
+		});
+
+		const isWatchedNoteFile = (file: unknown): file is TFile => {
+			if (!this.settings.isAutoSyncMarkdownEnabled) return false;
+			if (!(file instanceof TFile) || file.extension !== 'note') return false;
+			const watchFolder = this.settings.noteWatchFolder.replace(/\/$/, '');
+			return !watchFolder || file.path.startsWith(watchFolder + '/');
+		};
+
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (!isWatchedNoteFile(file)) return;
+				vw.attachMarkdownFile(file, true).catch((err: unknown) => {
+					console.error('Supernote auto-sync (create) error:', err);
+				});
+			})
+		);
+
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => {
+				if (!isWatchedNoteFile(file)) return;
+				const existing = syncDebounceMap.get(file.path);
+				if (existing) window.clearTimeout(existing);
+				syncDebounceMap.set(file.path, window.setTimeout(() => {
+					syncDebounceMap.delete(file.path);
+					vw.attachMarkdownFile(file, true).catch((err: unknown) => {
+						console.error('Supernote auto-sync (modify) error:', err);
+					});
+				}, 2000));
+			})
+		);
 	}
 
 	async runSync(): Promise<void> {
