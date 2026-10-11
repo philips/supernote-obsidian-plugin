@@ -4,6 +4,7 @@ import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'ob
 import { SyncManifest } from './deviceSync';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
+const MARKDOWN_AUTO_SYNC_HEADING = 'Markdown Auto Sync';
 
 export type FileBrowserSortOrder = 'name-asc' | 'name-desc' | 'date-desc' | 'date-asc';
 
@@ -239,6 +240,18 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
+                name: 'Custom dictionary',
+                render: (setting) => {
+                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                },
+            },
+            {
+                name: MARKDOWN_AUTO_SYNC_HEADING,
+                render: (setting) => {
+                    setting.setHeading();
+                },
+            },
+            {
                 name: 'Auto-sync .note files to markdown',
                 desc: 'Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.',
                 control: {
@@ -262,12 +275,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     type: 'text',
                     key: 'markdownMirrorFolder',
                     placeholder: 'Supernote Markdown',
-                },
-            },
-            {
-                name: 'Custom dictionary',
-                render: (setting) => {
-                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
                 },
             },
         ];
@@ -418,6 +425,10 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     new Notice('Supernote sync history cleared');
                 })
             );
+
+        new Setting(containerEl)
+            .setName(MARKDOWN_AUTO_SYNC_HEADING)
+            .setHeading();
 
         new Setting(containerEl)
             .setName('Auto-sync .note files to markdown')
