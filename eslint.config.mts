@@ -7,7 +7,18 @@ export default defineConfig(
 		'node_modules',
 		'supernote-typescript',
 		'scripts',
+		// Local Claude Code state (worktrees, etc.) — already gitignored, so
+		// a fresh checkout never has it, but a local `eslint .` run in a
+		// sandbox with leftover worktrees would otherwise sweep in whatever
+		// unrelated projects happen to live under there.
+		'.claude',
 		'esbuild.config.mjs',
+		'esbuild.webcomponent.config.mjs',
+		'esbuild.atelier-webcomponent.config.mjs',
+		'dist',
+		// Manual/CI copies of the standalone bundles served straight from
+		// the demo directory (gitignored, like the root dist/).
+		'demo/dist',
 		'version-bump.mjs',
 		'versions.json',
 		'manifest.json',
@@ -36,10 +47,62 @@ export default defineConfig(
 		// obsidianmd/no-global-this exists for popout-window compatibility in
 		// plugin runtime code; it doesn't apply to test setup, where `globalThis`
 		// is the only thing available to stand in for the `window` Vitest's node
-		// environment doesn't provide.
-		files: ['**/*.test.ts'],
+		// environment doesn't provide. Likewise obsidianmd/no-nodejs-modules
+		// (mobile has no Node APIs) doesn't apply here either — test files run
+		// under Vitest's real Node process and are never bundled into the
+		// plugin (see linkOverlay.test.ts's fs-based fixture read).
+		files: ['**/*.test.ts', '**/*.test-stub.ts'],
 		rules: {
 			'obsidianmd/no-global-this': 'off',
+			'obsidianmd/no-nodejs-modules': 'off',
+		},
+	},
+	{
+		// src/render/ is deliberately free of any `obsidian` import - see its
+		// files' own header comments and issue #183 (pulling SupernoteView out
+		// into a standalone web component) - so it builds DOM with plain
+		// document.createElement/.style, not Obsidian's createDiv/createEl/
+		// setCssProps helpers these two rules otherwise enforce everywhere
+		// else in this plugin.
+		files: ['src/render/**/*.ts'],
+		rules: {
+			'obsidianmd/prefer-create-el': 'off',
+			'obsidianmd/no-static-styles-assignment': 'off',
+		},
+	},
+	{
+		// vitest.config.ts/eslint.config.mts run directly under Node (loaded
+		// by vitest's/eslint's own CLI, never bundled into the plugin), so
+		// they get real CommonJS globals like `__dirname` even though
+		// they're written with `import` syntax - Vite's own config loader
+		// transpiles config files like this one to CJS before running them.
+		// obsidianmd/no-nodejs-modules doesn't apply for the same
+		// never-bundled reason as the `**/*.test.ts` override above.
+		files: ['vitest.config.ts', 'eslint.config.mts'],
+		languageOptions: {
+			globals: {
+				...globals.node,
+			},
+		},
+		rules: {
+			'obsidianmd/no-nodejs-modules': 'off',
+		},
+	},
+	{
+		// src/webcomponent/ is the standalone <supernote-viewer> custom
+		// element (issue #183) - never bundled into the Obsidian plugin
+		// itself (see esbuild.webcomponent.config.mjs, a separate entry
+		// point), so the obsidianmd rules built around Obsidian's own
+		// runtime (createDiv/createEl, requestUrl instead of fetch, no
+		// injecting <style> tags because Obsidian already loads styles.css
+		// for you) don't apply here - this file *is* the runtime, on a plain
+		// page with none of that available.
+		files: ['src/webcomponent/**/*.ts'],
+		rules: {
+			'obsidianmd/prefer-create-el': 'off',
+			'obsidianmd/no-static-styles-assignment': 'off',
+			'obsidianmd/no-forbidden-elements': 'off',
+			'no-restricted-globals': 'off',
 		},
 	},
 );

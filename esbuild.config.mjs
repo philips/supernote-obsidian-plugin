@@ -2,7 +2,10 @@ import esbuild from "esbuild";
 import process from "process";
 import path from "path";
 import { fileURLToPath } from "url";
-import builtins from "builtin-modules";
+// Node's own builtin-module list - the community-plugin scan (issue
+// #228) flags the `builtin-modules` npm package, which on modern Node is
+// only a thin filter over this.
+import { builtinModules } from "node:module";
 import inlineWorkerPlugin from "esbuild-plugin-inline-worker";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,7 +33,21 @@ const context = await esbuild.context({
 		'supernote-typescript': path.join(__dirname, 'supernote-typescript'),
 	},
 	bundle: true,
-	plugins: [inlineWorkerPlugin()],
+	loader: {
+		// sql.js's wasm binary (used by SupernoteAtelier for .spd files) is
+		// embedded directly in the bundle rather than fetched/read at
+		// runtime, so it works the same on desktop (Node/Electron) and
+		// mobile (browser) Obsidian without a locateFile() callback.
+		'.wasm': 'binary',
+	},
+	// inlineWorkerPlugin() runs a wholly separate, nested esbuild.build()
+	// call for every *.worker.ts file (see its own README/source) - that
+	// nested build does NOT inherit this config's own `loader` above, only
+	// whatever's passed as its own argument here, so atelierComposite
+	// .worker.ts's identical sql.js wasm import (via render/atelierRenderer
+	// .ts's openAtelierBuffer()) needs the same loader entry repeated
+	// explicitly.
+	plugins: [inlineWorkerPlugin({ loader: { '.wasm': 'binary' } })],
 	external: [
 		"obsidian",
 		"electron",
@@ -45,7 +62,7 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
-		...builtins],
+		...builtinModules],
 	format: "cjs",
 	target: "es2018",
 	logLevel: "info",

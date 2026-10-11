@@ -1,8 +1,9 @@
 import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
 import SupernotePlugin from './main';
-import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from 'settings';
+import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from './settings';
 import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
+import { decodeDeviceFormPathSegment, decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
 import { ErrorModal } from './ErrorModal';
 
 export interface SupernoteFile {
@@ -12,6 +13,8 @@ export interface SupernoteFile {
     uri: string;
     extension: string;
     isDirectory: boolean;
+    /** Display names of the file's containing folders, from the device root. */
+    directoryNames?: string[];
 }
 
 interface SupernoteResponse {
@@ -26,8 +29,13 @@ interface SupernoteResponse {
 // Fetches and parses one directory listing from the Supernote "Browse and
 // Access" HTTP server. Shared by the file-browsing modals below and by
 // ImportTodayModal, which walks the whole tree looking for today's notes.
-export async function fetchSupernoteDirectory(ip: string, path: string): Promise<SupernoteFile[]> {
-    const response = await fetchFromDevice(ip, path, 'Failed to load file list');
+export async function fetchSupernoteDirectory(
+    ip: string,
+    path: string,
+    pathLeafName?: string,
+    pathDirectoryNames?: readonly string[],
+): Promise<SupernoteFile[]> {
+    const response = await fetchFromDevice(ip, path, 'Failed to load file list', { pathLeafName, pathDirectoryNames });
     if (!response.ok) {
         throw new Error(`Failed to load file list: Supernote responded with an error (status ${response.status}).`);
     }
@@ -41,6 +49,101 @@ export async function fetchSupernoteDirectory(ip: string, path: string): Promise
 
     const data = JSON.parse(match[1]) as SupernoteResponse;
     return data.fileList.sort(compareByDirectoryThenNameThenDate);
+}
+
+const SYNCABLE_EXTENSION_PATTERN = /\.(note|spd)$/i;
+
+// Recursively walks the whole device tree starting at `path`, collecting
+// every `.note`/`.spd` file found. Shared by ImportTodayModal (which further
+// filters by date) and the device auto-sync engine (which filters by the
+// configured path patterns) — both need the same "list everything once"
+// traversal, just with different downstream filtering.
+export async function scanDeviceSupernoteTree(
+    ip: string,
+    path = '/',
+    visited: Set<string> = new Set(),
+    pathLeafName?: string,
+    directoryNames: string[] = [],
+    directoryNamesByUri: Map<string, string[]> = new Map(),
+): Promise<SupernoteFile[]> {
+    if (visited.has(path)) return [];
+    visited.add(path);
+    if (!directoryNamesByUri.has(path)) directoryNamesByUri.set(path, directoryNames);
+
+    const entries = await fetchSupernoteDirectory(
+        ip,
+        path,
+        pathLeafName,
+        directoryNames.length > 0 ? directoryNames.slice(0, -1) : undefined,
+    );
+    const results: SupernoteFile[] = [];
+
+    for (const entry of entries) {
+        const parentNames = directoryNamesByUri.get(parentUri(entry.uri))
+            ?? decodeUriDirectorySegments(entry.uri);
+        if (entry.isDirectory) {
+            const entryDirectoryNames = [...parentNames, entry.name];
+            directoryNamesByUri.set(entry.uri, entryDirectoryNames);
+            results.push(...await scanDeviceSupernoteTree(
+                ip,
+                entry.uri,
+                visited,
+                entry.name,
+                entryDirectoryNames,
+                directoryNamesByUri,
+            ));
+        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && isTrustedListingEntry(entry)) {
+            results.push({ ...entry, directoryNames: parentNames });
+        }
+    }
+    return results;
+}
+
+function parentUri(uri: string): string {
+    const lastSlash = uri.lastIndexOf('/');
+    return lastSlash <= 0 ? '/' : uri.slice(0, lastSlash);
+}
+
+// Fallback for malformed/non-hierarchical listings: a normal scan has display
+// names for every parent in directoryNamesByUri, which is required to tell a
+// literal `+` from Supernote's `+`-for-space representation.
+function decodeUriDirectorySegments(uri: string): string[] {
+    return uri.split('/').filter((segment) => segment.length > 0).slice(0, -1).map(decodeDevicePathSegment);
+}
+
+// Defense in depth against a device listing whose `name` and `uri` fields
+// disagree (e.g. a crafted `uri` carrying `../` traversal segments while
+// `name` still passes the syncable-extension filter): only trust entries
+// where `uri`'s own filename matches `name`, since every downstream
+// consumer of `uri` (deviceUriToVaultPath) assumes the two describe the
+// same file.
+function uriMatchesName(uri: string, name: string): boolean {
+    const segments = uri.split('/').filter((s) => s.length > 0);
+    if (segments.length === 0) return false;
+    const leaf = segments[segments.length - 1];
+    const normalizedName = normalizeDeviceFileName(name);
+    return decodeDevicePathSegment(leaf) === normalizedName
+        || decodeDeviceFormPathSegment(leaf) === normalizedName;
+}
+
+// A "plain" filename: non-empty, not a dot segment, and containing no path
+// separators. Complements uriMatchesName (which can't see "\\" — device
+// uris are only ever split on "/"): a device-supplied name carrying "/",
+// "\\", or being "."/".." is the path-traversal primitive once it reaches
+// getAvailablePathForAttachment/vault.createBinary, because Obsidian's path
+// normalization turns "\\" into "/" and does not strip ".." segments
+// (same class of bug as GHSA-3gx3-r874-5pp4, which fixed the sync write
+// path; this guards every path that writes a device-supplied name).
+function isPlainFileName(name: string): boolean {
+    return name.length > 0 && name !== '.' && name !== '..'
+        && !name.includes('/') && !name.includes('\\');
+}
+
+// Guard for any consumer about to write a device-listing entry into the
+// vault under its own name: the entry must be self-consistent (name matches
+// the uri's final segment) *and* the name must be a plain filename.
+function isTrustedListingEntry(file: SupernoteFile): boolean {
+    return uriMatchesName(file.uri, file.name) && isPlainFileName(file.name);
 }
 
 function compareByDirectoryThenNameThenDate(a: SupernoteFile, b: SupernoteFile): number {
@@ -58,6 +161,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
     settings: SupernotePluginSettings;
     files: SupernoteFile[] = [];
     currentPath = '/';
+    protected currentPathLeafName: string | undefined;
     sortOrder: FileBrowserSortOrder;
     private nameSortButton!: HTMLButtonElement;
     private dateSortButton!: HTMLButtonElement;
@@ -68,6 +172,11 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
         this.sortOrder = this.settings.fileBrowserSortOrder;
         this.setPlaceholder("Select a file to download or directory to open");
         this.buildSortToolbar();
+    }
+
+    onOpen() {
+        void super.onOpen();
+        this.inputEl.focus();
     }
 
     private buildSortToolbar() {
@@ -134,7 +243,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
 
     async loadFiles() {
         try {
-            this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath);
+            this.files = await fetchSupernoteDirectory(this.settings.directConnectIP, this.currentPath, this.currentPathLeafName);
             this.sortFiles();
         } catch (err) {
             this.close();
@@ -186,6 +295,7 @@ export abstract class FileListModal extends SuggestModal<SupernoteFile> {
             void (async () => {
                 // Navigate into directory
                 this.currentPath = file.uri;
+                this.currentPathLeafName = file.name;
                 await this.loadFiles();
                 // Reopen the modal to show new directory contents
                 this.open();
@@ -205,13 +315,26 @@ export class DownloadListModal extends FileListModal {
             if (file.isDirectory) {
                 // Navigate into directory
                 this.currentPath = file.uri;
+                this.currentPathLeafName = file.name;
                 await this.loadFiles();
                 // Reopen the modal to show new directory contents
                 this.open();
             } else {
                 try {
+                    // Unlike sync/import-today (whose files all pass through
+                    // scanDeviceSupernoteTree's isTrustedListingEntry gate),
+                    // this browse path hands the listing entry straight to
+                    // getAvailablePathForAttachment under its own name — refuse
+                    // entries that could smuggle a traversal segment through it
+                    // before fetching anything.
+                    if (!isTrustedListingEntry(file)) {
+                        throw new Error(
+                            `Device listing returned inconsistent data for "${file.name}" — refusing to download it.`
+                        );
+                    }
                     const fileResponse = await fetchFromDevice(this.settings.directConnectIP, file.uri, 'Failed to download file', {
                         timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                        pathLeafName: file.name,
                     });
                     if (!fileResponse.ok) {
                         throw new Error(`Failed to download file: Supernote responded with an error (status ${fileResponse.status}).`);
@@ -313,6 +436,7 @@ export class UploadListModal extends FileListModal {
                         contentType,
                         body,
                         timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                        pathLeafName: this.currentPathLeafName,
                     });
 
                     if (!response.ok) {

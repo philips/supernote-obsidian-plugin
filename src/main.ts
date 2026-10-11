@@ -1,14 +1,24 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, loadPdfJs, Scope, SearchComponent, setIcon, Platform } from 'obsidian';
-import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat } from './settings';
-import { SupernoteX, fetchMirrorFrame, createPdfContext, addPdfPage } from 'supernote-typescript';
+import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
+import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
+import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildVectorInkBackgroundNote, buildRasterInkOverlayNote, toSvg } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
 import { ImportTodayModal } from './ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
-import { SupernoteWorkerMessage, SupernoteWorkerResponse } from './myworker.worker';
-import Worker from 'myworker.worker';
+import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
+import PdfBuildWorker from 'pdfBuild.worker';
+import { ImageConverter, pageMayNeedRasterOverlay, terminateSharedWorkerPool } from './render/imageConverter';
+// Side-effect import: registers <supernote-viewer> (customElements.define)
+// - see SupernoteEmbed below, which is now a thin wrapper around it rather
+// than its own separate rendering implementation.
+import './webcomponent/SupernoteViewerElement';
+import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
+import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
+import { formatSyncFailureLogEntry } from './deviceSync';
+import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
+import { PDFDocument } from 'pdf-lib';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -37,6 +47,33 @@ function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
     return bytes.buffer;
 }
 
+// "data:image/png;base64,..." -> "image/png"
+function dataUrlMimeType(dataUrl: string): string {
+    return dataUrl.slice('data:'.length, dataUrl.indexOf(';'));
+}
+
+// Builds one standalone SVG document for a single already-rasterized page,
+// reusing the same PNG bytes ImageConverter produced (rather than
+// re-rasterizing via supernote-typescript's own toSvg(), which would decode
+// the page a second time) and extractPdfPageData() for the recognized-text
+// overlay, the same source addPdfPage()/buildPdfInWorker() draw their own
+// invisible text layer from.
+function buildSvgForPage(sn: SupernoteX, pageNumber: number, imageDataUrl: string): string {
+    const { pageWidth, pageHeight, pages } = extractPdfPageData(sn, pageNumber);
+    const pngBytes = new Uint8Array(dataUrlToBuffer(imageDataUrl));
+    // Pass the note's device family + native pageWidth so the invisible
+    // recognition-text overlay lands at the right position on every device
+    // (N6/A6X use their own pageWidth as the recognition canvas, not the
+    // 1920px reference A5X/Manta do — issue #219). nativePageWidth == the
+    // pageWidth here since this path never upscales; addSvgPage still needs
+    // it explicitly so a future caller rendering an upscaled image through
+    // here wouldn't silently regress.
+    return addSvgPage(pages[0], pngBytes, pageWidth, pageHeight, {
+        equipment: sn.header.APPLY_EQUIPMENT,
+        nativePageWidth: sn.pageWidth,
+    });
+}
+
 // app.fileManager.generateMarkdownLink() follows the vault's "Use Wikilinks"
 // setting, producing `![[...]]` for users who have that on. The images here
 // are ones we just created as attachments, so embed them with explicit
@@ -56,19 +93,107 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-// Assembles a PDF from pages already rasterized elsewhere (the `images`
-// array from ImageConverter, used for thumbnails/save-to-vault/drag-out),
-// instead of rasterizing a second time. addPdfPage() accepts pre-encoded PNG
-// bytes directly, so this just needs to decode the data URLs already sitting
-// in memory back to bytes (a cheap base64 decode, not a re-render) and hand
-// them to the library's own createPdfContext/addPdfPage assembly.
-async function assemblePdfFromImages(sn: SupernoteX, images: string[]): Promise<Uint8Array> {
-    const ctx = await createPdfContext();
-    for (let i = 0; i < sn.pages.length; i++) {
-        const pngBytes = new Uint8Array(dataUrlToBuffer(images[i]));
-        await addPdfPage(ctx, sn.pages[i], pngBytes);
+// Rasterizes and assembles the *entire* PDF for `sn` inside a dedicated
+// Worker (see pdfBuild.worker.ts) rather than on the main thread - pdf-lib's
+// own embedPng() is genuinely expensive, and entirely inherent to it:
+// confirmed via real-device testing (see pdfBuild.worker.ts's own doc
+// comment for the full trail) that it still peaks ~1.7GB and takes 10+
+// seconds for a 100-page note even after dropping each page's alpha
+// channel, since it always fully decodes every embedded PNG to raw pixels
+// and retains that until pdfDoc.save().
+// None of that is fixable short of not using pdf-lib, but running it inside
+// a Worker at least means Obsidian's own UI thread never carries any of that
+// cost, regardless of how large it is.
+//
+// A *dedicated* Worker, not the shared pool (getSharedWorkerPool()) used for
+// on-screen rendering: this can run for many seconds, and tying up one of
+// the pool's 2 workers for that whole time would stall on-screen page/
+// thumbnail loading for just as long, since only one worker would remain to
+// serve them - a large export shouldn't compete with actually reading the
+// note. Terminated once done regardless of outcome; this is a one-shot,
+// long-running task, not something worth keeping warm for reuse.
+async function buildPdfInWorker(sn: SupernoteX, vectorInk: boolean): Promise<Uint8Array> {
+    const pageNumbers = Array.from({ length: sn.pages.length }, (_, i) => i + 1);
+    // When vectorInk is on, prepare the per-page vector strokes/styles on the
+    // main thread: the worker only receives structured-clone-safe IPdfPage
+    // slices (extractPdfPageData), which don't carry the TOTALPATH buffer or
+    // note.titles the vector-ink decode reads. The upstream background/overlay
+    // pair leaves templates below the vector paths and keeps bitmap-only
+    // DISABLE text boxes/Digests for a transparent image painted afterward.
+    // Coordinates share toImage()'s native page-pixel space (this export never
+    // upscales). See supernote-typescript's README, "Vector ink from the
+    // parallel/Worker path".
+    const vectorInkPages = vectorInk ? prepareVectorInkPages(sn, pageNumbers, 1) : [];
+    const backgroundNote = vectorInk ? buildVectorInkBackgroundNote(sn, vectorInkPages) : sn;
+    const overlayPageIndexes = vectorInkPages.flatMap((vip, index) =>
+        pageMayNeedRasterOverlay(sn, vip) ? [index] : [],
+    );
+    const rasterOverlayNote = overlayPageIndexes.length > 0
+        ? buildRasterInkOverlayNote(sn, vectorInkPages)
+        : undefined;
+    const pages = pageNumbers.map((n) => extractPdfPageData(backgroundNote, n).pages[0]);
+    // Sent as compact, global-indexed slices rather than a transparent overlay
+    // for every vector page. The worker maps them back into its 8-page batches.
+    const rasterOverlayPages = rasterOverlayNote
+        ? overlayPageIndexes.map((index) => extractPdfPageData(rasterOverlayNote, pageNumbers[index]).pages[0])
+        : undefined;
+    // Parallel to `pages` by position; undefined entries fall back to the
+    // raster the worker already embedded (addPdfPage no-ops on empty/absent
+    // strokes), so a page whose ink didn't decode keeps its rasterized ink.
+    const strokes = vectorInk ? vectorInkPages.map((vip) => (vip.useVectorInk ? vip.strokes : undefined)) : undefined;
+    const strokeStyles = vectorInk ? vectorInkPages.map((vip) => (vip.useVectorInk ? vip.styles : undefined)) : undefined;
+
+    const worker = new PdfBuildWorker();
+    try {
+        return await new Promise<Uint8Array>((resolve, reject) => {
+            worker.onmessage = (e: MessageEvent<PdfBuildWorkerResponse>) => {
+                if (e.data.type === 'error') reject(new Error(e.data.error));
+                else if (e.data.type === 'pdfResult') resolve(e.data.pdfBytes);
+            };
+            worker.onerror = (error) => reject(new Error(error.message));
+            const message: PdfBuildWorkerMessage = {
+                type: 'buildPdf',
+                pageWidth: sn.pageWidth,
+                pageHeight: sn.pageHeight,
+                pages,
+                strokes,
+                strokeStyles,
+                rasterOverlayPages,
+                rasterOverlayPageIndexes: rasterOverlayPages ? overlayPageIndexes : undefined,
+                // The note's device family + native pageWidth drive the
+                // recognition-coordinate scale of the invisible text layer
+                // (N6/A6X use their own pageWidth as the recognition canvas,
+                // not the 1920px reference A5X/Manta do — issue #219).
+                // nativePageWidth == sn.pageWidth here since this path never
+                // upscales; addPdfPage still needs it explicitly so the
+                // canvas is recoverable if a future caller renders upscaled.
+                equipment: sn.header.APPLY_EQUIPMENT,
+                nativePageWidth: sn.pageWidth,
+            };
+            worker.postMessage(message);
+        });
+    } finally {
+        worker.terminate();
     }
-    return ctx.pdfDoc.save();
+}
+
+// Wraps a single already-rasterized PNG (as a data URL) in a one-page PDF,
+// at the same 300dpi-assumed-source-density sizing convention `.note`'s PDF
+// export uses (createPdfContext/addPdfPage above). Used for `.spd`, which
+// has no recognition/OCR text to lay an invisible text layer under the way
+// addPdfPage does for `.note` pages, so this builds directly with pdf-lib
+// instead. Shared by VaultWriter.exportAtelierToPDF and its
+// buildInsertableContent .spd import path.
+async function buildSinglePagePdf(pngDataUrl: string): Promise<Uint8Array> {
+    const pdfDoc = await PDFDocument.create();
+    const pngImage = await pdfDoc.embedPng(dataUrlToBuffer(pngDataUrl));
+    const dpi = 300;
+    const pointsPerPixel = 72 / dpi;
+    const widthPts = pngImage.width * pointsPerPixel;
+    const heightPts = pngImage.height * pointsPerPixel;
+    const pdfPage = pdfDoc.addPage([widthPts, heightPts]);
+    pdfPage.drawImage(pngImage, { x: 0, y: 0, width: widthPts, height: heightPts });
+    return pdfDoc.save();
 }
 
 /**
@@ -86,106 +211,170 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 	return processedText;
 }
 
-// Splits pageNumbers into at most `workerCount` chunks. Callers that then map
-// chunks[i] -> workers[i % workers.length] are guaranteed each worker gets at
-// most one chunk (chunks.length <= workers.length), so processing chunks
-// concurrently via Promise.all never has two in-flight calls fighting over
-// the same worker's onmessage handler.
-function chunkPageNumbers(pageNumbers: number[], workerCount: number): number[][] {
-    const chunkSize = Math.ceil(pageNumbers.length / workerCount);
-    const chunks: number[][] = [];
-    for (let i = 0; i < pageNumbers.length; i += chunkSize) {
-        chunks.push(pageNumbers.slice(i, i + chunkSize));
-    }
-    return chunks;
+// In-process extension point for other Obsidian plugins that want to enrich
+// a page's text before it lands in the generated markdown — e.g. an OCR/LLM
+// companion plugin transcribing handwriting the device's own recognition
+// missed (see https://github.com/philips/supernote-obsidian-ocr-llm for a
+// reference implementation against a local OpenAI-compatible server).
+// Undocumented by design: the
+// same "reach into another plugin's loaded instance" pattern Templater/
+// Dataview expose their own APIs through, since Obsidian has no formal
+// inter-plugin dependency mechanism. Callers must feature-detect
+// (`app.plugins.plugins['supernote']?.registerPageTextProcessor`) and accept
+// that this can change across versions.
+export interface PageTextProcessorContext {
+	/** 1-indexed, matching the "## Page N" headings in the generated markdown. */
+	pageNumber: number;
+	totalPages: number;
+	/** Filename of the source .note file (e.g. "2026-01-15.note"). Not
+	 *  necessarily saved into the vault — some import paths rasterize pages
+	 *  without ever writing the raw .note itself. */
+	sourceName: string;
+	/** This page's text so far: the device's own recognized text (if any),
+	 *  already run through any earlier-registered processors. Empty string
+	 *  if none. */
+	text: string;
+	/** MIME type of the bytes `readImage()` resolves to. Currently always
+	 *  "image/png" — the rasterization pipeline's one fixed output format —
+	 *  but read this rather than assuming it, in case that ever changes. */
+	imageMimeType: string;
+	/** Reads this page's rasterized image bytes. Raw bytes rather than a
+	 *  vault TFile: this runs whether or not the current export/import
+	 *  actually wants image files saved into the vault, so there may be no
+	 *  TFile backing it at all. */
+	readImage(): Promise<ArrayBuffer>;
+	/** This page's starred keywords, as Supernote's own handwriting
+	 *  recognition read them (`IKeyword.KEYWORD`) — raw OCR'd text, in
+	 *  encounter order, deduplicated. Not sanitized into Obsidian tag form;
+	 *  that's a choice for whichever processor consumes this. Most starred
+	 *  keywords never appear as literal text elsewhere on the page, so this
+	 *  is the only way an external processor can see them at all. */
+	keywords: string[];
+	/** This page's own internal links (Supernote's link feature). Same-file
+	 *  page anchors are already resolved (`ILink.text` gets `#Page N`
+	 *  appended). Cross-file anchors are not — `ILink.LINKFILE` is the
+	 *  base64-encoded absolute device path of the target `.note` file, for a
+	 *  processor that wants to resolve that itself. */
+	links: ILink[];
+	/** This page's own PAGEID, if any — the identifier other notes' links
+	 *  resolve against (empty string if the page has none). */
+	pageId: string;
+	/** This page's orientation, exactly as recorded in the `.note` file. */
+	orientation: string;
+	/** Whether the device's own handwriting recognition ran on this page,
+	 *  and whether it completed — distinguishes "recognition never ran"
+	 *  and "ran, found nothing" from `text` alone, which conflates both with
+	 *  "recognition ran and found nothing". */
+	recognitionStatus: RecognitionStatuses;
 }
 
-export class WorkerPool {
-    private workers: Worker[];
-
-    constructor(private maxWorkers: number = navigator.hardwareConcurrency) {
-        this.workers = Array(maxWorkers).fill(null).map(() =>
-            new Worker()
-        );
-    }
-
-    private processChunk(worker: Worker, note: SupernoteX, pageNumbers: number[]): Promise<string[]> {
-        return new Promise((resolve, reject) => {
-            worker.onmessage = (e: MessageEvent<SupernoteWorkerResponse>) => {
-                if (e.data.type === 'error') {
-                    reject(new Error(e.data.error));
-                } else if (e.data.type === 'result') {
-                    resolve(e.data.images);
-                }
-            };
-
-            worker.onerror = (error) => {
-                console.error('Worker error:', error);
-                reject(new Error(error.message));
-            };
-
-            const message: SupernoteWorkerMessage = {
-                type: 'convert',
-                note,
-                pageNumbers
-            };
-
-            worker.postMessage(message);
-        });
-    }
-
-    async processPages(note: SupernoteX, allPageNumbers: number[]): Promise<string[]> {
-        //console.time('Total processing time');
-
-        const chunks = chunkPageNumbers(allPageNumbers, this.workers.length);
-
-        //console.log(`Processing ${allPageNumbers.length} pages in ${chunks.length} chunks`);
-
-        // Process chunks in parallel using available workers
-        const results = await Promise.all(
-            chunks.map((chunk, index) =>
-                this.processChunk(this.workers[index % this.workers.length], note, chunk)
-            )
-        );
-
-        //console.timeEnd('Total processing time');
-        return results.flat();
-    }
-
-    terminate() {
-        this.workers.forEach(worker => worker.terminate());
-        this.workers = [];
-    }
+// This page's starred keywords (IKeyword.KEYWORD), deduplicated. sn.keywords'
+// Record keys encode the 1-indexed page as their first 4 characters — the
+// same convention _parseLinks documents for sn.links (see collectPageLinks
+// below), and more reliable than IKeyword.KEYWORDPAGE, which can be '0'
+// (invalid).
+function collectPageKeywords(sn: SupernoteX, pageIndex: number): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const [key, entries] of Object.entries(sn.keywords)) {
+		if (parseInt(key.slice(0, 4)) - 1 !== pageIndex) continue;
+		for (const entry of entries) {
+			const text = entry.KEYWORD.trim();
+			if (text.length === 0 || seen.has(text)) continue;
+			seen.add(text);
+			result.push(text);
+		}
+	}
+	return result;
 }
 
-export class ImageConverter {
-    private workerPool: WorkerPool;
-
-    constructor(maxWorkers = navigator.hardwareConcurrency) {  // Default to 4 workers
-        this.workerPool = new WorkerPool(maxWorkers);
-    }
-
-    async convertToImages(note: SupernoteX, pageNumbers?: number[]): Promise<string[]> {
-        const pages = pageNumbers ?? Array.from({length: note.pages.length}, (_, i) => i+1);
-        const results = await this.workerPool.processPages(note, pages);
-        return results;
-    }
-
-    terminate() {
-        this.workerPool.terminate();
-    }
+// This page's own links. See supernote-typescript's _parseLinks doc comment
+// for why sn.links' Record keys (not ILink.OBJPAGE) are the reliable way to
+// find which page a link is drawn on.
+function collectPageLinks(sn: SupernoteX, pageIndex: number): ILink[] {
+	const result: ILink[] = [];
+	for (const [key, entries] of Object.entries(sn.links)) {
+		if (parseInt(key.slice(0, 4)) - 1 !== pageIndex) continue;
+		result.push(...entries);
+	}
+	return result;
 }
+
+// Return the page's new text (replacing `ctx.text` entirely — a processor
+// that wants to keep the existing text should fold it in itself), or
+// null/undefined to leave it unchanged. Processors run in registration
+// order, each seeing the previous one's output as `ctx.text`.
+export type PageTextProcessor = (ctx: PageTextProcessorContext) => Promise<string | null | undefined>;
 
 class VaultWriter {
 	app: App;
 	settings: SupernotePluginSettings;
+	processors: Set<PageTextProcessor>;
 
-	constructor(app: App, settings: SupernotePluginSettings) {
+	constructor(app: App, settings: SupernotePluginSettings, processors: Set<PageTextProcessor>) {
 		this.app = app;
 		this.settings = settings;
+		this.processors = processors;
 	}
 
-	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, overwrite = false) {
+	// `imageDataUrl` comes from the in-memory rasterization pass
+	// (ImageConverter), independent of whether this export/import is also
+	// writing that image out as a vault attachment — callers rasterize on
+	// demand (see rasterizePages()) whenever processors are registered, even
+	// for a markdown-only export that wouldn't otherwise touch images at all.
+	private async applyPageTextProcessors(sourceName: string, pageIndex: number, sn: SupernoteX, text: string, imageDataUrl: string | undefined): Promise<string> {
+		if (!imageDataUrl || this.processors.size === 0) return text;
+
+		const page = sn.pages[pageIndex];
+		const keywords = collectPageKeywords(sn, pageIndex);
+		const links = collectPageLinks(sn, pageIndex);
+
+		let result = text;
+		for (const processor of this.processors) {
+			try {
+				const out = await processor({
+					pageNumber: pageIndex + 1,
+					totalPages: sn.pages.length,
+					sourceName,
+					text: result,
+					imageMimeType: dataUrlMimeType(imageDataUrl),
+					readImage: async () => dataUrlToBuffer(imageDataUrl),
+					keywords,
+					links,
+					pageId: page.PAGEID ?? '',
+					orientation: page.ORIENTATION,
+					recognitionStatus: page.RECOGNSTATUS,
+				});
+				if (out !== null && out !== undefined) result = out;
+			} catch (err) {
+				console.error('Supernote page text processor failed:', err);
+			}
+		}
+		return result;
+	}
+
+	// Rasterizes every page once via the worker pool. Callers that also need
+	// the images written to the vault pass the result to writeImageFiles()
+	// rather than rasterizing a second time.
+	private async rasterizePages(sn: SupernoteX): Promise<string[]> {
+		return new ImageConverter().convertToImages(sn);
+	}
+
+	// A 100-page PDF conversion (or similar) can take a while, so surface
+	// completion with a Notice instead of leaving the user to guess whether
+	// anything happened - clicking it jumps straight to the new file.
+	private notifyExportComplete(file: TFile) {
+		const notice = new Notice(`Created "${file.path}" - click to open`);
+		notice.messageEl.addEventListener('click', () => {
+			void this.app.workspace.getLeaf(false).openFile(file);
+		});
+	}
+
+	// `images` (raw rasterized page data URLs, for processors) is independent
+	// of `imgs` (vault TFiles, for the embedded image links) — a markdown-only
+	// export passes `imgs: null` but can still pass `images` so registered
+	// processors run, even though no image attachment gets saved.
+	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null, overwrite = false): Promise<TFile> {
 		let content = '';
 
 		// Derive the output path from the .note file's own vault path rather than
@@ -228,8 +417,12 @@ class VaultWriter {
 
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `## Page ${i + 1}\n\n`
-			if (sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+			let pageText = sn.pages[i].text !== undefined && sn.pages[i].text.length > 0
+				? processSupernoteText(sn.pages[i].text, this.settings)
+				: '';
+			pageText = await this.applyPageTextProcessors(file.name, i, sn, pageText, images?.[i]);
+			if (pageText.length > 0) {
+				content += `${pageText}\n`;
 			}
 			if (imgs) {
 				let alt = '';
@@ -246,22 +439,24 @@ class VaultWriter {
 			const existing = this.app.vault.getFileByPath(baseFilename);
 			if (existing) {
 				await this.app.vault.modify(existing, content);
+				return existing;
 			} else {
 				try {
-					await this.app.vault.create(baseFilename, content);
-				} catch {
+					return await this.app.vault.create(baseFilename, content);
+				} catch (error) {
 					// Race condition: Obsidian fires both 'create' and 'modify' vault
 					// events in quick succession when a .note file syncs, and both
 					// handlers call attachMarkdownFile(). The file may have been
 					// created between the getFileByPath check above and this
 					// vault.create() call - fetch it again and update it instead.
 					const raceFile = this.app.vault.getFileByPath(baseFilename);
-					if (raceFile) await this.app.vault.modify(raceFile, content);
+					if (!raceFile) throw error;
+					await this.app.vault.modify(raceFile, content);
+					return raceFile;
 				}
 			}
-		} else {
-			await this.app.vault.create(filename, content);
 		}
+		return this.app.vault.create(filename, content);
 	}
 
 	private async ensureFolderExists(path: string): Promise<void> {
@@ -279,17 +474,10 @@ class VaultWriter {
 		}
 	}
 
-	async writeImageFiles(basename: string, sn: SupernoteX): Promise<TFile[]> {
-		let images: string[] = [];
-
-		const converter = new ImageConverter();
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			// Clean up the worker when done
-			converter.terminate();
-		}
-
+	// `images` is already-rasterized page data URLs (see rasterizePages()) —
+	// this just persists them, so callers that also need them for text
+	// processors rasterize once and pass the same array to both.
+	async writeImageFiles(basename: string, images: string[]): Promise<TFile[]> {
 		const imgs: TFile[] = [];
 		for (let i = 0; i < images.length; i++) {
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i + 1}.png`);
@@ -299,27 +487,64 @@ class VaultWriter {
 		return imgs;
 	}
 
+	// SVG equivalent of writeImageFiles() — same already-rasterized `images`
+	// input, but each page is wrapped into a standalone SVG document (see
+	// buildSvgForPage()) rather than saved as a raw PNG. SVG is text, not
+	// binary, so this uses vault.create() rather than createBinary().
+	async writeSvgFiles(basename: string, sn: SupernoteX, images: string[]): Promise<TFile[]> {
+		const imgs: TFile[] = [];
+		for (let i = 0; i < images.length; i++) {
+			const svg = buildSvgForPage(sn, i + 1, images[i]);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}-${i + 1}.svg`);
+			imgs.push(await this.app.vault.create(filename, svg));
+		}
+		return imgs;
+	}
+
 	async attachMarkdownFile(file: TFile, overwrite = false) {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		await this.writeMarkdownFile(file, sn, null, overwrite);
+		// This export doesn't otherwise touch images at all, but a registered
+		// processor still needs one to work with — rasterize only when
+		// there's actually a processor to hand it to.
+		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
+		const mdFile = await this.writeMarkdownFile(file, sn, null, images, overwrite);
+		if (!overwrite) this.notifyExportComplete(mdFile);
 	}
 
 	async attachNoteFiles(file: TFile) {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		const imgs = await this.writeImageFiles(file.basename, sn);
-		await this.writeMarkdownFile(file, sn, imgs);
+		const images = await this.rasterizePages(sn);
+		const imgs = await this.writeImageFiles(file.basename, images);
+		const mdFile = await this.writeMarkdownFile(file, sn, imgs, images);
+		this.notifyExportComplete(mdFile);
+	}
+
+	// SVG equivalent of attachNoteFiles() — see writeSvgFiles().
+	async attachNoteFilesAsSvg(file: TFile) {
+		const note = await this.app.vault.readBinary(file);
+		const sn = new SupernoteX(new Uint8Array(note));
+
+		const images = await this.rasterizePages(sn);
+		const imgs = await this.writeSvgFiles(file.basename, sn, images);
+		const mdFile = await this.writeMarkdownFile(file, sn, imgs, images);
+		this.notifyExportComplete(mdFile);
 	}
 
 	/**
-	 * Converts a Supernote .note file (fetched from a device, not yet in the
-	 * vault) into the requested format and returns markdown for inserting it
-	 * inline into another note, rather than creating a new .md file for it.
+	 * Converts a Supernote .note or .spd file (fetched from a device, not yet
+	 * in the vault) into the requested format and returns markdown for
+	 * inserting it inline into another note, rather than creating a new .md
+	 * file for it.
 	 */
 	async buildInsertableContent(deviceFileName: string, noteBuffer: ArrayBuffer, targetPath: string, format: ImportFormat): Promise<string> {
+		if (/\.spd$/i.test(deviceFileName)) {
+			return this.buildInsertableAtelierContent(deviceFileName, noteBuffer, targetPath, format);
+		}
+
 		const basename = deviceFileName.replace(/\.note$/i, '');
 
 		// These two formats save the raw .note file itself into the vault and
@@ -335,27 +560,67 @@ class VaultWriter {
 		const sn = new SupernoteX(new Uint8Array(noteBuffer));
 
 		if (format === 'pdf') {
-			const converter = new ImageConverter();
-			let images: string[] = [];
-			try {
-				images = await converter.convertToImages(sn);
-			} finally {
-				converter.terminate();
-			}
-			const pdfBytes = await assemblePdfFromImages(sn, images);
+			const pdfBytes = await buildPdfInWorker(sn, this.settings.vectorInk);
 			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
 			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
 			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
 			return `${link}\n`;
 		}
 
-		const imgs = await this.writeImageFiles(basename, sn);
+		const rasterized = await this.rasterizePages(sn);
+		const imgs = await this.writeImageFiles(basename, rasterized);
+		return this.renderPagesMarkdown(basename, sn, imgs, targetPath, format, deviceFileName, rasterized);
+	}
 
+	// `.spd` equivalent of buildInsertableContent above. `.spd` has no pages
+	// and no recognized/OCR text (see rasterizeAtelier's doc comment below),
+	// so 'images' and 'images-text' both reduce to the same single-image
+	// output — there's no per-page text for the latter to add that the
+	// former doesn't already have.
+	private async buildInsertableAtelierContent(deviceFileName: string, buffer: ArrayBuffer, targetPath: string, format: ImportFormat): Promise<string> {
+		const basename = deviceFileName.replace(/\.spd$/i, '');
+
+		if (format === 'note-link' || format === 'embed') {
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(deviceFileName);
+			const tfile = await this.app.vault.createBinary(filename, buffer);
+			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
+			return `${format === 'embed' ? '!' : ''}${link}\n`;
+		}
+
+		const dataUrl = await renderAtelierCompositeFromBuffer(new Uint8Array(buffer));
+		if (dataUrl === null) {
+			throw new Error(`"${deviceFileName}" has no drawn content to import.`);
+		}
+
+		if (format === 'pdf') {
+			const pdfBytes = await buildSinglePagePdf(dataUrl);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.pdf`);
+			const tfile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+			const link = this.app.fileManager.generateMarkdownLink(tfile, targetPath);
+			return `${link}\n`;
+		}
+
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${basename}.png`);
+		const tfile = await this.app.vault.createBinary(filename, dataUrlToBuffer(dataUrl));
+		const alt = this.settings.invertColorsWhenDark ? 'supernote-invert-dark' : '';
+		const link = generateMarkdownImageEmbed(this.app, tfile, targetPath, alt);
+		return `## ${basename}\n\n${link}\n`;
+	}
+
+	// Shared page-by-page markdown body (heading + optional recognized text +
+	// image embed) used by buildInsertableContent's images/images-text formats.
+	private async renderPagesMarkdown(basename: string, sn: SupernoteX, imgs: TFile[], targetPath: string, format: ImportFormat, sourceName: string, rasterized: string[]): Promise<string> {
 		let content = `## ${basename}\n\n`;
 		for (let i = 0; i < sn.pages.length; i++) {
 			content += `### Page ${i + 1}\n\n`;
-			if (format === 'images-text' && sn.pages[i].text !== undefined && sn.pages[i].text.length > 0) {
-				content += `${processSupernoteText(sn.pages[i].text, this.settings)}\n`;
+			if (format === 'images-text') {
+				let pageText = sn.pages[i].text !== undefined && sn.pages[i].text.length > 0
+					? processSupernoteText(sn.pages[i].text, this.settings)
+					: '';
+				pageText = await this.applyPageTextProcessors(sourceName, i, sn, pageText, rasterized[i]);
+				if (pageText.length > 0) {
+					content += `${pageText}\n`;
+				}
 			}
 
 			let alt = '';
@@ -372,112 +637,45 @@ class VaultWriter {
 		const note = await this.app.vault.readBinary(file);
 		const sn = new SupernoteX(new Uint8Array(note));
 
-		// Rasterizes across the Worker pool in parallel (same pass the other
-		// export paths use), then assembles the PDF from those images rather
-		// than rendering a second time.
-		const converter = new ImageConverter();
-		let images: string[] = [];
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			converter.terminate();
-		}
-
-		const pdfBytes = await assemblePdfFromImages(sn, images);
+		// Runs entirely inside a dedicated Worker (see buildPdfInWorker()) so
+		// pdf-lib's own considerable memory/CPU cost never blocks Obsidian's
+		// UI thread, regardless of note length.
+		const pdfBytes = await buildPdfInWorker(sn, this.settings.vectorInk);
 
 		// Generate filename and save
 		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
-		await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
-	}
-}
-
-// Obsidian's loadPdfJs() returns `any` since it hands back whatever pdf.js
-// build happens to be bundled with the user's Obsidian install, unpinned.
-// These types cover just the subset of that API this file touches, so calls
-// against it are type-checked without assuming a specific pdfjs-dist version
-// that may not match what's actually loaded at runtime.
-type PdfJsViewport = unknown; // opaque here — only ever handed back to pdf.js's own APIs
-
-interface PdfJsTextContentItem {
-	str?: string;
-}
-
-interface PdfJsTextContent {
-	items: PdfJsTextContentItem[];
-}
-
-interface PdfJsPage {
-	getViewport(params: { scale: number }): PdfJsViewport;
-	getTextContent(): Promise<PdfJsTextContent>;
-}
-
-interface PdfJsDocument {
-	getPage(pageNumber: number): Promise<PdfJsPage>;
-}
-
-interface PdfJsTextLayer {
-	render(): Promise<void>;
-}
-
-interface PdfJsRenderTextLayerTask {
-	promise: Promise<void>;
-}
-
-interface PdfJsLib {
-	getDocument(params: { data: Uint8Array }): { promise: Promise<PdfJsDocument> };
-	TextLayer?: new (params: { textContentSource: PdfJsTextContent; container: HTMLElement; viewport: PdfJsViewport }) => PdfJsTextLayer;
-	renderTextLayer?: (params: { textContentSource: PdfJsTextContent; container: HTMLElement; viewport: PdfJsViewport }) => PdfJsRenderTextLayerTask;
-}
-
-// Renders a pdf.js text layer into `container`, preferring the modern
-// `TextLayer` class (pdf.js >=3.4) and falling back to the older
-// `renderTextLayer()` function on earlier bundles. Obsidian's `loadPdfJs()`
-// only promises the core pdfjsLib, not a pinned version, so neither API is
-// guaranteed — if neither exists, pages still render, they just lose
-// selectable text and find-in-note for that session.
-async function renderTextLayer(pdfjsLib: PdfJsLib, textContent: PdfJsTextContent, container: HTMLElement, viewport: PdfJsViewport): Promise<boolean> {
-	container.empty();
-
-	if (typeof pdfjsLib.TextLayer === 'function') {
-		const textLayer = new pdfjsLib.TextLayer({ textContentSource: textContent, container, viewport });
-		await textLayer.render();
-		return true;
+		const pdfFile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+		this.notifyExportComplete(pdfFile);
 	}
 
-	if (typeof pdfjsLib.renderTextLayer === 'function') {
-		const task = pdfjsLib.renderTextLayer({ textContentSource: textContent, container, viewport });
-		await task.promise;
-		return true;
+	// `.spd` (Supernote Atelier) equivalents of the exports above. Unlike
+	// `.note`, `.spd` has no pages and no recognized/OCR text — just one
+	// flattened composite image (see renderAtelierCompositeDataUrl).
+	private async rasterizeAtelier(file: TFile): Promise<string> {
+		const dataUrl = await renderAtelierCompositeDataUrl(this.app, file);
+		if (dataUrl === null) {
+			throw new Error(`"${file.basename}.spd" has no drawn content to export.`);
+		}
+		return dataUrl;
 	}
 
-	return false;
+	async attachAtelierImage(file: TFile): Promise<TFile> {
+		const dataUrl = await this.rasterizeAtelier(file);
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.png`);
+		const pngFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(dataUrl));
+		this.notifyExportComplete(pngFile);
+		return pngFile;
+	}
+
+	async exportAtelierToPDF(file: TFile) {
+		const dataUrl = await this.rasterizeAtelier(file);
+		const pdfBytes = await buildSinglePagePdf(dataUrl);
+
+		const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}.pdf`);
+		const pdfFile = await this.app.vault.createBinary(filename, toArrayBuffer(pdfBytes));
+		this.notifyExportComplete(pdfFile);
+	}
 }
-
-type PageRenderState = {
-	pageNumber: number;
-	// Fetched lazily — see SupernoteView.ensureTextLayer(). null until then.
-	pdfPage: PdfJsPage | null;
-	baseScale: number;
-	nativeWidth: number;
-	nativeHeight: number;
-	pageContainer: HTMLElement;
-	canvasWrap: HTMLElement;
-	canvas: HTMLCanvasElement;
-	textLayerDiv: HTMLElement;
-	// Decoded once from the already-rasterized page image and reused for
-	// every zoom redraw (see drawPageImage()) — no pdf.js/decode work on the
-	// zoom-critical path.
-	imageBitmap: ImageBitmap | null;
-	// Guards ensureTextLayer()'s one-time (per page) work.
-	textLayerLoaded: boolean;
-	text: string;
-	spans: HTMLSpanElement[];
-};
-
-type FindMatch = {
-	pageIndex: number;
-	spanIndex: number;
-};
 
 let vw: VaultWriter;
 export const VIEW_TYPE_SUPERNOTE = "supernote-view";
@@ -486,54 +684,12 @@ export class SupernoteView extends FileView {
 	declare file: TFile;
 	settings: SupernotePluginSettings;
 
-	private pdfjsLib: PdfJsLib | null = null;
-	private pageStates: PageRenderState[] = [];
-	private pagesEl: HTMLElement | null = null;
-
-	private zoomScale = 1;
-	private renderedZoomScale = 1;
-	private zoomDebounceTimer: number | undefined;
-	private zoomLabelEl: HTMLElement | null = null;
-	// True from the moment setZoom() schedules a debounced commitZoom() until
-	// that commit actually redraws pages at their final size. goToPage() waits
-	// this out — see waitForZoomToSettle() for why.
-	private zoomCommitPending = false;
-	private zoomSettleResolvers: Array<() => void> = [];
-
-	private fitWidthEnabled = true;
-	private fitWidthBtn: HTMLElement | null = null;
-	private fitWidthDebounceTimer: number | undefined;
-	private resizeObserver: ResizeObserver | null = null;
-
-	// The combined PDF (image + invisible RTR text per page) is assembled
-	// and loaded into pdf.js in the background, not awaited before the first
-	// paint — pages are visible immediately from their own rasterized image
-	// (see drawPageImage()), which doesn't depend on this at all. Only the
-	// text layer (selection/search) needs it, and only when a given page is
-	// actually loaded — see ensureTextLayer()/pageObserver.
-	private pdfDocPromise: Promise<PdfJsDocument> | null = null;
-	private pageObserver: IntersectionObserver | null = null;
-
-	private layerMode: 'image' | 'text' = 'image';
-	private imageModeBtn: HTMLElement | null = null;
-	private textModeBtn: HTMLElement | null = null;
-
-	private thumbnailsVisible = false;
-	private thumbToggleBtn: HTMLElement | null = null;
-	private thumbSidebarEl: HTMLElement | null = null;
-	private thumbItems: HTMLElement[] = [];
-
-	private headerEl: HTMLElement | null = null;
-	private pageJumpInput: HTMLInputElement | null = null;
-	private scrollUpdateScheduled = false;
-
-	private findToggleBtn: HTMLElement | null = null;
-	private findBarEl: HTMLElement | null = null;
-	private findInput: SearchComponent | null = null;
-	private findMatchCountEl: HTMLElement | null = null;
-	private findMatches: FindMatch[] = [];
-	private findMatchCursor = -1;
-	private findRequestId = 0;
+	private viewerEl: SupernoteViewerElement | null = null;
+	// This file's own pages' PAGEIDs, from the component's own supernote-load
+	// event - lets handleNoteLinkClick() resolve a link naming this same file
+	// explicitly without re-parsing bytes already parsed once inside the
+	// component. Same field, same reason, as SupernoteEmbed's own copy below.
+	private pageIds: string[] = [];
 
 	constructor(leaf: WorkspaceLeaf, settings: SupernotePluginSettings) {
 		super(leaf);
@@ -541,6 +697,20 @@ export class SupernoteView extends FileView {
 		// Documented pattern (obsidian.d.ts View.scope) for registering hotkeys
 		// that are only active while this view has focus.
 		this.scope = new Scope(this.app.scope);
+		// Mirrors SupernoteEmbed's own identical registration/reasoning (see
+		// its constructor) - without this, <supernote-viewer>'s own light/
+		// dark default (the OS-level prefers-color-scheme media feature) is
+		// the only thing driving it, completely independent of Obsidian's
+		// own theme setting - confirmed as a real, reported bug: the full
+		// view stayed permanently dark (or light) regardless of Obsidian's
+		// theme, tracking only the OS's own scheme instead. registerEvent()
+		// is auto-cleaned-up by Component (View extends Component), so this
+		// needs no matching onClose() teardown.
+		this.registerEvent(this.app.workspace.on('css-change', () => this.updateDarkAttribute()));
+	}
+
+	private updateDarkAttribute(): void {
+		this.viewerEl?.setAttribute('dark', document.body.classList.contains('theme-dark') ? 'true' : 'false');
 	}
 
 	getViewType() {
@@ -556,13 +726,15 @@ export class SupernoteView extends FileView {
 
 	// Obsidian delivers a link's `#page=N` subpath here — for both
 	// `[[file.note#page=8]]` and `[text](file.note#page=8)` — once setState()
-	// (which awaits onLoadFile(), so pageStates is already populated) has
-	// resolved. Mirrors the anchor SupernoteEmbed accepts for embeds; see
-	// parsePageAnchor().
+	// (which awaits onLoadFile()) has resolved. onLoadFile() itself now
+	// awaits the component's own supernote-load/-error before returning (see
+	// its own comment for why), so by the time this runs, viewerEl's page
+	// list is already built and goToPage() won't silently no-op. Mirrors the
+	// anchor SupernoteEmbed accepts for embeds; see parsePageAnchor().
 	setEphemeralState(state: unknown): void {
 		const subpath = (state as { subpath?: string } | undefined)?.subpath;
 		const page = parsePageAnchor(subpath);
-		if (page !== null) void this.goToPage(page);
+		if (page !== null) this.viewerEl?.goToPage(page);
 	}
 
 	async onOpen(): Promise<void> {
@@ -572,132 +744,42 @@ export class SupernoteView extends FileView {
 		this.contentEl.addClass('supernote-view-content');
 
 		// Obsidian's .view-content has its own top padding, leaving a gap
-		// above the sticky toolbar. A previous attempt cancelled it with a
-		// negative margin on the (sticky) header itself, which fought with
-		// `position: sticky`'s own positioning math and let page content
-		// render through/above the stuck toolbar instead. Zeroing the
-		// ancestor's padding directly avoids combining sticky with a negative
-		// margin at all; .supernote-header's own (positive, sticky-safe)
-		// padding-top puts a little breathing room back.
-		this.contentEl.setCssStyles({ paddingTop: '0' });
+		// above <supernote-viewer>'s own sticky toolbar - a negative margin
+		// on the toolbar itself would fight position: sticky's positioning
+		// math, so this zeroes the ancestor's padding directly instead. On
+		// mobile (issue #148), that same ancestor padding on the left/right/
+		// bottom sides is real, wasted width on a screen already tight for
+		// legibility of handwritten content.
+		this.contentEl.setCssStyles(
+			Platform.isMobile
+				? { paddingTop: '0', paddingLeft: '0.25em', paddingRight: '0.25em', paddingBottom: '0.25em' }
+				: { paddingTop: '0' },
+		);
 
+		// Mod+F opens/focuses <supernote-viewer>'s own find bar. Scope is an
+		// Obsidian-only concept the component has no way to register a
+		// view-scoped hotkey through itself, so the wrapper still owns this
+		// one registration even though everything the hotkey actually does
+		// (the find bar itself, stepping matches, highlighting) now lives
+		// entirely in the component.
 		this.scope?.register(['Mod'], 'f', (evt) => {
 			evt.preventDefault();
-			this.toggleFindBar();
+			this.viewerEl?.toggleFindBar();
 			return false;
 		});
-
-		// Ctrl+scroll to zoom (trackpad pinch-to-zoom is reported as a wheel
-		// event with ctrlKey set, on every platform); plain scroll keeps paging
-		// through the note as before. contentEl persists across file loads
-		// (onLoadFile only rebuilds its children), so this only needs
-		// registering once.
-		//
-		// Deliberately NOT metaKey (Cmd on macOS): Cmd is also the modifier
-		// held down through a whole Cmd+Tab app switch, and a wheel event from
-		// scroll momentum/inertia that happens to fire mid-switch — nothing to
-		// do with zooming — would still carry metaKey:true and get treated as
-		// a zoom gesture. Trackpad pinch never sets metaKey, only ctrlKey, so
-		// dropping metaKey here loses nothing for the gesture this is actually
-		// meant to support.
-		this.registerDomEvent(this.contentEl, 'wheel', (evt: WheelEvent) => {
-			if (!evt.ctrlKey) return;
-			evt.preventDefault();
-
-			// Trackpads report a pinch-to-zoom gesture as a wheel event with
-			// ctrlKey set — the same flag an ordinary two-finger scroll can
-			// spuriously carry for a stray event or two right as the scroll
-			// hits a boundary (e.g. scrolling up to the very top). A fixed
-			// per-event zoom step let a short burst of those misfires snowball
-			// straight to the zoom cap. Scaling the step by the event's own
-			// deltaY keeps a real, sustained pinch feeling responsive while
-			// capping how much a single misfired event can do.
-			const factor = Math.min(1.05, Math.max(0.95, 1 - evt.deltaY * 0.01));
-			this.setZoom(this.zoomScale * factor);
-		}, { passive: false });
-
-		// Keep the toolbar's page number in sync with whatever page is actually
-		// scrolled into view, rAF-throttled since scroll fires very frequently.
-		this.registerDomEvent(this.contentEl, 'scroll', () => {
-			if (this.scrollUpdateScheduled) return;
-			this.scrollUpdateScheduled = true;
-			window.requestAnimationFrame(() => {
-				this.scrollUpdateScheduled = false;
-				this.updateCurrentPageIndicator();
-			});
-		}, { passive: true });
-
-		// While "Fit width" is on, keep the page matched to however much room
-		// is actually available as the pane resizes (split panes, sidebars
-		// opening/closing, window resize) — not just at the moment it was
-		// turned on. Debounced since resize fires continuously while dragging.
-		this.resizeObserver = new ResizeObserver(() => {
-			if (!this.fitWidthEnabled) return;
-			window.clearTimeout(this.fitWidthDebounceTimer);
-			this.fitWidthDebounceTimer = window.setTimeout(() => this.applyFitWidth(), 150);
-		});
-		this.resizeObserver.observe(this.contentEl);
-
-		// Loads each page's selectable text lazily, only once it's about to
-		// scroll into view (rootMargin prefetches a screen ahead/behind so it
-		// feels instant by the time you actually get there) — for a long note,
-		// building N pages' worth of text-layer DOM upfront is real, mostly
-		// wasted work if you only ever look at the first few. Re-observes
-		// fresh page containers each file load; see onLoadFile().
-		this.pageObserver = new IntersectionObserver((entries) => {
-			for (const entry of entries) {
-				if (!entry.isIntersecting) continue;
-				const state = this.pageStates.find((s) => s.pageContainer === entry.target);
-				if (state) void this.ensureTextLayer(state);
-			}
-		}, { root: this.contentEl, rootMargin: '100% 0px' });
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
 		const container = this.contentEl;
 		container.empty();
-
-		window.clearTimeout(this.zoomDebounceTimer);
-		this.pageObserver?.disconnect();
-		this.pageStates = [];
-		this.zoomScale = 1;
-		this.renderedZoomScale = 1;
-		this.findMatches = [];
-		this.findMatchCursor = -1;
-		// Invalidates any in-flight runFind() from a file the user just
-		// navigated away from, so it can't resolve later and touch this one's
-		// (unrelated) pageStates.
-		this.findRequestId++;
-
-		const note = await this.app.vault.readBinary(file);
-		const sn = new SupernoteX(new Uint8Array(note));
-		let images: string[] = [];
-
-		const converter = new ImageConverter();
-		try {
-			images = await converter.convertToImages(sn);
-		} finally {
-			// Clean up the worker when done
-			converter.terminate();
-		}
-
-		// Kicked off now but not awaited: pages are visible immediately from
-		// their own rasterized image (drawPageImage(), no pdf.js involved at
-		// all), so there's no reason to block the first paint on assembling a
-		// PDF and loading it into pdf.js. Only the text layer (selection/
-		// search) needs this, lazily, per page — see ensureTextLayer().
-		this.pdfDocPromise = (async () => {
-			const pdfBytes = await assemblePdfFromImages(sn, images);
-			this.pdfjsLib = await loadPdfJs() as PdfJsLib;
-			return this.pdfjsLib.getDocument({ data: pdfBytes }).promise;
-		})();
+		this.viewerEl = null;
+		this.pageIds = [];
 
 		if (this.settings.showExportButtons) {
 			const exportNoteBtn = container.createEl("p").createEl("button", {
 				text: "Attach Markdown to vault",
 				cls: "mod-cta",
 			});
-
 			exportNoteBtn.addEventListener("click", () => {
 				void vw.attachMarkdownFile(file);
 			});
@@ -706,7 +788,6 @@ export class SupernoteView extends FileView {
 				text: "Attach Markdown and images to vault",
 				cls: "mod-cta",
 			});
-
 			exportAllBtn.addEventListener("click", () => {
 				void vw.attachNoteFiles(file);
 			});
@@ -715,619 +796,215 @@ export class SupernoteView extends FileView {
 				text: "Attach as PDF",
 				cls: "mod-cta",
 			});
-
 			exportPDFBtn.addEventListener("click", () => {
 				void vw.exportToPDF(file);
 			});
 		}
 
-		// Sticky header so the toolbar (and find bar, when open) stay visible
-		// while scrolling through a long note instead of scrolling away with it.
-		this.headerEl = container.createDiv({ cls: 'supernote-header' });
-		this.buildToolbar(this.headerEl, images.length);
-		this.buildFindBar(this.headerEl);
-		this.updateThumbSidebarOffset();
+		const bytes = await this.app.vault.readBinary(file);
 
-		const body = container.createDiv({ cls: 'supernote-body' });
-		this.buildThumbSidebar(body, images);
-
-		this.pagesEl = body.createDiv({ cls: 'supernote-pages' });
-		this.pagesEl.toggleClass('supernote-mode-text', this.layerMode === 'text');
-
-		// Same for every page in a note (sn.pageWidth/pageHeight are note-level,
-		// not per-page) — computed once from data already in memory, no pdf.js
-		// or rasterization needed just to know how big to lay pages out.
-		const baseScale = this.settings.noteImageMaxDim / Math.max(sn.pageWidth, sn.pageHeight);
-
-		for (let i = 0; i < images.length; i++) {
-			const imageDataUrl = images[i];
-
-			const pageContainer = this.pagesEl.createDiv({
-				cls: 'page-container',
-			})
-
-			const canvasWrap = pageContainer.createDiv({ cls: 'supernote-canvas-wrap' });
-			const canvas = canvasWrap.createEl("canvas");
-			if (this.settings.invertColorsWhenDark) {
-				canvas.addClass("supernote-invert-dark");
-			}
-
-			// Canvas doesn't get native image drag-out the way <img> did; wire it up
-			// manually against the same page PNG the canvas is rendered from. This
-			// is best-effort — worth confirming it actually reproduces useful
-			// drag-and-drop behavior in a real vault, since the pre-canvas <img>
-			// drag may not have produced a proper vault attachment link either.
-			canvas.draggable = true;
-			canvas.addEventListener('dragstart', (evt) => {
-				if (!evt.dataTransfer) return;
-				evt.dataTransfer.setData('text/uri-list', imageDataUrl);
-				evt.dataTransfer.setData('text/plain', imageDataUrl);
-				evt.dataTransfer.setDragImage(canvas, 0, 0);
-			});
-
-			const textLayerDiv = canvasWrap.createDiv({ cls: 'textLayer' });
-
-			const state: PageRenderState = {
-				pageNumber: i + 1,
-				pdfPage: null,
-				baseScale,
-				nativeWidth: sn.pageWidth,
-				nativeHeight: sn.pageHeight,
-				pageContainer,
-				canvasWrap,
-				canvas,
-				textLayerDiv,
-				imageBitmap: null,
-				textLayerLoaded: false,
-				text: '',
-				spans: [],
-			};
-			this.pageStates.push(state);
-
-			// Decodes the same PNG already sitting in `images[i]` — no pdf.js,
-			// no re-rasterization. Cached on the state and reused for every
-			// zoom redraw (drawPageImage()).
-			const blob = new Blob([dataUrlToBuffer(imageDataUrl)], { type: 'image/png' });
-			state.imageBitmap = await createImageBitmap(blob);
-			this.drawPageImage(state, baseScale * this.zoomScale);
-
-			this.pageObserver?.observe(pageContainer);
-
-			// Create a button to save image to vault
-			if (this.settings.showExportButtons) {
-				const saveButton = pageContainer.createEl("button", {
-					text: "Save image to vault",
-					cls: "mod-cta",
-				});
-
-				saveButton.addEventListener("click", () => void (async () => {
-					const filename = await this.app.fileManager.getAvailablePathForAttachment(`${file.basename}-${i + 1}.png`);
-					const buffer = dataUrlToBuffer(imageDataUrl);
-					await this.app.vault.createBinary(filename, buffer);
-				})());
-			}
+		const viewer = container.createEl('supernote-viewer');
+		// Applies the plugin's custom-dictionary substitution (if enabled)
+		// to recognized text shown in the component's own text mode - the
+		// one piece of SupernoteView's previous behavior <supernote-viewer>
+		// has no portable equivalent for, since it reads plugin settings
+		// this Obsidian-free component has no concept of. See
+		// textProcessor's own doc comment (SupernoteViewerElement.ts) for
+		// the narrow find-in-note inconsistency this leaves.
+		viewer.textProcessor = (text) => processSupernoteText(text, this.settings);
+		// Vector ink on by default (settings.vectorInk) — draws the on-screen
+		// page's pen strokes as crisp vector paths instead of the rasterized
+		// ink layers. See SupernoteViewerElement.vectorInk's doc comment.
+		viewer.vectorInk = this.settings.vectorInk;
+		// Obsidian's own icon set (setIcon()/Lucide) instead of the
+		// component's own baked-in inline SVGs - see iconRenderer's own
+		// doc comment (SupernoteViewerElement.ts) for why this is safe:
+		// the component picked its icon names to already equal Lucide's
+		// own, specifically so a host with a real icon system can wire
+		// this up with no translation table of its own (issue #197's
+		// original ask for the export button, extended here to the whole
+		// toolbar for full UX consistency with the rest of Obsidian).
+		viewer.iconRenderer = (name, el) => setIcon(el, name);
+		if (this.settings.invertColorsWhenDark) {
+			viewer.setAttribute('invert-dark', '');
 		}
+		this.viewerEl = viewer;
+		this.updateDarkAttribute();
 
-		if (this.fitWidthEnabled) {
-			this.applyFitWidth();
-		}
-		this.updateCurrentPageIndicator();
-	}
-
-	// Draws the page's own already-decoded bitmap at the given scale — no
-	// pdf.js involved. Synchronous (drawImage from an ImageBitmap doesn't
-	// need awaiting), so redrawing on every zoom tick is cheap; pdf.js's own
-	// pdfPage.render() had to redecode the embedded PDF image every time.
-	private drawPageImage(state: PageRenderState, scale: number) {
-		const width = Math.max(1, Math.round(state.nativeWidth * scale));
-		const height = Math.max(1, Math.round(state.nativeHeight * scale));
-
-		// The canvas's backing store (width/height attributes) previously
-		// matched its CSS display size 1:1, so on a high-DPR mobile screen the
-		// browser had to upscale it to cover the physical pixels — the "chunky
-		// artifacts" that make handwritten strokes hard to read. Rendering the
-		// backing store at devicePixelRatio and leaving the CSS size alone
-		// (via explicit style, since an unstyled <canvas> otherwise takes its
-		// size from its width/height attributes) fixes that; capped at 3 so an
-		// extreme DPR display doesn't blow up canvas memory for no visible
-		// benefit.
-		const dpr = Math.min(window.devicePixelRatio || 1, 3);
-		const bitmapWidth = Math.max(1, Math.round(width * dpr));
-		const bitmapHeight = Math.max(1, Math.round(height * dpr));
-
-		state.canvas.width = bitmapWidth;
-		state.canvas.height = bitmapHeight;
-		state.canvas.setCssStyles({ width: `${width}px`, height: `${height}px` });
-		state.canvasWrap.setCssStyles({ width: `${width}px`, height: `${height}px` });
-		state.textLayerDiv.setCssStyles({ width: `${width}px`, height: `${height}px` });
-
-		if (state.imageBitmap) {
-			state.canvas.getContext("2d")?.drawImage(state.imageBitmap, 0, 0, bitmapWidth, bitmapHeight);
-		}
-	}
-
-	// (Re)builds the selectable/searchable text layer at the given viewport.
-	// Shared by ensureTextLayer() (first load) and commitZoom() (rebuild at
-	// the new scale for pages that were already loaded).
-	private async buildTextLayerForState(pdfPage: PdfJsPage, state: PageRenderState, viewport: PdfJsViewport): Promise<void> {
-		const textContent = await pdfPage.getTextContent();
-		state.text = textContent.items.map(item => item.str ?? '').join('');
-
-		const hasTextLayer = this.pdfjsLib
-			? await renderTextLayer(this.pdfjsLib, textContent, state.textLayerDiv, viewport)
-			: false;
-		state.spans = hasTextLayer ? Array.from(state.textLayerDiv.querySelectorAll('span')) : [];
-	}
-
-	// Loads this page's text layer if it hasn't been already — triggered by
-	// pageObserver as a page nears the viewport, or forced immediately by
-	// page-jump/thumbnail-click/find-in-note so those don't have to wait on
-	// scroll+observer timing. Idempotent and safe to call speculatively.
-	private async ensureTextLayer(state: PageRenderState): Promise<void> {
-		if (state.textLayerLoaded) return;
-		state.textLayerLoaded = true; // set eagerly: no double-trigger race
-
-		try {
-			const pdfDoc = await this.pdfDocPromise;
-			if (!pdfDoc) return;
-
-			if (!state.pdfPage) {
-				state.pdfPage = await pdfDoc.getPage(state.pageNumber);
-			}
-			const pdfPage = state.pdfPage;
-
-			const viewport = pdfPage.getViewport({ scale: state.baseScale * this.zoomScale });
-			await this.buildTextLayerForState(pdfPage, state, viewport);
-		} catch (error) {
-			console.error(`Failed to build text layer for page ${state.pageNumber}:`, error);
-		}
-	}
-
-	private buildToolbar(container: HTMLElement, pageCount: number) {
-		this.pageJumpInput = null;
-		const toolbar = container.createDiv({ cls: 'supernote-toolbar' });
-
-		if (pageCount > 1) {
-			const thumbGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
-			this.thumbToggleBtn = thumbGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Toggle page thumbnails' } });
-			setIcon(this.thumbToggleBtn, 'layout-list');
-			this.thumbToggleBtn.addEventListener('click', () => this.toggleThumbnails());
-		}
-
-		const zoomGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
-		const zoomOutBtn = zoomGroup.createEl('button', { text: '−', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom out' } });
-		this.zoomLabelEl = zoomGroup.createSpan({ cls: 'supernote-zoom-label', text: '100%' });
-		const zoomInBtn = zoomGroup.createEl('button', { text: '+', cls: 'clickable-icon', attr: { 'aria-label': 'Zoom in' } });
-		const zoomResetBtn = zoomGroup.createEl('button', { text: 'Reset zoom', cls: 'clickable-icon' });
-		this.fitWidthBtn = zoomGroup.createEl('button', { text: 'Fit width', cls: 'clickable-icon', attr: { 'aria-label': 'Fit page to viewport width' } });
-
-		zoomOutBtn.addEventListener('click', () => this.setZoom(this.zoomScale / 1.25));
-		zoomInBtn.addEventListener('click', () => this.setZoom(this.zoomScale * 1.25));
-		zoomResetBtn.addEventListener('click', () => this.setZoom(1));
-		this.fitWidthBtn.addEventListener('click', () => {
-			this.fitWidthEnabled = !this.fitWidthEnabled;
-			if (this.fitWidthEnabled) {
-				this.applyFitWidth();
-			}
-			this.updateFitWidthButton();
-		});
-		this.updateFitWidthButton();
-
-		const layerGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
-		this.imageModeBtn = layerGroup.createEl('button', { text: 'Image', cls: 'clickable-icon', attr: { 'aria-label': 'Show page image' } });
-		this.textModeBtn = layerGroup.createEl('button', { text: 'Text', cls: 'clickable-icon', attr: { 'aria-label': 'Show recognized text' } });
-		this.imageModeBtn.addEventListener('click', () => this.setLayerMode('image'));
-		this.textModeBtn.addEventListener('click', () => this.setLayerMode('text'));
-		this.updateLayerModeButtons();
-
-		// Mod+F (registered in onOpen) already toggles the find bar, but that
-		// hotkey has no mobile equivalent — without a button, search is
-		// unreachable on touch devices. Toolbar button covers both.
-		const findGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
-		this.findToggleBtn = findGroup.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Find in note' } });
-		setIcon(this.findToggleBtn, 'search');
-		this.findToggleBtn.addEventListener('click', () => this.toggleFindBar());
-
-		if (pageCount > 1) {
-			const jumpGroup = toolbar.createDiv({ cls: 'supernote-toolbar-group' });
-			jumpGroup.createSpan({ text: 'Page', cls: 'supernote-page-jump-label' });
-			const pageInput = jumpGroup.createEl('input', {
-				cls: 'supernote-page-jump-input',
-				attr: { type: 'number', min: '1', max: String(pageCount), value: '1' },
-			});
-			this.pageJumpInput = pageInput;
-			jumpGroup.createSpan({ text: `/ ${pageCount}`, cls: 'supernote-page-jump-total' });
-
-			const jumpToPage = () => {
-				const requested = Number(pageInput.value);
-				if (!Number.isFinite(requested)) return;
-				void this.goToPage(Math.round(requested));
-			};
-
-			pageInput.addEventListener('keydown', (evt: KeyboardEvent) => {
-				if (evt.key === 'Enter') {
-					evt.preventDefault();
-					jumpToPage();
-				}
-			});
-			pageInput.addEventListener('blur', jumpToPage);
-		}
-	}
-
-	private setLayerMode(mode: 'image' | 'text') {
-		this.layerMode = mode;
-		this.pagesEl?.toggleClass('supernote-mode-text', mode === 'text');
-		this.updateLayerModeButtons();
-	}
-
-	private updateLayerModeButtons() {
-		this.imageModeBtn?.toggleClass('is-active', this.layerMode === 'image');
-		this.textModeBtn?.toggleClass('is-active', this.layerMode === 'text');
-	}
-
-	// Reuses the same page PNGs already generated for the save-to-vault/
-	// drag-out buttons — no separate low-res render pass, just let CSS scale
-	// them down. Built up front (images are ready before pdf.js even starts),
-	// independent of the pdf.js page-render loop below.
-	private buildThumbSidebar(body: HTMLElement, images: string[]) {
-		const thumbSidebarEl = body.createDiv({ cls: 'supernote-thumb-sidebar' });
-		this.thumbSidebarEl = thumbSidebarEl;
-		this.thumbItems = [];
-
-		images.forEach((dataUrl, i) => {
-			const item = thumbSidebarEl.createDiv({ cls: 'supernote-thumb-item' });
-			const img = item.createEl('img', { cls: 'supernote-thumb-img' });
-			img.src = dataUrl;
-			item.createSpan({ cls: 'supernote-thumb-label', text: String(i + 1) });
-
-			item.addEventListener('click', () => {
-				void this.goToPage(i + 1);
-			});
-
-			this.thumbItems.push(item);
-		});
-
-		this.applyThumbSidebarVisibility();
-	}
-
-	private toggleThumbnails() {
-		this.thumbnailsVisible = !this.thumbnailsVisible;
-		this.applyThumbSidebarVisibility();
-	}
-
-	private applyThumbSidebarVisibility() {
-		this.thumbSidebarEl?.toggle(this.thumbnailsVisible);
-		this.thumbToggleBtn?.toggleClass('is-active', this.thumbnailsVisible);
-		if (this.thumbnailsVisible) this.updateThumbSidebarOffset();
-
-		// Showing/hiding the sidebar changes how much horizontal room pagesEl
-		// actually has, but that's an internal flex redistribution within
-		// contentEl, not a change to contentEl's own box — the ResizeObserver
-		// driving auto-refit on window/pane resize never fires for it. Without
-		// this, a page already fit to the full width just sits there too wide
-		// once the sidebar eats into that space, spilling into horizontal
-		// scroll instead of shrinking to match.
-		if (this.fitWidthEnabled) {
-			this.applyFitWidth();
-		}
-	}
-
-	// The thumbnail sidebar is sticky below the header, not at top:0 like the
-	// header itself — otherwise it would stick right under the top edge of
-	// the view, overlapping the header instead of sitting below it. The find
-	// bar toggling open/closed changes the header's height, so this needs
-	// re-running whenever that happens, not just once at load.
-	private updateThumbSidebarOffset() {
-		if (!this.thumbSidebarEl) return;
-		const headerHeight = this.headerEl?.offsetHeight ?? 0;
-		this.thumbSidebarEl.setCssStyles({ top: `${headerHeight}px` });
-	}
-
-	private highlightThumbnail(index: number) {
-		this.thumbItems.forEach((item, i) => item.toggleClass('is-active', i === index));
-	}
-
-	// Shared by the toolbar's page-jump input, the thumbnail sidebar, and
-	// setEphemeralState() (a `#page=N` link anchor) — all three just need to
-	// scroll a given 1-indexed page into view and prime its text layer.
-	private async goToPage(pageNumber: number): Promise<void> {
-		if (this.pageStates.length === 0) return;
-		// Wait out any in-flight fit-width/zoom re-render first — see
-		// waitForZoomToSettle() for why scrolling before it settles can land on
-		// the wrong page.
-		await this.waitForZoomToSettle();
-		if (this.pageStates.length === 0) return;
-		const clamped = Math.min(this.pageStates.length, Math.max(1, pageNumber));
-		const state = this.pageStates[clamped - 1];
-		if (!state) return;
-		state.pageContainer.scrollIntoView({ block: 'start', behavior: 'smooth' });
-		// Don't wait on scroll+observer timing for a page the user (or link)
-		// explicitly asked to jump to.
-		void this.ensureTextLayer(state);
-		if (this.pageJumpInput) this.pageJumpInput.value = String(clamped);
-	}
-
-	// Scrollspy: find the last page whose top has scrolled up past the sticky
-	// header, and reflect it in the toolbar's page number — unless the user is
-	// actively typing in that field themselves.
-	private updateCurrentPageIndicator() {
-		if (!this.pageJumpInput || this.pageStates.length === 0) return;
-		if (document.activeElement === this.pageJumpInput) return;
-
-		const headerHeight = this.headerEl?.offsetHeight ?? 0;
-		const threshold = this.contentEl.getBoundingClientRect().top + headerHeight + 1;
-
-		let current = 0;
-		for (let i = 0; i < this.pageStates.length; i++) {
-			if (this.pageStates[i].pageContainer.getBoundingClientRect().top <= threshold) {
-				current = i;
-			} else {
-				break;
-			}
-		}
-
-		this.pageJumpInput.value = String(current + 1);
-		this.highlightThumbnail(current);
-	}
-
-	private setZoom(newScale: number, opts: { manual?: boolean } = {}) {
-		const isManual = opts.manual !== false;
-		if (isManual) {
-			// Any direct zoom action (buttons, wheel, reset) is the user taking
-			// manual control — stop auto-adjusting on resize until they ask for
-			// fit-width again. applyFitWidth() itself calls in with manual:false
-			// so it doesn't immediately cancel the mode it's trying to apply.
-			this.fitWidthEnabled = false;
-			this.updateFitWidthButton();
-		}
-
-		// Floor lowered from a former 0.25: "Fit width" (on by default) computes
-		// whatever zoom is needed to match the available viewport width, and on
-		// a narrow mobile screen — especially with the thumbnail sidebar open,
-		// or a wide/landscape note — that can legitimately need to go below
-		// 25%. Clamping it there just forced horizontal scrolling instead.
+		// A real toolbar button, not a standalone element outside the
+		// component (an earlier version of this wrapper did that - a real,
+		// reported regression, since it no longer sat with the rest of the
+		// page-nav/mode/find controls the way it did in SupernoteView's own
+		// pre-web-component toolbar). <supernote-viewer> has no portable
+		// equivalent for this - it writes to an Obsidian vault - so it
+		// exposes a "toolbar-extra" slot instead of building export UI
+		// itself (see buildToolbar()'s own comment on that slot, and its
+		// header comment's "no save/export UI" v1 boundary). A plain
+		// light-DOM child of `viewer`, unaffected by the component
+		// rebuilding its own shadow-root toolbar on every note load - no
+		// re-adding needed beyond this one call per onLoadFile().
 		//
-		// The 500% ceiling only makes sense for *manual* zoom (a sanity cap on
-		// how far a user should zoom in by hand). "100%" here is only ever
-		// relative to noteImageMaxDim — an arbitrary default render size, not
-		// the note's true resolution or the available viewport — so a large or
-		// high-resolution display can legitimately need well over 5x to
-		// actually fill it with "Fit width". Applying the same 500% ceiling
-		// there just left the page stuck at a fixed pixel width regardless of
-		// how much wider the pane actually was, while showing a confusing
-		// pinned "500%" (see issue #108). Fit width instead gets a much higher
-		// ceiling, purely as a guard against a pathological render (e.g. a
-		// zero-width native page) rather than a real intended limit.
-		const ceiling = isManual ? 5 : 20;
-		this.zoomScale = Math.min(ceiling, Math.max(0.05, newScale));
-		this.zoomLabelEl?.setText(`${Math.round(this.zoomScale * 100)}%`);
-
-		// Instant CSS-scale feedback while the user is still zooming; the real
-		// re-render (crisp at the new resolution, text layer repositioned) is
-		// debounced below so rapid wheel/button input doesn't thrash pdf.js.
-		const instantFactor = this.zoomScale / this.renderedZoomScale;
-		for (const state of this.pageStates) {
-			state.canvasWrap.setCssStyles({ transform: `scale(${instantFactor})`, transformOrigin: 'top left' });
-		}
-
-		window.clearTimeout(this.zoomDebounceTimer);
-		this.zoomCommitPending = true;
-		this.zoomDebounceTimer = window.setTimeout(() => void this.commitZoom(), 200);
-	}
-
-	private async commitZoom(): Promise<void> {
-		const targetZoom = this.zoomScale;
-		for (const state of this.pageStates) {
-			this.drawPageImage(state, state.baseScale * targetZoom);
-			state.canvasWrap.setCssStyles({ transform: '', transformOrigin: '' });
-
-			// Only rebuild the text layer for pages that already had one —
-			// pages not yet loaded (ensureTextLayer() never ran) will build
-			// theirs at whatever zoom is current when they eventually do.
-			if (state.textLayerLoaded && state.pdfPage) {
-				const pdfPage = state.pdfPage;
-				const viewport = pdfPage.getViewport({ scale: state.baseScale * targetZoom });
-				await this.buildTextLayerForState(pdfPage, state, viewport);
-			}
-		}
-		this.renderedZoomScale = targetZoom;
-		this.updateCurrentPageIndicator();
-
-		this.zoomCommitPending = false;
-		const resolvers = this.zoomSettleResolvers;
-		this.zoomSettleResolvers = [];
-		resolvers.forEach((resolve) => resolve());
-	}
-
-	// Until commitZoom() runs, page containers are still sized at whatever
-	// zoom was rendered *before* the pending setZoom() call (the interim CSS
-	// transform scale it applies for instant visual feedback doesn't change
-	// their layout box). onLoadFile() calls applyFitWidth() as soon as pages
-	// are built, so a page-anchor link (setEphemeralState() -> goToPage(),
-	// firing right as that file finishes loading) can easily land its
-	// scrollIntoView() before fit-width's real re-render — using page heights
-	// that are about to change once commitZoom() actually fires, and landing
-	// on the wrong page once they do. Waiting this out first keeps
-	// scrollIntoView() targeting final, stable page positions.
-	private async waitForZoomToSettle(): Promise<void> {
-		if (!this.zoomCommitPending) return;
-		await new Promise<void>((resolve) => this.zoomSettleResolvers.push(resolve));
-	}
-
-	// Scales the page so its rendered width matches however much horizontal
-	// space is actually available (pagesEl's content box, which already
-	// accounts for the thumbnail sidebar if it's open) minus the page
-	// container's own margin, rather than the fixed noteImageMaxDim cap.
-	private applyFitWidth() {
-		const state = this.pageStates[0];
-		if (!state || !this.pagesEl || state.nativeWidth <= 0) return;
-
-		const availableWidth = this.pagesEl.clientWidth;
-		if (availableWidth <= 0) return;
-
-		const containerStyle = getComputedStyle(state.pageContainer);
-		const horizontalMargin = parseFloat(containerStyle.marginLeft || '0') + parseFloat(containerStyle.marginRight || '0');
-		const targetWidth = Math.max(availableWidth - horizontalMargin, 1);
-
-		this.setZoom(targetWidth / (state.nativeWidth * state.baseScale), { manual: false });
-	}
-
-	private updateFitWidthButton() {
-		this.fitWidthBtn?.toggleClass('is-active', this.fitWidthEnabled);
-	}
-
-	private buildFindBar(container: HTMLElement) {
-		const bar = container.createDiv({ cls: 'supernote-find-bar' });
-		bar.hide();
-		this.findBarEl = bar;
-
-		this.findInput = new SearchComponent(bar);
-		this.findInput.setPlaceholder('Find in note…');
-		this.findInput.onChange((value) => this.runFind(value));
-
-		this.findMatchCountEl = bar.createSpan({ cls: 'supernote-find-count' });
-
-		const prevBtn = bar.createEl('button', { text: '↑', cls: 'clickable-icon', attr: { 'aria-label': 'Previous match' } });
-		const nextBtn = bar.createEl('button', { text: '↓', cls: 'clickable-icon', attr: { 'aria-label': 'Next match' } });
-		const closeBtn = bar.createEl('button', { text: '✕', cls: 'clickable-icon', attr: { 'aria-label': 'Close find bar' } });
-
-		prevBtn.addEventListener('click', () => this.stepFind(-1));
-		nextBtn.addEventListener('click', () => this.stepFind(1));
-		closeBtn.addEventListener('click', () => this.closeFindBar());
-
-		bar.addEventListener('keydown', (evt: KeyboardEvent) => {
-			if (evt.key === 'Escape') {
-				evt.preventDefault();
-				this.closeFindBar();
-			} else if (evt.key === 'Enter') {
-				evt.preventDefault();
-				this.stepFind(evt.shiftKey ? -1 : 1);
-			}
+		// Uses Obsidian's own icon set (setIcon(), Lucide), not the
+		// component's own inline-SVG icons (issue #197) - this button is
+		// SupernoteView's own addition, built entirely within Obsidian's
+		// context (unlike the component's toolbar, which has no Obsidian
+		// dependency and bakes its icons in for exactly that reason - see
+		// SupernoteViewerElement.ts's own icon* functions), so there's no
+		// portability reason not to use the real thing here. 'download',
+		// cls: 'clickable-icon' - same icon name and pattern this button
+		// had before the #183 web-component swap, and the same pattern
+		// SupernoteAtelierView's own toolbar buttons already use
+		// (atelierView.ts).
+		const exportPageBtn = viewer.createEl('button', {
+			cls: 'clickable-icon',
+			attr: { type: 'button', slot: 'toolbar-extra', 'aria-label': 'Export current page as image' },
 		});
-	}
+		setIcon(exportPageBtn, 'download');
+		exportPageBtn.addEventListener('click', () => {
+			this.exportCurrentPageAsImage(this.settings.pageExportImageFormat).catch((err: unknown) => {
+				new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+			});
+		});
 
-	private toggleFindBar() {
-		if (!this.findBarEl) return;
-		if (this.findBarEl.isShown()) {
-			this.closeFindBar();
-			return;
-		}
-		this.findBarEl.show();
-		this.findToggleBtn?.toggleClass('is-active', true);
-		this.findInput?.inputEl.focus();
-		this.findInput?.inputEl.select();
-		this.updateThumbSidebarOffset();
-	}
-
-	private closeFindBar() {
-		this.clearFindHighlights();
-		this.findBarEl?.hide();
-		this.findToggleBtn?.toggleClass('is-active', false);
-		this.updateThumbSidebarOffset();
-	}
-
-	private clearFindHighlights() {
-		for (const state of this.pageStates) {
-			for (const span of state.spans) {
-				span.removeClass('supernote-find-match');
-				span.removeClass('supernote-find-match-current');
+		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageIds: string[] }>) => {
+			this.pageIds = e.detail.pageIds;
+		}) as EventListener);
+		viewer.addEventListener('supernote-error', ((e: CustomEvent<{ error: unknown; pageNumber?: number }>) => {
+			// A single page failing to rasterize (pageNumber set) just
+			// leaves that one page blank and retries later - only a
+			// whole-note failure (fetch/parse, no pageNumber) is worth
+			// surfacing as a hard error.
+			if (e.detail.pageNumber === undefined) {
+				new ErrorModal(this.app, e.detail.error instanceof Error ? e.detail.error : new Error(String(e.detail.error))).open();
 			}
-		}
-		this.findMatches = [];
-		this.findMatchCursor = -1;
-		this.findMatchCountEl?.setText('');
+		}) as EventListener);
+		viewer.addEventListener('link-click', ((e: CustomEvent<{ link: ILink }>) => {
+			void handleNoteLinkClick(this.app, file.basename, this.pageIds, this.viewerEl, e.detail.link);
+		}) as EventListener);
+
+		// Awaited (unlike SupernoteEmbed's identical assignment, which is
+		// fire-and-forget) so setEphemeralState() - which Obsidian calls
+		// right after onLoadFile() resolves, for a `#page=N` link's initial
+		// jump - never races the component's own async parse/build: without
+		// this, goToPage() could run before the component's page list even
+		// exists yet (noteData's actual parsing is deferred to a
+		// microtask - see queueRender() in SupernoteViewerElement.ts) and
+		// silently no-op.
+		const loaded = new Promise<void>((resolve) => {
+			viewer.addEventListener('supernote-load', () => resolve(), { once: true });
+			viewer.addEventListener('supernote-error', ((e: CustomEvent<{ pageNumber?: number }>) => {
+				if (e.detail.pageNumber === undefined) resolve();
+			}) as EventListener, { once: true });
+		});
+		viewer.noteData = bytes;
+		await loaded;
 	}
 
-	// Maps a character offset within state.text back to the span that contains
-	// it. Assumes pdf.js's text layer renders one span per text-content item in
-	// order, which holds for the common case; a mismatch here just means a
-	// match highlights the wrong span rather than crashing.
-	private findSpanForOffset(state: PageRenderState, offset: number): number {
-		let cumulative = 0;
-		for (let i = 0; i < state.spans.length; i++) {
-			const len = state.spans[i].textContent?.length ?? 0;
-			if (offset < cumulative + len) return i;
-			cumulative += len;
-		}
-		return -1;
-	}
+	// Exports the page currently on screen (viewerEl.currentPage, kept up to
+	// date by the component's own scroll-driven page indicator) as a PNG or
+	// SVG attachment - the single-page equivalent of the whole-note export
+	// buttons above, for when the user only wants the page they're looking
+	// at right now rather than the whole note. Exposed as commands (see
+	// 'export-current-page-as-image'/'export-current-page-as-svg') and the
+	// toolbar button above, which passes settings.pageExportImageFormat
+	// rather than a hardcoded format.
+	// Independently re-reads and rasterizes just this one page rather than
+	// reaching into the live <supernote-viewer>'s own internal state -
+	// mirrors how VaultWriter's own export methods already read+convert
+	// independently of whatever's currently displayed.
+	async exportCurrentPageAsImage(format: PageExportImageFormat = 'png'): Promise<void> {
+		if (!this.viewerEl || this.viewerEl.currentPage === 0) return;
+		const pageNumber = this.viewerEl.currentPage;
 
-	private async runFind(query: string) {
-		const requestId = ++this.findRequestId;
+		const note = await this.app.vault.readBinary(this.file);
+		const sn = new SupernoteX(new Uint8Array(note));
 
-		this.clearFindHighlights();
-		if (!query) return;
-
-		// Search needs every page's text, not just whatever's been lazily
-		// loaded so far — force any not-yet-loaded pages to load now rather
-		// than silently missing matches on pages the user hasn't scrolled to.
-		// Already-loaded pages resolve near-instantly, so this only really
-		// costs anything on the first search of a long, mostly-unscrolled note.
-		await Promise.all(this.pageStates.map((state) => this.ensureTextLayer(state)));
-		// A newer search may have started (and even finished) while this one
-		// was waiting on that — don't clobber its results with stale ones.
-		if (requestId !== this.findRequestId) return;
-
-		const lowerQuery = query.toLowerCase();
-		for (let pageIndex = 0; pageIndex < this.pageStates.length; pageIndex++) {
-			const state = this.pageStates[pageIndex];
-			const lowerText = state.text.toLowerCase();
-
-			for (let searchStart = 0; ;) {
-				const matchOffset = lowerText.indexOf(lowerQuery, searchStart);
-				if (matchOffset === -1) break;
-
-				const spanIndex = this.findSpanForOffset(state, matchOffset);
-				if (spanIndex !== -1) {
-					this.findMatches.push({ pageIndex, spanIndex });
-					state.spans[spanIndex].addClass('supernote-find-match');
-				}
-				searchStart = matchOffset + lowerQuery.length;
-			}
+		let savedFile: TFile;
+		if (format === 'svg') {
+			// When vectorInk is on, use the submodule's toSvg() directly — it
+			// draws strokes as vector <path>s and keeps the searchable text
+			// layer (includeText defaults true), which is exactly what an SVG
+			// export should produce. When off, fall back to the raster-embed
+			// path (buildSvgForPage), which wraps the rasterized PNG in an SVG
+			// with the same text layer.
+			const svg = this.settings.vectorInk
+				? (await toSvg(sn, { vectorInk: true, pageNumbers: [pageNumber] }))[0]
+				: buildSvgForPage(sn, pageNumber, (await new ImageConverter().convertToImages(sn, [pageNumber]))[0]);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.svg`);
+			savedFile = await this.app.vault.create(filename, svg);
+		} else {
+			// PNG stays raster regardless of vectorInk — a PNG is pixels, so
+			// vector ink's crisp-at-any-zoom benefit doesn't survive the
+			// format anyway, and this keeps the export matching the note's
+			// own rendered ink.
+			const [imageDataUrl] = await new ImageConverter().convertToImages(sn, [pageNumber]);
+			const filename = await this.app.fileManager.getAvailablePathForAttachment(`${this.file.basename}-page-${pageNumber}.png`);
+			savedFile = await this.app.vault.createBinary(filename, dataUrlToBuffer(imageDataUrl));
 		}
 
-		if (this.findMatches.length > 0) {
-			this.findMatchCursor = 0;
-			this.highlightCurrentMatch();
-		}
-		this.updateFindCount();
-	}
-
-	private stepFind(direction: 1 | -1) {
-		if (this.findMatches.length === 0) return;
-		this.findMatchCursor = (this.findMatchCursor + direction + this.findMatches.length) % this.findMatches.length;
-		this.highlightCurrentMatch();
-		this.updateFindCount();
-	}
-
-	private highlightCurrentMatch() {
-		for (const state of this.pageStates) {
-			for (const span of state.spans) {
-				span.removeClass('supernote-find-match-current');
-			}
-		}
-
-		const match = this.findMatches[this.findMatchCursor];
-		if (!match) return;
-
-		const state = this.pageStates[match.pageIndex];
-		const span = state.spans[match.spanIndex];
-		span.addClass('supernote-find-match-current');
-		state.pageContainer.scrollIntoView({ block: 'center', behavior: 'smooth' });
-	}
-
-	private updateFindCount() {
-		if (!this.findMatchCountEl) return;
-		this.findMatchCountEl.setText(this.findMatches.length === 0 ? 'No matches' : `${this.findMatchCursor + 1}/${this.findMatches.length}`);
+		// Same "click to open" completion notice as VaultWriter's exports
+		// (see notifyExportComplete(), issue #167 / PR #175).
+		const notice = new Notice(`Created "${savedFile.path}" - click to open`);
+		notice.messageEl.addEventListener('click', () => {
+			void this.app.workspace.getLeaf(false).openFile(savedFile);
+		});
 	}
 
 	async onClose() {
-		window.clearTimeout(this.zoomDebounceTimer);
-		window.clearTimeout(this.fitWidthDebounceTimer);
-		this.resizeObserver?.disconnect();
-		this.pageObserver?.disconnect();
+		this.viewerEl = null;
 	}
 }
+
+// A clicked internal note link's navigation target: same-file (jump in
+// place via viewerEl.goToPage()) when the link carries no filename at all
+// or names the file currently open/embedded, or another vault note (open
+// via a new leaf, reusing the `#page=N` ephemeral-state anchor that regular
+// `[[note#page=N]]` links already use — see SupernoteView.setEphemeralState()
+// and SupernoteEmbed's own pageAnchor handling). Basename matching against
+// the vault mirrors VaultWriter.resolvePageAnchor()'s export-time link
+// resolution (see PR #122), so a link resolves the same note whether you're
+// viewing it live or exporting it; ambiguous if two vault notes share a
+// basename in different folders, same known limitation as that export path.
+// Shared by SupernoteView and SupernoteEmbed, which had identical copies of
+// this before this function existed - the only difference between them was
+// which file/pageIds/viewerEl to check against, now just parameters.
+async function handleNoteLinkClick(
+	app: App,
+	currentFileBasename: string,
+	pageIds: string[],
+	viewerEl: SupernoteViewerElement | null,
+	link: ILink,
+): Promise<void> {
+	const targetBasename = link.text.split('#')[0];
+	const pageid = link.PAGEID;
+
+	if (!targetBasename || targetBasename === currentFileBasename) {
+		const pageIndex = pageIds.findIndex((id) => id === pageid);
+		if (pageIndex >= 0) viewerEl?.goToPage(pageIndex + 1);
+		return;
+	}
+
+	const targetFile = app.vault.getFiles().find((f) => f.extension === 'note' && f.basename === targetBasename);
+	if (!targetFile) {
+		new Notice(`Linked note "${targetBasename}.note" not found in vault.`);
+		return;
+	}
+
+	let subpath: string | undefined;
+	if (pageid && pageid !== '0' && pageid !== 'none') {
+		try {
+			const buffer = await app.vault.readBinary(targetFile);
+			const pageIndex = new SupernoteX(new Uint8Array(buffer)).pages.findIndex((p) => p.PAGEID === pageid);
+			if (pageIndex >= 0) subpath = `#page=${pageIndex + 1}`;
+		} catch {
+			// Malformed target file — fall through and open without a page anchor.
+		}
+	}
+
+	const leaf = app.workspace.getLeaf(false);
+	await leaf.openFile(targetFile, subpath ? { eState: { subpath } } : undefined);
+}
+
 
 // Obsidian's PDF support accepts a `#page=3` anchor — as an embed
 // (`![[file.pdf#page=3]]`) or a regular link (`[[file.pdf#page=3]]` /
@@ -1344,26 +1021,34 @@ function parsePageAnchor(subpath?: string): number | null {
 // undocumented app.embedRegistry API (see registration in SupernotePlugin.onload
 // — there's no public API for embedding a custom, non-markdown file type; core's
 // own image/PDF/canvas embeds are wired up through this same internal registry).
-// Deliberately much simpler than SupernoteView: a scrollable, read-only page
-// list with a minimal PDF-embed-style page-nav toolbar, not SupernoteView's
-// full zoom/find/thumbnail toolbar — so this doesn't share code with it beyond
-// ImageConverter/SupernoteX.
+//
+// A thin adapter around <supernote-viewer> (src/webcomponent/), not its own
+// rendering implementation - Obsidian's renderer is a real Chromium/WebView
+// browsing context, so the same standalone custom element built for issue
+// #183 runs here unmodified. This class's whole job is bridging Obsidian
+// specifics the component itself has no way to know about: reading the
+// file's bytes from the vault, the plugin's invertColorsWhenDark setting,
+// and the "always show at least one full page" min-height sizing Obsidian's
+// own PDF embed has (see applyMinHeight()) - everything else (lazy loading,
+// the page-nav toolbar, the recognized-text toggle) now lives in the
+// component, shared with every other consumer of it.
 export class SupernoteEmbed extends Component {
-	private destroyed = false;
-	private pageEls: HTMLElement[] = [];
-	private pageIndicatorEl: HTMLElement | null = null;
-	private pageObserver: IntersectionObserver | null = null;
-	private currentPage = 0;
-
-	private pagesEl: HTMLElement | null = null;
-	private toolbarEl: HTMLElement | null = null;
-	// note page height / width — used to keep min-height (see setupMinHeightTracking)
-	// matched to one full page's rendered height at whatever width the embed
+	private viewerEl: SupernoteViewerElement | null = null;
+	// note page height / width, from the component's own supernote-load
+	// event - used to keep min-height (see setupMinHeightTracking) matched
+	// to one full page's rendered height at whatever width the embed
 	// currently has, the same "always show at least one whole page" behavior
 	// Obsidian's own PDF embed has.
 	private pageAspectRatio: number | null = null;
 	private minHeightObserver: ResizeObserver | null = null;
 	private lastMinHeightWidth = -1;
+	// This note's own pages' PAGEIDs, from the component's own supernote-load
+	// event - lets handleNoteLinkClick() resolve a link that names this same
+	// file explicitly (this.file.basename) without re-parsing bytes already
+	// parsed once inside the component. See that event's own detail comment
+	// (SupernoteViewerElement.ts) for why the component can't resolve this
+	// particular case itself.
+	private pageIds: string[] = [];
 
 	constructor(
 		private app: App,
@@ -1375,6 +1060,28 @@ export class SupernoteEmbed extends Component {
 		private pageAnchor: number | null,
 	) {
 		super();
+		// <supernote-viewer>'s own light/dark defaults come from the OS-level
+		// prefers-color-scheme media feature (the right call for a page with
+		// no other context) - but Obsidian's own dark/light theme is set
+		// independently of that, and plenty of users run one dark and the
+		// other light (confirmed as a real bug, not a hypothetical: on a
+		// system whose OS-level scheme is dark, an embed inside Obsidian's
+		// *light* theme still got its page images inverted by the OS-level
+		// guess, since an earlier version of the component's CSS treated
+		// that guess and this attribute as independent conditions rather
+		// than this attribute overriding it - see SupernoteViewerElement's
+		// STYLE constant for the fix). Always setting an explicit "true" or
+		// "false" value below (never just adding/removing the attribute)
+		// is what makes this actually override the OS guess in *both*
+		// directions, not just toward dark. registerEvent() (auto-cleaned-up
+		// by Component, regardless of this class's own onunload() override
+		// below) keeps it in sync if the user swaps themes without
+		// navigating away.
+		this.registerEvent(this.app.workspace.on('css-change', () => this.updateDarkAttribute()));
+	}
+
+	private updateDarkAttribute(): void {
+		this.viewerEl?.setAttribute('dark', document.body.classList.contains('theme-dark') ? 'true' : 'false');
 	}
 
 	// Called by Obsidian's embed system once this component has been mounted
@@ -1386,8 +1093,6 @@ export class SupernoteEmbed extends Component {
 	}
 
 	onunload(): void {
-		this.destroyed = true;
-		this.pageObserver?.disconnect();
 		this.minHeightObserver?.disconnect();
 	}
 
@@ -1395,70 +1100,60 @@ export class SupernoteEmbed extends Component {
 		this.containerEl.empty();
 		this.containerEl.addClass('supernote-embed');
 		this.containerEl.setCssStyles({ minHeight: '' });
-		this.pageObserver?.disconnect();
-		this.pageObserver = null;
 		this.minHeightObserver?.disconnect();
 		this.minHeightObserver = null;
-		this.pageEls = [];
-		this.currentPage = 0;
-		this.toolbarEl = null;
 		this.pageAspectRatio = null;
 		this.lastMinHeightWidth = -1;
 
-		let sn: SupernoteX;
+		let bytes: ArrayBuffer;
 		try {
-			const note = await this.app.vault.readBinary(this.file);
-			if (this.destroyed) return;
-			sn = new SupernoteX(new Uint8Array(note));
+			bytes = await this.app.vault.readBinary(this.file);
 		} catch (err) {
 			this.renderError(err);
 			return;
 		}
 
-		// Clamped rather than rejected: a stale anchor (note re-paginated
-		// since the link was written) should still show *a* page, not error.
-		const singlePage = this.pageAnchor !== null
-			? Math.min(Math.max(this.pageAnchor, 1), sn.pages.length)
-			: null;
-		this.pageAspectRatio = sn.pageHeight / sn.pageWidth;
-
-		const converter = new ImageConverter();
-		let images: string[];
-		try {
-			images = await converter.convertToImages(sn, singlePage !== null ? [singlePage] : undefined);
-		} catch (err) {
-			if (!this.destroyed) this.renderError(err);
-			return;
-		} finally {
-			converter.terminate();
+		const viewer = this.containerEl.createEl('supernote-viewer');
+		// The outer .supernote-embed container (see styles.css) already
+		// supplies a bordered, resizable frame - `bare` drops the component's
+		// own default chrome so the two don't visually double up.
+		viewer.setAttribute('bare', '');
+		if (this.pageAnchor !== null) {
+			viewer.setAttribute('single-page', '');
+			viewer.setAttribute('page', String(this.pageAnchor));
 		}
-		if (this.destroyed) return;
-
-		// A single requested page, or a single-page note, needs no page-nav
-		// toolbar — there's nowhere for it to navigate to.
-		const showToolbar = singlePage === null && sn.pages.length > 1;
-		if (showToolbar) {
-			this.buildToolbar(sn.pages.length);
+		if (this.settings.invertColorsWhenDark) {
+			viewer.setAttribute('invert-dark', '');
 		}
+		// Obsidian's own icon set (setIcon()/Lucide), same as SupernoteView's
+		// identical assignment - see its own comment, and iconRenderer's
+		// doc comment in SupernoteViewerElement.ts, for why this is safe.
+		viewer.iconRenderer = (name, el) => setIcon(el, name);
+		// Same vectorInk opt-in as SupernoteView above.
+		viewer.vectorInk = this.settings.vectorInk;
+		this.viewerEl = viewer;
+		this.updateDarkAttribute();
 
-		const pagesEl = this.containerEl.createDiv({ cls: 'supernote-embed-pages' });
-		this.pagesEl = pagesEl;
-		const startPageNumber = singlePage ?? 1;
-		images.forEach((imageDataUrl, i) => {
-			const pageContainer = pagesEl.createDiv({ cls: 'page-container' });
-			pageContainer.dataset.pageNumber = String(startPageNumber + i);
-			const img = pageContainer.createEl('img', { attr: { src: imageDataUrl } });
-			if (this.settings.invertColorsWhenDark) {
-				img.addClass('supernote-invert-dark');
-			}
-			this.pageEls.push(pageContainer);
-		});
+		viewer.addEventListener('supernote-load', ((e: CustomEvent<{ pageWidth: number; pageHeight: number; pageIds: string[] }>) => {
+			this.pageAspectRatio = e.detail.pageHeight / e.detail.pageWidth;
+			this.setupMinHeightTracking();
+			this.pageIds = e.detail.pageIds;
+		}) as EventListener);
+		viewer.addEventListener('supernote-error', ((e: CustomEvent<{ error: unknown; pageNumber?: number }>) => {
+			// A single page failing to rasterize (pageNumber set) just
+			// leaves that one page blank and retries later - only a
+			// whole-note failure (fetch/parse, no pageNumber) should blow
+			// away the embed with an error message.
+			if (e.detail.pageNumber === undefined) this.renderError(e.detail.error);
+		}) as EventListener);
+		viewer.addEventListener('link-click', ((e: CustomEvent<{ link: ILink }>) => {
+			void handleNoteLinkClick(this.app, this.file.basename, this.pageIds, this.viewerEl, e.detail.link);
+		}) as EventListener);
 
-		if (showToolbar) {
-			this.observePages();
-		}
-
-		this.setupMinHeightTracking();
+		// createEl() above already appended (and thus connected) it - matters
+		// for its own queueRender() (see SupernoteViewerElement.ts), which
+		// this kicks off via the fetch-free "bytes already in hand" path.
+		viewer.noteData = bytes;
 	}
 
 	// Obsidian's PDF embed never lets the embed shrink below one full page —
@@ -1468,63 +1163,26 @@ export class SupernoteEmbed extends Component {
 	// own page aspect ratio, so it's recomputed whenever the embed is resized
 	// (window resize, pane split/unsplit, sidebar toggle), not just once.
 	private setupMinHeightTracking(): void {
-		if (!this.pagesEl) return;
+		if (!this.viewerEl) return;
 		this.minHeightObserver = new ResizeObserver((entries) => {
 			const width = entries[0]?.contentRect.width;
 			if (width) this.applyMinHeight(width);
 		});
-		this.minHeightObserver.observe(this.pagesEl);
+		this.minHeightObserver.observe(this.viewerEl);
 	}
 
-	// `width` is pagesEl's content-box width (ResizeObserver's contentRect
-	// already excludes its own padding), i.e. exactly the width a page image
-	// renders at inside it — no separate padding math needed for that part.
+	// Approximates rather than exactly matches a page's own toolbar/padding
+	// chrome (which now lives inside the component's shadow root, not
+	// something this wrapper measures) - close enough for "always show
+	// roughly one full page," and simpler than reaching into the shadow DOM
+	// to measure it precisely.
 	private applyMinHeight(width: number): void {
-		if (this.pageAspectRatio === null || !this.pagesEl) return;
+		if (this.pageAspectRatio === null) return;
 		if (Math.abs(width - this.lastMinHeightWidth) < 1) return;
 		this.lastMinHeightWidth = width;
 
-		const toolbarHeight = this.toolbarEl?.offsetHeight ?? 0;
-		const pagesStyle = getComputedStyle(this.pagesEl);
-		const pagesPaddingY = parseFloat(pagesStyle.paddingTop) + parseFloat(pagesStyle.paddingBottom);
 		const pageHeight = width * this.pageAspectRatio;
-		this.containerEl.setCssStyles({ minHeight: `${Math.ceil(toolbarHeight + pagesPaddingY + pageHeight)}px` });
-	}
-
-	private buildToolbar(pageCount: number): void {
-		const toolbar = this.containerEl.createDiv({ cls: 'supernote-embed-toolbar' });
-		this.toolbarEl = toolbar;
-
-		const prevBtn = toolbar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Previous page' } });
-		setIcon(prevBtn, 'chevron-up');
-		prevBtn.addEventListener('click', () => this.scrollToPage(this.currentPage - 1));
-
-		this.pageIndicatorEl = toolbar.createSpan({ cls: 'supernote-embed-page-indicator', text: `1 / ${pageCount}` });
-
-		const nextBtn = toolbar.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': 'Next page' } });
-		setIcon(nextBtn, 'chevron-down');
-		nextBtn.addEventListener('click', () => this.scrollToPage(this.currentPage + 1));
-	}
-
-	private scrollToPage(index: number): void {
-		const clamped = Math.min(Math.max(index, 0), this.pageEls.length - 1);
-		this.pageEls[clamped]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-	}
-
-	// Keeps the toolbar's page indicator in sync with whatever page is
-	// actually scrolled into view, the same pattern SupernoteView itself uses
-	// for its own (much larger) page-jump indicator.
-	private observePages(): void {
-		this.pageObserver = new IntersectionObserver((entries) => {
-			for (const entry of entries) {
-				if (!entry.isIntersecting) continue;
-				const idx = this.pageEls.indexOf(entry.target as HTMLElement);
-				if (idx === -1) continue;
-				this.currentPage = idx;
-				this.pageIndicatorEl?.setText(`${idx + 1} / ${this.pageEls.length}`);
-			}
-		}, { root: this.containerEl, threshold: 0.5 });
-		this.pageEls.forEach((el) => this.pageObserver?.observe(el));
+		this.containerEl.setCssStyles({ minHeight: `${Math.ceil(pageHeight)}px` });
 	}
 
 	private renderError(err: unknown): void {
@@ -1534,18 +1192,41 @@ export class SupernoteEmbed extends Component {
 			text: `Failed to render Supernote file: ${err instanceof Error ? err.message : String(err)}`,
 		});
 	}
+
 }
 
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
+	private syncInFlight = false;
+	// Live reference handed to VaultWriter — registering/unregistering here
+	// after construction still takes effect, since both hold the same Set.
+	pageTextProcessors: Set<PageTextProcessor> = new Set();
+
+	/**
+	 * Registers a processor that can enrich or replace a page's text before
+	 * it's written into the generated markdown — e.g. an OCR/LLM companion
+	 * plugin transcribing handwriting the device's own recognition missed.
+	 * See PageTextProcessor's doc comment (above VaultWriter) for the
+	 * contract, and https://github.com/philips/supernote-obsidian-ocr-llm
+	 * for a reference implementation.
+	 *
+	 * Undocumented/unstable: the same "reach into another plugin's loaded
+	 * instance" pattern Templater/Dataview use for their own APIs, not a
+	 * formal Obsidian extension point. Returns an unregister function — call
+	 * it from your plugin's onunload().
+	 */
+	registerPageTextProcessor(processor: PageTextProcessor): () => void {
+		this.pageTextProcessors.add(processor);
+		return () => this.pageTextProcessors.delete(processor);
+	}
 
 	async onload() {
         // Install polyfills before any other code runs
         installAtPolyfill();
 
 		await this.loadSettings();
-		vw = new VaultWriter(this.app, this.settings);
+		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
@@ -1583,6 +1264,13 @@ export default class SupernotePlugin extends Plugin {
 		);
 		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
 
+		// `.spd` files (Supernote Atelier app) — see atelierView.ts.
+		this.registerView(
+			VIEW_TYPE_SUPERNOTE_ATELIER,
+			(leaf) => new SupernoteAtelierView(leaf, this.settings)
+		);
+		this.registerExtensions(['spd'], VIEW_TYPE_SUPERNOTE_ATELIER);
+
 		// Wires up `![[example.note]]` embeds via Obsidian's internal
 		// app.embedRegistry (undocumented — not in obsidian.d.ts, see
 		// src/obsidian-embed.d.ts — but the same mechanism core uses for
@@ -1595,6 +1283,11 @@ export default class SupernotePlugin extends Plugin {
 				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
 			);
 			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+
+			this.app.embedRegistry.registerExtension('spd', (context, file) =>
+				new SupernoteAtelierEmbed(this.app, this.settings, context.containerEl, file)
+			);
+			this.register(() => this.app.embedRegistry?.unregisterExtension('spd'));
 		}
 
 		this.addCommand({
@@ -1668,6 +1361,31 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'export-note-as-svg-files',
+			name: 'Export this note as a Markdown and SVG files as attachments',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "note") {
+					if (checking) {
+						return true
+					}
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.attachNoteFilesAsSvg(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
 			id: 'export-note-as-pdf',
 			name: 'Export this note as PDF',
 			checkCallback: (checking: boolean) => {
@@ -1718,8 +1436,88 @@ export default class SupernotePlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'export-atelier-as-png',
+			name: 'Export this .spd file as a PNG attachment',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "spd") {
+					if (checking) {
+						return true
+					}
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.attachAtelierImage(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-atelier-as-pdf',
+			name: 'Export this .spd file as PDF',
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				const ext = file?.extension;
+
+				if (ext === "spd") {
+					if (checking) {
+						return true
+					}
+					if (!file) {
+						new ErrorModal(this.app, new Error("No file to attach")).open();
+					} else {
+						vw.exportAtelierToPDF(file).catch((err: unknown) => {
+							new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+						});
+					}
+					return true;
+				}
+
+				return false;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-current-page-as-image',
+			name: 'Export current page as PNG attachment',
+			checkCallback: (checking: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(SupernoteView);
+				if (!view) return false;
+				if (checking) return true;
+
+				view.exportCurrentPageAsImage().catch((err: unknown) => {
+					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+				});
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'export-current-page-as-svg',
+			name: 'Export current page as SVG attachment',
+			checkCallback: (checking: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(SupernoteView);
+				if (!view) return false;
+				if (checking) return true;
+
+				view.exportCurrentPageAsImage('svg').catch((err: unknown) => {
+					new ErrorModal(this.app, err instanceof Error ? err : new Error(String(err))).open();
+				});
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: 'import-todays-pages',
-			name: "Import notes edited today",
+			name: "Import notes and drawings edited today",
 			editorCallback: (editor: Editor, view: MarkdownView | MarkdownFileInfo) => {
 				if (this.settings.directConnectIP.length === 0) {
 					new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
@@ -1732,6 +1530,12 @@ export default class SupernotePlugin extends Plugin {
 				}
 				new ImportTodayModal(this.app, this, editor, targetPath).open();
 			},
+		});
+
+		this.addCommand({
+			id: 'sync-notes-from-device',
+			name: 'Sync supernote notes now',
+			callback: () => { void this.runSync(); },
 		});
 
 		// Auto-sync: keep each watched .note file's markdown export up to date as
@@ -1775,8 +1579,52 @@ export default class SupernotePlugin extends Plugin {
 		);
 	}
 
-	onunload() {
+	async runSync(): Promise<void> {
+		if (this.settings.directConnectIP.length === 0) {
+			new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
+			return;
+		}
+		// A slow sync (large device, slow LAN) could still be running when the
+		// command is invoked again — e.g. the user re-runs it by hand right
+		// after triggering it. Two runs racing on the same manifest could each
+		// read a stale copy and clobber the other's updates when they save.
+		if (this.syncInFlight) {
+			new Notice('Supernote sync is already running');
+			return;
+		}
 
+		this.syncInFlight = true;
+		try {
+			const result = await runDeviceSync(this.app, this.settings, () => this.saveSettings());
+
+			const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
+			if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
+			if (result.skippedConflicts.length > 0) parts.push(`${result.skippedConflicts.length} skipped (locally edited)`);
+			if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
+			new Notice(`Supernote sync: ${parts.join(', ')}`);
+
+			if (result.skippedConflicts.length > 0) {
+				console.warn('Supernote sync skipped these files because they were edited locally since the last sync:', result.skippedConflicts);
+			}
+			if (result.failed.length > 0) {
+				console.error('Supernote sync failed for these files:', result.failed);
+			}
+		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
+			// Best-effort: a run that fails before producing a per-file result at
+			// all (e.g. the device was unreachable) is exactly the kind of thing
+			// worth a Sync Log entry, but a logging failure on top of that
+			// shouldn't hide the real error from the modal below.
+			await appendSyncLogEntry(this.app, this.settings.syncFolder, formatSyncFailureLogEntry(error.message))
+				.catch((logErr) => console.error('Failed to write to Supernote sync log:', logErr));
+			new DirectConnectErrorModal(this.app, this.settings, error).open();
+		} finally {
+			this.syncInFlight = false;
+		}
+	}
+
+	onunload() {
+		terminateSharedWorkerPool();
 	}
 
 	async activateView() {

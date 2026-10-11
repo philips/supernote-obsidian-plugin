@@ -1,8 +1,10 @@
 import { createCustomDictionarySettingsUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, CustomDictionarySettings } from "./customDictionary";
 import SupernotePlugin from "./main";
-import { App, ExtraButtonComponent, PluginSettingTab, Setting } from 'obsidian';
+import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
+import { SyncManifest } from './deviceSync';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
+const MARKDOWN_AUTO_SYNC_HEADING = 'Markdown Auto Sync';
 
 export type FileBrowserSortOrder = 'name-asc' | 'name-desc' | 'date-desc' | 'date-asc';
 
@@ -16,11 +18,18 @@ export const FILE_BROWSER_SORT_LABELS: Record<FileBrowserSortOrder, string> = {
 export type ImportFormat = 'note-link' | 'embed' | 'images' | 'pdf' | 'images-text';
 
 export const IMPORT_FORMAT_LABELS: Record<ImportFormat, string> = {
-    'note-link': 'Note link (save .note file, link to it)',
-    'embed': 'Embedded note (save .note file, embed it)',
+    'note-link': 'Original file (save .note/.spd, link to it)',
+    'embed': 'Embedded original file (save .note/.spd file, embed it)',
     'images': 'Images only',
     'pdf': 'PDF',
-    'images-text': 'Images and text',
+    'images-text': 'Images and text (text only available for .note)',
+};
+
+export type PageExportImageFormat = 'png' | 'svg';
+
+export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, string> = {
+    png: 'PNG',
+    svg: 'SVG',
 };
 
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
@@ -64,9 +73,34 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
-    noteImageMaxDim: number;
+    /** Draw pen strokes as crisp vector paths instead of rasterizing the
+     * ink layers — in the on-screen note view and exported PDFs. On by
+     * default; turn off if ink renders incorrectly or differently from the
+     * device. The persisted key stays `vectorInk` (originally PDF-only) so
+     * existing installs keep their toggle state. */
+    vectorInk: boolean;
     fileBrowserSortOrder: FileBrowserSortOrder;
     importFormat: ImportFormat;
+    /** Format the note viewer's toolbar "export current page" button writes
+     *  the page as. The command-palette "Export current page as PNG/SVG
+     *  attachment" commands are unaffected — each always writes its own
+     *  named format regardless of this setting. */
+    pageExportImageFormat: PageExportImageFormat;
+    /** Vault folder that device sync writes into; never touches anything outside it. */
+    syncFolder: string;
+    /**
+     * Device path glob patterns (comma/newline separated) scoping which
+     * notes sync considers. Empty = sync everything. A single text field
+     * rather than string[] because the declarative settings API's text
+     * control only speaks in single strings — see parsePathFilters().
+     */
+    syncPathFiltersRaw: string;
+    /**
+     * Persisted record of what sync last wrote for each device note — see
+     * deviceSync.ts. Drives both change detection (skip unchanged files) and
+     * the overwrite-safety guard (never clobber a local edit).
+     */
+    noteSyncState: SyncManifest;
     isAutoSyncMarkdownEnabled: boolean;
     noteWatchFolder: string;
     markdownMirrorFolder: string;
@@ -76,9 +110,13 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
     invertColorsWhenDark: true,
     showExportButtons: false,
-    noteImageMaxDim: 800, // Sensible default for Nomad pages to be legible but not too big. Unit: px
+    vectorInk: true,
     fileBrowserSortOrder: 'name-asc',
     importFormat: 'images-text',
+    pageExportImageFormat: 'png',
+    syncFolder: 'Supernote sync',
+    syncPathFiltersRaw: '',
+    noteSyncState: {},
     isAutoSyncMarkdownEnabled: false,
     noteWatchFolder: '',
     markdownMirrorFolder: '',
@@ -100,7 +138,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
         return [
             {
                 name: 'Supernote IP address',
-                desc: '(Optional) when using the supernote "browse and access" for document upload/download or "screen mirroring" screenshot attachment this is the IP of the supernote device',
+                desc: 'The IP address of your Supernote is needed to sync notes, attach files, upload files, or attach screenshots. To find your IP address swipe down on your Supernote device and enable Screen Mirroring and/or Browse & Access; then the IP will be displayed',
                 control: {
                     type: 'text',
                     key: 'directConnectIP',
@@ -129,14 +167,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
-                name: 'Max image side length in .note files',
-                desc: 'Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.',
+                name: 'Vector ink',
+                desc: 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
                 control: {
-                    type: 'slider',
-                    key: 'noteImageMaxDim',
-                    min: 200,
-                    max: 1900,
-                    step: 100, // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
+                    type: 'toggle',
+                    key: 'vectorInk',
+                },
+            },
+            {
+                name: 'Export current page as',
+                desc: 'Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.',
+                control: {
+                    type: 'dropdown',
+                    key: 'pageExportImageFormat',
+                    options: PAGE_EXPORT_IMAGE_FORMAT_LABELS,
                 },
             },
             {
@@ -158,6 +202,56 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
+                name: 'Sync',
+                render: (setting) => {
+                    setting.setHeading();
+                },
+            },
+            {
+                name: 'Sync folder',
+                desc: 'Vault folder that "sync supernote notes now" writes into, mirroring the device\'s own folder structure underneath it (including a "Sync Log.md" recording any conflicts or errors). The sync command never writes anywhere outside this folder.',
+                control: {
+                    type: 'text',
+                    key: 'syncFolder',
+                    placeholder: 'Supernote sync',
+                },
+            },
+            {
+                name: 'Sync device paths',
+                desc: 'Limit sync to these device paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every note on the device.',
+                control: {
+                    type: 'text',
+                    key: 'syncPathFiltersRaw',
+                    placeholder: '/diary/**',
+                },
+            },
+            {
+                name: 'Sync history',
+                render: (setting) => {
+                    setting
+                        .setDesc('Forgets which device notes have already been synced. The next sync re-checks every matching note from scratch — already-synced files are still protected by the same edit-conflict check, so this is safe to use, just slower for one run.')
+                        .addButton((btn) => {
+                            btn.setButtonText('Forget sync history').onClick(async () => {
+                                this.plugin.settings.noteSyncState = {};
+                                await this.plugin.saveSettings();
+                                new Notice('Supernote sync history cleared');
+                            });
+                        });
+                },
+            },
+            {
+                name: 'Custom dictionary',
+                render: (setting) => {
+                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                },
+            },
+            {
+                name: MARKDOWN_AUTO_SYNC_HEADING,
+                render: (setting) => {
+                    setting.setHeading();
+                },
+            },
+            {
                 name: 'Auto-sync .note files to markdown',
                 desc: 'Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.',
                 control: {
@@ -176,17 +270,11 @@ export class SupernoteSettingTab extends PluginSettingTab {
             },
             {
                 name: 'Markdown mirror folder',
-                desc: 'Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: SupernoteMarkdowns',
+                desc: 'Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: Supernote Markdown',
                 control: {
                     type: 'text',
                     key: 'markdownMirrorFolder',
-                    placeholder: 'SupernoteMarkdowns',
-                },
-            },
-            {
-                name: 'Custom dictionary',
-                render: (setting) => {
-                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                    placeholder: 'Supernote Markdown',
                 },
             },
         ];
@@ -249,14 +337,27 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Max image side length in .note files')
-            .setDesc('Maximum width and height (in pixels) of the note image when viewing .note files. Does not affect exported images and markdown.')
-            .addSlider(text => text
-                .setLimits(200, 1900, 100) // Resolution of an A5X/A6X2/Nomad page is 1404 x 1872 px (with no upscaling)
-                .setDynamicTooltip()
-                .setValue(this.plugin.settings.noteImageMaxDim)
+            .setName('Vector ink')
+            .setDesc(
+                'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
+            )
+            .addToggle((text) =>
+                text
+                    .setValue(this.plugin.settings.vectorInk)
+                    .onChange(async (value) => {
+                        this.plugin.settings.vectorInk = value;
+                        await this.plugin.saveSettings();
+                    }),
+            );
+
+        new Setting(containerEl)
+            .setName('Export current page as')
+            .setDesc('Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(PAGE_EXPORT_IMAGE_FORMAT_LABELS)
+                .setValue(this.plugin.settings.pageExportImageFormat)
                 .onChange(async (value) => {
-                    this.plugin.settings.noteImageMaxDim = value;
+                    this.plugin.settings.pageExportImageFormat = value as PageExportImageFormat;
                     await this.plugin.saveSettings();
                 })
             );
@@ -286,6 +387,50 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
+            .setName('Sync')
+            .setHeading();
+
+        new Setting(containerEl)
+            .setName('Sync folder')
+            .setDesc('Vault folder that "sync supernote notes now" writes into, mirroring the device\'s own folder structure underneath it (including a "Sync Log.md" recording any conflicts or errors). The sync command never writes anywhere outside this folder.')
+            .addText(text => text
+                .setPlaceholder('Supernote sync')
+                .setValue(this.plugin.settings.syncFolder)
+                .onChange(async (value) => {
+                    this.plugin.settings.syncFolder = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Sync device paths')
+            .setDesc('Limit sync to these device paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every note on the device.')
+            .addText(text => text
+                .setPlaceholder('/diary/**')
+                .setValue(this.plugin.settings.syncPathFiltersRaw)
+                .onChange(async (value) => {
+                    this.plugin.settings.syncPathFiltersRaw = value;
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('Sync history')
+            .setDesc('Forgets which device notes have already been synced. The next sync re-checks every matching note from scratch — already-synced files are still protected by the same edit-conflict check, so this is safe to use, just slower for one run.')
+            .addButton(btn => btn
+                .setButtonText('Forget sync history')
+                .onClick(async () => {
+                    this.plugin.settings.noteSyncState = {};
+                    await this.plugin.saveSettings();
+                    new Notice('Supernote sync history cleared');
+                })
+            );
+
+        new Setting(containerEl)
+            .setName(MARKDOWN_AUTO_SYNC_HEADING)
+            .setHeading();
+
+        new Setting(containerEl)
             .setName('Auto-sync .note files to markdown')
             .setDesc('Automatically export recognized text to a .md file whenever a .note file is added or modified in the vault.')
             .addToggle(toggle => toggle
@@ -310,9 +455,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('Markdown mirror folder')
-            .setDesc('Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: SupernoteMarkdowns')
+            .setDesc('Save exported .md files in this vault folder, mirroring the .note file structure, instead of alongside each .note file. Leave empty to save alongside the note. Example: Supernote Markdown')
             .addText(text => text
-                .setPlaceholder('SupernoteMarkdowns')
+                .setPlaceholder('Supernote Markdown')
                 .setValue(this.plugin.settings.markdownMirrorFolder)
                 .onChange(async (value) => {
                     this.plugin.settings.markdownMirrorFolder = value.trim().replace(/\/$/, '');

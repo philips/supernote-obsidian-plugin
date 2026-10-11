@@ -1,13 +1,19 @@
 {
 	"name": "supernote-obsidian-plugin",
-	"version": "2.9.1",
+	"version": "3.1.3",
 	"description": "Unofficial Supernote by Ratta Integration for Obsidian",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"dev:webcomponent": "node esbuild.webcomponent.config.mjs",
+		"build:webcomponent": "tsc -noEmit -skipLibCheck && node esbuild.webcomponent.config.mjs production",
+		"dev:atelier-webcomponent": "node esbuild.atelier-webcomponent.config.mjs",
+		"build:atelier-webcomponent": "tsc -noEmit -skipLibCheck && node esbuild.atelier-webcomponent.config.mjs production",
 		"lint": "eslint .",
 		"test": "vitest run",
+		"test:device-sync": "node scripts/test-device-sync.mjs",
+		"test:webcomponent:playwright": "npm run build:webcomponent && node scripts/test-webcomponent-playwright.mjs",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"push-android": "adb push main.js /sdcard/Documents/SupernoteTest/.obsidian/plugins/supernote"
 	},
@@ -19,21 +25,24 @@
 		"@types/color": "^3.0.6",
 		"@types/jest": "^29.5.12",
 		"@types/node": "20.19.43",
-		"builtin-modules": "3.3.0",
-		"esbuild": "^0.17.3",
+		"esbuild": "^0.28.2",
+		"esbuild-plugin-inline-worker": "^0.1.1",
 		"eslint": "^9.39.5",
 		"eslint-plugin-obsidianmd": "^0.4.1",
 		"globals": "^17.7.0",
+		"happy-dom": "^20.11.1",
 		"jiti": "^2.7.0",
 		"obsidian": "latest",
+		"playwright": "^1.62.1",
 		"tslib": "2.4.0",
 		"typescript": "6.0.3",
 		"typescript-eslint": "^8.65.0",
 		"vitest": "4.1.10"
 	},
 	"dependencies": {
-		"esbuild-plugin-inline-worker": "^0.1.1",
 		"fast-png": "^7.0.1",
-		"image-js": "^1.7.0"
+		"image-js": "^1.7.0",
+		"pdf-lib": "^1.17.1",
+		"sql.js": "^1.14.1"
 	}
 }

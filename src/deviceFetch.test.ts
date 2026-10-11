@@ -121,6 +121,89 @@ describe('fetchFromDevice', () => {
             'Failed to load file list: could not reach Supernote at 192.168.1.50 (net::ERR_CONNECTION_REFUSED).'
         );
     });
+
+    describe('path normalization (host pinning)', () => {
+        // The path comes from parsed device directory listings, i.e. from a
+        // device an on-LAN attacker could impersonate. Without a leading "/",
+        // a crafted path reparsesthe URL so the request leaves the device
+        // host entirely — see fetchFromDevice's comment in deviceFetch.ts.
+        it('prefixes a missing leading slash so an "@"-led path cannot smuggle in another host', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '@evil.example/secret.note', 'Failed to download file');
+
+            // Leading "/" still pins the host; "@" in the segment is encoded.
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/%40evil.example/secret.note' }),
+            );
+        });
+
+        it('prefixes a backslash-led path, which otherwise also terminates the URL authority', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '\\evil.example/x.note', 'Failed to download file');
+
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/%5Cevil.example/x.note' }),
+            );
+        });
+
+        it('leaves already-absolute paths on the device host, encoding special characters in segments', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '/Note/@mentions/x.note', 'Failed to load file list');
+
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/%40mentions/x.note' }),
+            );
+        });
+
+        it('percent-encodes spaces and other special characters in path segments', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '/Note/Work Journal.note', 'Failed to download file');
+
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/Work%20Journal.note' }),
+            );
+        });
+
+        it('does not double-encode segments that are already percent-encoded', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '/Note/Work%20Journal.note', 'Failed to download file');
+
+            expect(requestUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/Work%20Journal.note' }),
+            );
+        });
+
+        it('uses the listing name to distinguish literal pluses from form-style spaces', async () => {
+            vi.mocked(requestUrl).mockResolvedValue(mockResponse());
+
+            await fetchFromDevice('192.168.1.50', '/Note/C++.note', 'Failed to download file', {
+                pathLeafName: 'C++.note',
+            });
+            expect(requestUrl).toHaveBeenLastCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/C%2B%2B.note' }),
+            );
+
+            await fetchFromDevice('192.168.1.50', '/Note/Substack+Notes.note', 'Failed to download file', {
+                pathLeafName: 'Substack Notes.note',
+            });
+            expect(requestUrl).toHaveBeenLastCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/Substack%20Notes.note' }),
+            );
+
+            await fetchFromDevice('192.168.1.50', '/Note/test+dir/a+b.note', 'Failed to download file', {
+                pathLeafName: 'a b.note',
+                pathDirectoryNames: ['Note', 'test dir'],
+            });
+            expect(requestUrl).toHaveBeenLastCalledWith(
+                expect.objectContaining({ url: 'http://192.168.1.50:8089/Note/test%20dir/a%20b.note' }),
+            );
+        });
+    });
 });
 
 describe('buildMultipartBody', () => {

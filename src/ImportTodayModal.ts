@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Editor } from 'obsidian';
 import SupernotePlugin from './main';
-import { SupernoteFile, fetchSupernoteDirectory } from './FileListModal';
+import { SupernoteFile, scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
 import { ImportFormat, IMPORT_FORMAT_LABELS } from './settings';
@@ -38,11 +38,11 @@ export class ImportTodayModal extends Modal {
         // modal, instead of it applying to every CTA button in Obsidian (see
         // issue #74 — an unscoped rule shifted button text down app-wide).
         contentEl.addClass('supernote-import-modal');
-        contentEl.createEl('h2', { text: 'Import supernote pages' });
+        contentEl.createEl('h2', { text: 'Import supernote pages and drawings' });
         const status = contentEl.createEl('p', { text: 'Scanning device for notes…' });
 
         try {
-            this.allNotes = await this.scanAllNotes('/', new Set());
+            this.allNotes = await this.scanAllNotes();
         } catch (err) {
             status.setText(`Failed to scan device: ${err instanceof Error ? err.message : String(err)}`);
             return;
@@ -137,24 +137,17 @@ export class ImportTodayModal extends Modal {
         }
     }
 
-    // Walks the whole device tree once and records every .note file's parsed
-    // date, so switching the date picker only needs to re-filter in memory
-    // instead of re-fetching the device's directory tree over HTTP each time.
-    private async scanAllNotes(path: string, visited: Set<string>): Promise<ScannedNote[]> {
-        if (visited.has(path)) return [];
-        visited.add(path);
-
-        const entries = await fetchSupernoteDirectory(this.plugin.settings.directConnectIP, path);
+    // Walks the whole device tree once and records every .note/.spd file's
+    // parsed date, so switching the date picker only needs to re-filter in
+    // memory instead of re-fetching the device's directory tree over HTTP
+    // each time.
+    private async scanAllNotes(): Promise<ScannedNote[]> {
+        const files = await scanDeviceSupernoteTree(this.plugin.settings.directConnectIP);
         const results: ScannedNote[] = [];
-
-        for (const entry of entries) {
-            if (entry.isDirectory) {
-                results.push(...await this.scanAllNotes(entry.uri, visited));
-            } else if (entry.name.toLowerCase().endsWith('.note')) {
-                const modified = parseDeviceDate(entry.date);
-                if (modified) {
-                    results.push({ file: entry, date: modified });
-                }
+        for (const file of files) {
+            const modified = parseDeviceDate(file.date);
+            if (modified) {
+                results.push({ file, date: modified });
             }
         }
         return results;
@@ -176,6 +169,8 @@ export class ImportTodayModal extends Modal {
             for (const file of chosen) {
                 const response = await fetchFromDevice(ip, file.uri, `Failed to download ${file.name}`, {
                     timeoutMs: DEVICE_TRANSFER_TIMEOUT_MS,
+                    pathLeafName: file.name,
+                    pathDirectoryNames: file.directoryNames,
                 });
                 if (!response.ok) {
                     throw new Error(`Failed to download ${file.name}: Supernote responded with an error (status ${response.status}).`);

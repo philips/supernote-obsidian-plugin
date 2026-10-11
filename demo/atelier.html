@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>supernote-atelier-viewer demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    body {
+        font: 16px/1.5 system-ui, sans-serif;
+        max-width: 50em;
+        margin: 2em auto;
+        padding: 0 1em;
+        color-scheme: light dark;
+    }
+    supernote-atelier-viewer {
+        height: 80vh;
+        margin-top: 1em;
+    }
+    #status {
+        color: #666;
+        font-size: 0.9em;
+    }
+</style>
+</head>
+<body>
+<h1>&lt;supernote-atelier-viewer&gt; demo</h1>
+<p>
+    Standalone build of the <code>&lt;supernote-atelier-viewer&gt;</code> custom element from the
+    <a href="https://github.com/philips/supernote-obsidian-plugin">supernote-obsidian-plugin</a> project -
+    runs entirely in this page, with no Obsidian involved. Pick a <code>.spd</code> file (a Supernote
+    Atelier document) from your device to view it, toggle its layers, and zoom in.
+</p>
+<p>
+    <strong>Build the bundle first:</strong> this page loads
+    <code>../dist/supernote-atelier-viewer.js</code>, which isn't checked into the repo -
+    run <code>npm run build:atelier-webcomponent</code> from the project root, then serve this
+    directory over http(s) (module scripts can't load from a <code>file://</code> URL) - e.g.
+    <code>npx serve .</code> from the project root, then open
+    <code>/demo/atelier.html</code>.
+</p>
+<input id="file-input" type="file" accept=".spd">
+<p id="status"></p>
+<supernote-atelier-viewer id="viewer"></supernote-atelier-viewer>
+
+<script type="module" src="../dist/supernote-atelier-viewer.js"></script>
+<script type="module">
+    const viewer = document.getElementById('viewer');
+    const status = document.getElementById('status');
+
+    document.getElementById('file-input').addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        status.textContent = `Reading ${file.name}…`;
+        viewer.noteData = await file.arrayBuffer();
+    });
+
+    viewer.addEventListener('supernote-atelier-load', (event) => {
+        status.textContent = `Loaded (${event.detail.width}×${event.detail.height}, ${event.detail.layerCount} layer(s)).`;
+    });
+    viewer.addEventListener('supernote-atelier-error', (event) => {
+        status.textContent = `Error: ${event.detail.error?.message ?? event.detail.error}`;
+    });
+</script>
+</body>
+</html>
