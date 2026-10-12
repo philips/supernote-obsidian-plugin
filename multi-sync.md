@@ -2,19 +2,21 @@
 
 ## Purpose
 
-The goal of multi-sync is to let the plugin support more than one
-synchronization engine without duplicating or weakening the lifecycle behavior
-around synchronization. A user should eventually be able to choose which
-configured engine or engines run, while commands, scheduling, concurrency
-protection, notices, logging, settings persistence, and Obsidian lifecycle
-cleanup remain consistent.
+The goal of multi-sync is to let the plugin contain more than one
+synchronization engine while allowing exactly one engine to be active at a time.
+A user selects either the IP engine or the Cloud engine; manual commands,
+automatic scheduling, settings, and status operate only on that active engine.
+The design should make future engines easy to add to the same selection without
+introducing simultaneous multi-engine runs.
 
-This document first records the checked-out implementation of the existing
-local-network sync system. It then proposes an abstraction layer that can
-contain that behavior before a second engine is introduced.
+This document records the companion's current local-network sync system and
+proposes an abstraction layer for selecting and operating one in-project engine
+at a time. The planned Cloud engine's external protocol, evidence boundaries,
+and user-observable behavior are defined by
+[cloud-sync-spec.md](cloud-sync-spec.md).
 
-This plan does not add another sync engine, change the current sync format, or
-enable automatic synchronization.
+This is a planning document. It does not yet add the Cloud engine, change the
+current IP sync format, or enable automatic synchronization.
 
 ## Original IP-Based Sync Engine
 
@@ -279,7 +281,11 @@ The command is registered during `SupernotePlugin.onload()`.
 `main.ts` converts these fields into a single completion notice. Conflict paths
 and per-file failure objects are also written to the console. `syncEngine.ts`
 writes conflicts and failures to `Sync Log.md`. A top-level failure is logged
-and shown through `DirectConnectErrorModal`.
+and shown through `DirectConnectErrorModal`. The final settings save and Sync
+Log write occur outside the per-file failure isolation, so either can currently
+turn an otherwise partially successful run into a top-level failure after vault
+files have already been written. The IP wrapper should preserve that behavior
+initially; changing its persistence boundary is separate hardening work.
 
 ### Tests and verification surfaces
 
@@ -298,66 +304,151 @@ and shown through `DirectConnectErrorModal`.
 These tests define important compatibility constraints for wrapping the current
 engine in an abstraction.
 
+## Planned Cloud Sync Engine
+
+The planned Cloud engine will be implemented in this repository from the
+external contract in [cloud-sync-spec.md](cloud-sync-spec.md). That
+specification is the sole authority for public endpoint facts, request and
+response data, authentication flows, error boundaries, licensing attribution for
+public protocol sources, and user-observable Cloud behavior.
+
+The approved engine scope is:
+
+- Email-based authentication, with verification-code support only when its
+  complete public protocol is independently verified.
+- Device-local session and account-binding state.
+- Manual and shared-interval one-way Cloud-to-vault mirroring.
+- Account-root inventory with the same path-mask syntax as the IP engine.
+- Download of new or changed files, checksum verification, local-edit
+  protection, complete-inventory deletion gating, and Obsidian Trash for
+  unchanged Cloud-deleted copies.
+- Non-destructive handling of every protocol behavior that the specification
+  marks as unknown.
+
+The planned engine excludes remote writes or upload features.
+
 ## Abstraction Layer
 
-### Goals
+### Product decisions
 
-The abstraction should:
+The architecture follows these constraints:
 
-- Preserve the current IP engine's behavior and persisted state before adding
-  another engine.
-- Allow one engine, several selected engines, or eventually all enabled engines
-  to be run through the same coordinator.
-- Keep transport, discovery, change detection, and engine-specific state inside
-  each engine.
-- Keep commands, scheduling, event-hook registration, concurrency, cancellation,
-  notices, and lifecycle cleanup outside individual engines.
-- Give all engines a common result shape without forcing them to use IP-specific
-  concepts such as device URIs or `Sync Log.md`.
-- Prevent state, log, and destination collisions between engines.
-- Preserve existing command IDs, user hotkeys, settings values, manifest data,
-  and safety behavior during migration.
+- Exactly one sync engine is active at a time.
+- Both engines are implemented in `obsidian-supernote-companion`; there is no
+  runtime engine discovery, dynamic registration, or combined run.
+- The active engine is selected explicitly from a fixed settings dropdown.
+- Manual and scheduled sync always target the active engine only.
+- Future engines are added in code and become another explicit selector option.
+- The Cloud engine is download-only. It does not upload in the first
+  implementation.
+- Both engines support the same path-mask syntax for choosing source paths.
+- Each engine retains its own configuration, destination root, and manifest so
+  switching engines does not discard history or transfer ownership.
 
-### Proposed components
+The implementation plan uses these decisions. They were selected because no
+answer was available during this planning pass and are collected again as review
+checkpoints at the end:
+
+- One shared automatic-sync interval applies to whichever engine is active.
+- The Cloud engine scans from the Cloud account root and applies path masks to
+  canonical full Cloud paths.
+- After a complete Cloud scan, a remotely deleted file is moved to Obsidian
+  Trash only if its local copy still matches the Cloud manifest. A locally
+  edited copy is protected.
+- IP and Cloud use separate destination roots and separate state.
+
+### Cloud specification boundary
+
+[cloud-sync-spec.md](cloud-sync-spec.md) is the authoritative external contract
+for the planned Cloud engine. This plan applies that contract to the plugin's
+single-active-engine architecture.
+
+Required Cloud behavior:
+
+- Login and verification-code authentication with a device-local session token.
+- Manual and interval-based one-way Cloud-to-vault mirroring.
+- Remote checksum-based unchanged detection.
+- Local checksum protection before overwrite or deletion.
+- Complete-scan gating before destructive cleanup.
+- Obsidian Trash for safe removal of unchanged Cloud-deleted files.
+- Stable remote IDs and deterministic collision-safe vault paths.
+- A versioned vault manifest with serialized/transactional persistence.
+- Per-file failure isolation and a normalized completion summary.
+
+Explicitly excluded:
+
+- Upload and `Send to Supernote`.
+- Cloud Activity infrastructure beyond what is needed for ordinary sync status
+  and logging.
+- Runtime integration with an external sync engine.
+
+### Specification-driven implementation
+
+Implementation must follow [cloud-sync-spec.md](cloud-sync-spec.md), including
+its separation of documented facts, product requirements, assumptions, and
+unknowns. Undocumented protocol behavior remains unavailable or non-destructive
+until independently verified and recorded in that specification.
+
+- Define this plugin's own interfaces, names, state format, tests, and control
+  flow around the approved requirements.
+- Use only the external endpoints and fields permitted by the specification.
+- Preserve the specification's read-only remote boundary.
+- Keep the public Apache-2.0 and MIT protocol-source attribution maintained in
+  the specification.
+
+### Architecture overview
 
 ```mermaid
 flowchart TD
-    Commands[Obsidian commands] --> Coordinator[SyncCoordinator]
-    Timers[Optional future timers] --> Coordinator
-    Events[Optional future Obsidian events] --> Coordinator
-    SettingsUI[Settings and engine selection] --> Coordinator
+    Settings[Active engine and shared interval] --> Coordinator[SyncCoordinator]
+    Command[Sync active engine now] --> Coordinator
+    Timer[Registered scheduler poll] --> Coordinator
 
-    Coordinator --> Registry[SyncEngineRegistry]
-    Registry --> IP[IpDeviceSyncEngine]
-    Registry --> Future[Future engine]
+    Coordinator --> Choice{activeSyncEngine}
+    Choice -->|ip-device| IP[IpSyncEngine]
+    Choice -->|supernote-cloud| Cloud[CloudSyncEngine]
 
-    IP --> IPTransport[deviceFetch and devicePath]
-    IP --> IPPolicy[deviceSync policy]
+    IP --> Existing[existing runDeviceSync]
+    Existing --> Device[Browse and Access :8089]
+
+    Cloud --> Auth[CloudAuthService]
+    Cloud --> Client[SupernoteCloudClient]
+    Cloud --> Manifest[CloudSyncManifestStore]
+
     IP --> Vault[Obsidian Vault]
-    Future --> Vault
-
-    Coordinator --> Reporter[Sync reporting]
-    Coordinator --> State[Settings/state persistence]
+    Cloud --> Vault
 ```
 
-#### `SyncEngine`
-
-An engine owns the behavior unique to one synchronization source or protocol. It
-should not register Obsidian commands, timers, or workspace/vault events
-directly.
-
-A possible interface is:
+There is no registry or discovery mechanism. Construction is static and
+explicit:
 
 ```ts
-export type SyncEngineId = string;
+const engines: Record<SyncEngineId, SyncEngine> = {
+    "ip-device": ipSyncEngine,
+    "supernote-cloud": cloudSyncEngine,
+};
+```
+
+Adding a future engine requires adding its implementation, adding it to this
+map, and adding its label to the settings dropdown. This is deliberate YAGNI:
+there is no extension protocol until a real external extension use case exists.
+
+### Common engine contract
+
+```ts
+export type SyncEngineId = "ip-device" | "supernote-cloud";
 
 export type SyncTrigger =
     | { kind: "manual"; commandId: string }
-    | { kind: "scheduled"; scheduleId: string }
-    | { kind: "startup" }
-    | { kind: "event"; eventId: string };
+    | { kind: "scheduled" };
+
+export interface SyncReadiness {
+    ready: boolean;
+    reason?: string;
+}
 
 export interface SyncIssue {
+    kind: "protected" | "failure" | "warning";
     item?: string;
     message: string;
 }
@@ -367,290 +458,505 @@ export interface SyncRunResult {
     synced: number;
     unchanged: number;
     excluded: number;
-    conflicts: SyncIssue[];
-    failures: SyncIssue[];
+    removed: number;
+    issues: SyncIssue[];
 }
 
-export interface SyncEngineRunContext<Config, State> {
-    app: App;
-    config: Readonly<Config>;
-    state: Readonly<State>;
-    trigger: SyncTrigger;
-    signal: AbortSignal;
-    persistState(nextState: State): Promise<void>;
-}
-
-export interface SyncEngine<Config, State> {
+export interface SyncEngine {
     readonly id: SyncEngineId;
     readonly name: string;
-    getReadiness(
-        config: Readonly<Config>,
-    ): { ready: true } | { ready: false; reason: string };
-    run(context: SyncEngineRunContext<Config, State>): Promise<SyncRunResult>;
-    createEmptyState(): State;
+    getReadiness(): SyncReadiness;
+    run(trigger: SyncTrigger): Promise<SyncRunResult>;
+    clearHistory(): Promise<void>;
 }
 ```
 
-The exact generic storage mechanism can be adjusted during implementation, but
-configuration and state should remain explicit and separate. The coordinator
-should not inspect an engine's manifest format.
+The interface contains only behavior needed by both planned engines. It does not
+include upload, pairing, Automation, discovery, multiple selection,
+cancellation, or generic capability flags.
 
-#### `SyncEngineRegistration`
+### `SyncCoordinator`
 
-The registry needs an adapter between the generic coordinator and each engine's
-typed settings. This avoids passing the entire `SupernotePluginSettings` object
-into every engine.
-
-```ts
-export interface SyncEngineRegistration<Config, State> {
-    engine: SyncEngine<Config, State>;
-    readConfig(settings: SupernotePluginSettings): Config;
-    readState(settings: SupernotePluginSettings): State;
-    writeState(settings: SupernotePluginSettings, state: State): void;
-    clearState?(settings: SupernotePluginSettings): void;
-}
-```
-
-For the first migration, the IP registration can read the existing fields
-directly:
-
-```ts
-interface IpSyncConfig {
-    ip: string;
-    syncFolder: string;
-    pathFiltersRaw: string;
-}
-
-type IpSyncState = SyncManifest;
-```
-
-`directConnectIP` should remain a shared plugin setting initially because
-non-sync device features use it. Moving it into an engine-only settings object
-would either duplicate configuration or break those features.
-
-#### `SyncEngineRegistry`
-
-The registry provides stable engine lookup and metadata for commands and
-settings UI.
-
-Responsibilities:
-
-- Reject duplicate engine IDs.
-- Return engines in a deterministic display/run order.
-- Resolve selected engine IDs to registrations.
-- Expose readiness information for settings and commands.
-- Keep registration centralized so a new engine does not require conditionals
-  throughout `main.ts`.
-
-The initial registry contains only `ip-device`.
-
-#### `SyncCoordinator`
-
-The coordinator owns behavior shared across engines and triggers.
-
-Responsibilities:
-
-- Run one engine by ID or a selected set of engines.
-- Check readiness before a run and present configuration errors consistently.
-- Serialize runs. The safest first implementation is one global in-flight lock
-  because engines can share the vault and the same persisted settings object.
-  Per-engine or per-destination locks can be considered later only if parallel
-  runs are proven safe.
-- Create an `AbortController` for a run and abort it during plugin unload. The
-  current IP transport is not cancellable, so the first adapter may only observe
-  cancellation between files until transport cancellation is added.
-- Persist engine state through the registration adapter.
-- Convert normalized results into notices and console output.
-- Route engine-specific durable reports through a reporting hook rather than
-  assuming every engine uses the IP engine's `Sync Log.md`.
-- Register and dispose future timers or event subscriptions through Obsidian's
-  `registerInterval()`, `registerEvent()`, and `register()` lifecycle helpers.
-
-A possible coordinator surface is:
+The coordinator owns the behavior shared by both engines:
 
 ```ts
 export interface SyncCoordinator {
-    run(
-        engineId: SyncEngineId,
-        trigger: SyncTrigger,
-    ): Promise<SyncRunResult | null>;
-    runSelected(trigger: SyncTrigger): Promise<SyncRunResult[]>;
-    isRunning(engineId?: SyncEngineId): boolean;
-    clearEngineState(engineId: SyncEngineId): Promise<void>;
-    dispose(): void;
+    getActiveEngine(): SyncEngine;
+    setActiveEngine(engineId: SyncEngineId): Promise<void>;
+    runActive(trigger: SyncTrigger): Promise<SyncRunResult | null>;
+    isRunning(): boolean;
+    clearActiveHistory(): Promise<void>;
 }
 ```
 
-`runSelected()` should execute engines sequentially at first. This avoids races
-in vault writes, settings saves, notices, and shared destination folders.
+Responsibilities:
 
-#### Trigger registration
+- Resolve exactly one engine from `activeSyncEngine`.
+- Reject an engine switch while a sync is running.
+- Check readiness and present an engine-specific setup reason.
+- Hold one global in-flight lock so manual and scheduled triggers cannot race.
+- Invoke only the active engine.
+- Produce one normalized Notice summary and preserve engine-specific durable
+  logs.
+- Route `Forget sync history` to the active engine only, after confirmation
+  naming that engine.
+- On a dispatched run's completion, set `lastRunAt` to the completion time and
+  set `lastRunOutcome` to `succeeded` when there are no issues, `attention` when
+  the run completes with protected/per-file warning or failure issues, and
+  `failed` when the engine throws or cannot produce a reliable result. A
+  readiness rejection is not a run and does not replace the previous outcome.
+- Keep inactive-engine settings and history untouched.
 
-Triggers should target engine IDs through the coordinator rather than calling
-engine implementations.
+Because only one engine can run, there is no engine ordering, aggregate result,
+destination-overlap broker, or continue-after-one-engine-fails policy.
 
-Initial command behavior:
+### Shared scheduler
 
-- Preserve command ID `sync-notes-from-device` and route it to
-  `coordinator.run('ip-device', { kind: 'manual', commandId: 'sync-notes-from-device' })`.
-- Do not add a new command until it has distinct user value.
-- When multiple engines exist, add a separate stable command such as
-  `sync-selected-engines` for the selected set. Do not repurpose the existing
-  IP-specific command in a way that changes a user's hotkey behavior
-  unexpectedly.
+The plugin owns one scheduler for the active engine.
 
-Future scheduling behavior:
+- Add a device-local `autoSyncMinutes` setting. `0` disables scheduling.
+- Register one `60,000 ms` poll through `plugin.registerInterval()`.
+- On each poll, compare the configured interval with the active engine's
+  device-local last automatic-attempt timestamp.
+- If due, call the same `coordinator.runActive({ kind: 'scheduled' })` path used
+  by the manual command.
+- Do not run an immediate sync during `onload()`.
+- Persist `lastAutomaticAttemptAt[engineId]` immediately before dispatching a
+  scheduled run, including one that later fails, so failures cannot retry every
+  minute.
+- A manual run does not change the automatic cadence.
+- When scheduling is enabled, an engine is selected without a timestamp, or an
+  invalid timestamp is loaded, initialize that engine's timestamp to the current
+  time without running it. Its first automatic run becomes due after a full
+  interval.
+- A timer firing during a run skips that poll; it does not queue or overlap a
+  second run.
+- Track last automatic-attempt timestamps by engine ID so switching engines does
+  not make one engine inherit the other's interval history.
+- Scheduled IP failures should use a Notice and durable log rather than opening
+  a blocking modal. Manual IP failures retain `DirectConnectErrorModal`.
 
-- Scheduling configuration belongs to the coordinator layer and refers to engine
-  IDs.
-- A scheduler should be registered with `plugin.registerInterval()` so Obsidian
-  removes it on unload.
-- The scheduler should call the same coordinator path as a manual command,
-  including readiness checks, concurrency protection, normalized reporting, and
-  state persistence.
-- A timer firing while a run is active should coalesce or skip, not start a
-  competing run.
-- Startup sync and event-driven sync should also be modeled as `SyncTrigger`
-  values and pass through the same coordinator.
+The interval is shared rather than configured separately per engine. Only the
+currently selected engine is eligible to run.
 
-There is no timer or event trigger to migrate today; the first abstraction
-change should preserve command-only behavior.
+### Settings and state model
 
-#### Reporting
+#### Device-local execution state
 
-Completion notices can be generic because the current result categories are
-broadly useful. Durable logs may be engine-specific.
-
-A reporting extension can allow an engine to describe or write durable details
-without placing IP paths in the coordinator:
+Active execution choices should use device-local storage because Cloud login,
+LAN reachability, and desired scheduling can differ between Obsidian devices:
 
 ```ts
-export interface SyncEngineReporter {
-    reportResult(result: SyncRunResult): Promise<void>;
-    reportFatalError(error: Error): Promise<void>;
+interface SyncExecutionState {
+    version: 1;
+    activeSyncEngine: SyncEngineId;
+    autoSyncMinutes: number;
+    lastAutomaticAttemptAt: Partial<Record<SyncEngineId, string>>;
+    lastRunAt: Partial<Record<SyncEngineId, string>>;
+    lastRunOutcome: Partial<
+        Record<SyncEngineId, "succeeded" | "attention" | "failed">
+    >;
+    cloudSessionToken: string | null;
+    cloudAccountId: string | null;
 }
 ```
 
-For `ip-device`, this reporter would preserve `Sync Log.md` under `syncFolder`
-and the current `DirectConnectErrorModal` behavior. A future engine could use a
-different log location or include remote identifiers that do not map to device
-URIs.
+The default active engine is `ip-device`, preserving existing behavior. The
+Cloud email, password, and verification code are never persisted. Only the
+resulting session token and stable account ID are stored locally. Token expiry
+clears the token but retains the account ID needed to protect manifest
+ownership. This state should use the plugin's device-local storage abstraction,
+not synced `data.json`.
 
-### Settings and persisted state
+#### Persisted engine configuration
 
-The eventual settings model should distinguish shared coordinator settings from
-engine-specific configuration and state. One possible future shape is:
+The existing IP fields remain unchanged. Add Cloud-specific fields to
+`SupernotePluginSettings`:
 
 ```ts
-interface MultiSyncSettings {
-    selectedEngineIds: SyncEngineId[];
-    engines: {
-        "ip-device": {
-            enabled: boolean;
-            syncFolder: string;
-            pathFiltersRaw: string;
-            state: SyncManifest;
-        };
-    };
+interface SupernotePluginSettings {
+    // Existing IP engine configuration and history.
+    directConnectIP: string;
+    syncFolder: string;
+    syncPathFiltersRaw: string;
+    noteSyncState: SyncManifest;
+
+    // New Cloud engine configuration.
+    cloudSyncFolder: string;
+    cloudSyncPathFiltersRaw: string;
 }
 ```
 
-This is a target shape, not a requirement for the first refactor. Initially, the
-IP registration should adapt the existing flat keys so the abstraction can be
-introduced without a settings migration.
+Suggested default: `cloudSyncFolder: 'Supernote Cloud mirror'`. The two default
+roots are intentionally different. Settings validation should reject equal or
+ancestor/descendant IP and Cloud roots even though only one engine runs at a
+time; switching engines later must not transfer ownership accidentally.
 
-When a nested model is introduced later:
+The settings tab should show:
 
-- Add a settings schema version.
-- Migrate `syncFolder`, `syncPathFiltersRaw`, and `noteSyncState` into the
-  `ip-device` namespace exactly once.
-- Keep `directConnectIP` shared unless all other device features are also moved
-  to a reusable device connection profile.
-- Do not discard the old manifest on migration; preserving overwrite ownership
-  is a safety requirement.
-- Keep a backup-compatible read path for one release if practical.
-- Scope `Forget sync history` to a chosen engine rather than clearing every
-  engine's state.
+- Active sync engine dropdown.
+- Shared automatic-sync interval.
+- `Sync now` for the active engine.
+- Active engine status and last outcome.
+- An IP configuration section with the existing IP, folder, and path-mask
+  controls.
+- A Cloud configuration section with sign in/sign out, connection status, Cloud
+  destination folder, and Cloud path masks.
+- `Forget <engine> sync history`, scoped to the selected engine.
 
-### Destination ownership and conflict rules
+Inactive-engine settings remain editable so a user can configure an engine
+before switching to it, but inactive engines cannot be run by their settings
+buttons. Setup-only actions such as Cloud sign-in/sign-out, connection tests,
+and editing masks are allowed while Cloud is inactive. They never change
+`activeSyncEngine`; the user must select Cloud explicitly.
 
-Multiple engines introduce a new class of collision that the current manifest
-cannot represent: two engines may map different source items to the same vault
-path.
+After the first Cloud manifest entry is written, `cloudSyncFolder` is locked
+against direct editing. A separate `Reset Cloud mirror` action may trash locally
+unchanged managed files, preserve and report locally edited files, remove the
+empty manifest, and then unlock the root setting. This prevents a settings
+change from silently abandoning the old manifest and mirror. A root-moving
+workflow can be designed later if needed.
 
-The abstraction should therefore establish these rules before a second engine is
-added:
+### Shared path filtering
 
-- Every persisted record is namespaced by engine ID.
-- Every engine must produce deterministic destination paths or stable
-  destination identities.
-- An engine may overwrite only content it can prove that same engine previously
-  wrote, unless the existing bytes are identical to the incoming bytes.
-- Clearing one engine's history must not clear another engine's ownership
-  records.
-- Engines should use separate destination roots by default.
-- If shared destination roots are allowed, the coordinator or a shared ownership
-  service must detect cross-engine claims before writing.
-- No engine should infer deletions merely because an item is absent from another
-  engine's listing.
+Move the transport-neutral filter logic from `src/deviceSync.ts` into a shared
+module such as `src/sync/pathFilters.ts`:
 
-The existing IP overwrite rules in `decideWrite()` are the minimum safety
-baseline for future engines.
+- `parsePathFilters(raw)` keeps comma/newline input.
+- `*` matches within one path segment.
+- `**` crosses directory boundaries.
+- `?` matches one character.
+- An empty pattern list matches everything.
+- Matching remains anchored to the complete source path.
 
-### Suggested implementation sequence
+The IP engine continues to compare each pattern against decoded device-path
+variants. The Cloud engine compares patterns against one normalized canonical
+Cloud path with a leading slash, for example `/Note/Work/Journal.note`.
 
-1. Extract the current plugin-level `runSync()` responsibilities into a
-   `SyncCoordinator` with one registered engine, while preserving command-only
-   behavior and the global in-flight guard.
-2. Wrap `runDeviceSync()` as `IpDeviceSyncEngine` without changing
-   `deviceSync.ts`, device transport, vault paths, settings keys, result
-   notices, or log behavior.
-3. Add coordinator and adapter tests proving the existing command invokes only
-   `ip-device`, overlapping runs are rejected, state is persisted, and fatal
-   errors still reach the IP reporter/modal path.
-4. Route `Forget sync history` through
-   `coordinator.clearEngineState('ip-device')` while keeping its current visible
-   behavior.
-5. Add engine selection settings only when there is a second engine or a
-   concrete workflow that needs selection. Avoid UI and persisted-schema
-   complexity before it is useful.
-6. Before adding automatic triggers, define scheduling semantics, missed-run
-   behavior, startup timing, unload cancellation, and how repeated triggers
-   coalesce.
-7. Add the second engine behind the registry, then add a `sync selected engines`
-   command and any scheduling UI through the coordinator.
+The first Cloud implementation scans the account root and filters the resulting
+file inventory. Traversal pruning based on patterns can be added later if real
+accounts show a performance need. Files outside the current filter are
+`excluded`; changing a filter does not delete their existing vault copies or
+manifest entries. Remote disappearance is determined from the complete,
+unfiltered inventory first; a file moving from an included path to an excluded
+path is therefore retained rather than misclassified as deleted.
 
-### Compatibility checklist for the first refactor
+### IP engine integration
 
-- `sync-notes-from-device` remains registered and continues to run only the IP
-  engine.
-- No sync occurs on startup, on an interval, or in response to vault/workspace
-  events.
-- `directConnectIP`, `syncFolder`, `syncPathFiltersRaw`, and `noteSyncState`
-  retain their current persisted meanings.
-- `.note` and `.spd` files are mirrored as raw bytes.
-- Device deletions do not delete vault files.
-- Locally edited files are never silently overwritten.
-- Locally deleted, previously synced files are restored.
-- Device listing and transfer timeouts remain `3 seconds` and `120 seconds`
-  respectively.
-- Concurrent runs remain blocked.
-- The existing completion notice, error modal, console details, and
-  `Sync Log.md` behavior remain available.
-- Existing unit tests and the real-device smoke test continue to pass.
+`IpSyncEngine` is a thin wrapper around the existing implementation, not a
+rewrite.
 
-### Open design questions for the implementation phase
+- Reuse `runDeviceSync()` and the pure policy in `deviceSync.ts`.
+- Preserve `directConnectIP`, `syncFolder`, `syncPathFiltersRaw`, and
+  `noteSyncState`.
+- Preserve additive/update-only semantics, local-edit protection, restoration of
+  locally deleted managed files, `Sync Log.md`, and request timeouts.
+- Move plugin-level validation/result formatting from `runSync()` into the
+  wrapper or coordinator so both manual and scheduled triggers share one path.
+- Map `DeviceSyncResult` to the common result with `removed: 0`.
+- `clearHistory()` clears only `noteSyncState`.
 
-- Should multi-engine selection mean exactly one active engine, an ordered set
-  of enabled engines, or both concepts?
-- Should a combined run stop after one engine fails, or continue and present an
-  aggregate result? Sequential continue-and-report is the likely default, but it
-  should be explicit.
-- Should durable logs stay per-engine, or should the coordinator also maintain a
-  high-level aggregate run log?
-- Can engines ever share a destination root, or should separate roots be
-  enforced in settings?
-- What scheduling model is needed: fixed interval, startup, event-driven, or a
-  combination?
-- Should cancellation be user-visible, and must transports support aborting an
-  in-progress network request before automatic sync is introduced?
+Automatic scheduling is new for the IP engine, but it does not alter the sync
+algorithm. Only the trigger and scheduled-error presentation change.
+
+The existing `sync-notes-from-device` command ID should remain registered for
+saved-hotkey compatibility, but its `checkCallback` should make it available
+only when `ip-device` is active. A new transport-neutral command such as
+`sync-supernote-now` runs whichever engine is active.
+
+### Specification-based Cloud engine
+
+The Cloud engine is implemented inside this repository with its own names and
+types. Suggested files:
+
+- `src/cloudSync/cloudAuth.ts` - login, verification, logout, and local token
+  state.
+- `src/cloudSync/cloudClient.ts` - the minimum read-only Supernote Cloud HTTP
+  operations: authenticate, list directories, obtain download metadata, and
+  download bytes.
+- `src/cloudSync/cloudTypes.ts` - independently defined response and domain
+  types.
+- `src/cloudSync/cloudManifest.ts` - versioned manifest, serialized writes, and
+  transaction/recovery behavior.
+- `src/cloudSync/cloudSyncEngine.ts` - recursive inventory, filtering, planning,
+  download, safe cleanup, and normalized results.
+- `src/cloudSync/cloudSyncEngine.test.ts` and focused client/manifest tests.
+
+#### Authentication workflow
+
+1. The Cloud settings UI collects email and password and calls the read-only
+   Cloud client login operation.
+2. If verification is required, a modal collects the verification code and can
+   resend it.
+3. On success, persist only the session token in device-local execution state.
+4. `getReadiness()` reports sign-in as the blocking reason when no token exists.
+5. Authentication expiry clears the token and asks the user to sign in again.
+6. Sign out clears the local token without modifying Cloud manifest or vault
+   files.
+7. Record the authenticated account's stable ID. If a later login returns a
+   different account ID while an account-bound Cloud manifest exists, even an
+   empty one, block sync and require a different destination or
+   `Reset Cloud
+  mirror`; never apply one account's complete-scan deletions to
+   another account's files.
+
+#### One-way mirror workflow
+
+1. Verify authentication and Cloud destination readiness.
+2. Open the Cloud manifest and verify that its account ID and destination root
+   match the authenticated account and current configuration.
+3. Recursively inventory the Cloud account from its root. Track whether the
+   entire scan completed successfully.
+4. Retain the complete remote-ID inventory, then normalize each full Cloud path
+   and apply `cloudSyncPathFiltersRaw` for transfer planning.
+5. Plan deterministic vault paths below `cloudSyncFolder`, including stable
+   disambiguation for case-insensitive collisions.
+6. For each in-scope file, compare remote identity/checksum metadata with the
+   manifest and verify that the local file still matches the last written hash.
+7. Skip unchanged files, protect locally edited files, and download new or
+   changed files.
+8. When an existing remote ID moves, rename its locally unchanged managed file
+   to the new deterministic path. If the old local file was edited or the new
+   destination cannot be adopted safely, preserve it and report a protected item
+   rather than creating or deleting ambiguous duplicates.
+9. Before each create, overwrite, move, adoption, or cleanup, persist a pending
+   operation record containing its previous manifest entry, intended entry,
+   affected paths, and expected before/after hashes. Perform the vault mutation,
+   atomically checkpoint the intended manifest, then clear the pending record.
+   Isolate ordinary per-file transfer failures so other files continue, but stop
+   the run if ownership metadata cannot be advanced safely.
+10. Only after a complete inventory, find managed in-scope entries whose remote
+    IDs disappeared. Move an unchanged local copy to Obsidian Trash and remove
+    its manifest entry. Protect a locally edited copy and report it instead.
+11. Return a normalized result and update per-engine last-run status.
+
+Cloud files outside the current path filters are neither downloaded nor removed.
+The Cloud engine never uploads or modifies remote content.
+
+#### Cloud manifest
+
+Store Cloud metadata in a reserved hidden directory below the destination root,
+for example `<cloudSyncFolder>/.supernote-sync/`. Its versioned manifest header
+binds ownership to one account and root:
+
+```ts
+interface CloudSyncManifest {
+    version: 1;
+    accountId: string;
+    destinationRoot: string;
+    entries: Record<string, CloudSyncManifestEntry>;
+}
+```
+
+Each entry contains only the fields required for one-way ownership and change
+detection:
+
+```ts
+interface CloudSyncManifestEntry {
+    remoteId: string;
+    remotePath: string;
+    remoteChecksum: string;
+    remoteUpdatedAt: number;
+    vaultPath: string;
+    contentHash: string;
+    lastSyncedAt: string;
+}
+```
+
+Each manifest or pending-operation checkpoint writes a sibling temporary file,
+validates the complete JSON, and atomically replaces its primary file where the
+adapter supports it. A pending operation is durable before its vault mutation.
+On startup, recover it by comparing actual paths/hashes with its before/after
+states: commit the intended entry when the mutation completed, restore the
+previous entry when it did not start, and stop with a protected error when the
+state is ambiguous. This applies to creates, overwrites, moves, adoptions, and
+Trash cleanup; recovery is not limited to previously unowned files. A later run
+may adopt an unowned file only after downloading or hashing the expected bytes
+and proving them identical; a non-identical existing file is protected. This is
+the full durability model for the first implementation. A concurrent merge
+protocol is unnecessary because the coordinator permits only one run.
+
+`CloudSyncEngine.clearHistory()` deletes Cloud manifest entries and pending
+operation files only after confirming no run is active. It retains the
+account/root header, managed vault files, durable log, authentication, root
+lock, and last-run display state. The next run may re-adopt byte-identical files
+and protects non-identical files. `Reset Cloud mirror` is the separate,
+destructive ownership-release workflow: it resolves pending operations, trashes
+unchanged managed files, preserves/reports edited files, removes the manifest
+and log only after no owned entries remain, clears Cloud last-run state, and
+unlocks the root/account binding. Only reset or a different destination permits
+switching Cloud accounts.
+
+All Cloud-controlled paths must be normalized and proven to remain descendants
+of `cloudSyncFolder`. Reject absolute paths, empty/`.`/`..` segments, embedded
+separators, control characters, and names that collide with the reserved
+`.supernote-sync` metadata directory after case folding and platform
+normalization. Collision disambiguation must happen before the descendant check.
+
+### Commands, timers, and hooks
+
+#### Commands
+
+| Command ID               | Behavior                                                      |
+| ------------------------ | ------------------------------------------------------------- |
+| `sync-supernote-now`     | Runs the active engine manually.                              |
+| `sync-notes-from-device` | Legacy IP command; enabled only when the IP engine is active. |
+
+A separate Cloud-only sync command is unnecessary. The active engine selector
+and generic command are the product surface.
+
+#### Timers
+
+- One registered `60,000 ms` poll checks the shared interval and active engine.
+- There is no startup sync.
+- There are no engine-specific scheduler timers.
+
+#### Obsidian hooks
+
+- `onload()` loads persisted settings and device-local execution state,
+  constructs both engines and the coordinator, registers commands/settings, and
+  starts the scheduler poll.
+- `onunload()` relies on Obsidian to remove the registered interval and disposes
+  any Cloud client resources.
+- No workspace or vault event initiates synchronization.
+- Changing the active engine updates readiness/status UI but does not
+  automatically run it.
+
+### Reporting and errors
+
+The coordinator formats the shared completion Notice from `SyncRunResult`.
+Engine-specific durable detail remains separate:
+
+- IP continues to use `Sync Log.md` and console details.
+- Cloud appends durable run summaries and protected/failure details to
+  `<cloudSyncFolder>/.supernote-sync/Sync Log.md`.
+- Manual setup/readiness failures can open the relevant settings or modal.
+- Scheduled failures use non-blocking Notices and durable logs; they never open
+  login or direct-connect modals automatically.
+- Protected files are attention items, not fatal errors.
+
+A full Activity subsystem is out of scope until ordinary Notices and durable
+logs prove insufficient.
+
+### Ownership and safety invariants
+
+- Only the active engine can run.
+- A global coordinator lock prevents overlapping manual/scheduled runs.
+- IP and Cloud have distinct destination roots and manifests.
+- Each engine may overwrite or remove only files its own manifest proves it
+  wrote and that remain unchanged locally.
+- Identical incoming and existing bytes may be adopted safely after history is
+  cleared. Non-identical unowned files are protected.
+- IP never propagates source deletions.
+- Cloud deletion propagation requires a complete scan and uses Obsidian Trash.
+- Excluded paths are never interpreted as deleted paths.
+- Switching engines never clears, migrates, or reuses the inactive engine's
+  history.
+- Authentication secrets never enter synced plugin data or logs.
+- No remote write API is exposed by the Cloud engine.
+- A Cloud manifest is valid only for its recorded account ID and destination
+  root.
+
+### Proposed implementation sequence
+
+1. Extract shared path-filter parsing/glob behavior from `deviceSync.ts` without
+   changing IP behavior or tests.
+2. Add device-local `SyncExecutionState`, defaulting to `ip-device` and no
+   automatic interval.
+3. Add common result/types, `IpSyncEngine`, and `SyncCoordinator`; route the
+   current manual command through `runActive()` while preserving IP behavior.
+4. Add the generic `sync-supernote-now` command and active-engine settings UI.
+5. Add the shared scheduler and focused tests proving that only the active
+   engine runs, timers do not overlap runs, and switching preserves both states.
+6. Resolve release-blocking unknowns in [cloud-sync-spec.md](cloud-sync-spec.md)
+   through permitted public evidence or protocol tests, recording verified facts
+   before implementing dependent behavior.
+7. Implement `cloudAuth`, the read-only client, and device-local token storage.
+8. Implement the Cloud manifest and one-way `CloudSyncEngine`, including path
+   masks, local-edit protection, complete-scan deletion gating, Trash, and
+   per-file fault isolation.
+9. Add Cloud settings/status/login UI. Setup never changes the active engine;
+   the user selects Cloud explicitly after setup is complete.
+10. Confirm the public-source attribution in
+    [cloud-sync-spec.md](cloud-sync-spec.md), then run unit, integration, lint,
+    typecheck, build, and headless Obsidian UI verification.
+
+### Test plan
+
+#### Coordinator and scheduler
+
+- Only the selected engine receives manual and scheduled runs.
+- Switching is rejected while a run is active.
+- A scheduler poll during a run does not queue or overlap another run.
+- Failed automatic attempts wait a full interval before retrying.
+- Manual runs do not reset the automatic cadence.
+- Missing or invalid per-engine timestamps initialize without an immediate run.
+- Per-engine automatic-attempt and last-run status remain independent and
+  survive restart.
+- Inactive engine configuration and history are unchanged.
+- Cloud setup never changes the active engine.
+- Legacy IP command is unavailable when Cloud is active.
+
+#### Shared filters
+
+- IP's existing encoded/form-style path cases continue to pass.
+- Cloud paths use the same `*`, `**`, and `?` semantics.
+- Blank filters include everything.
+- Excluded manifest entries are not deleted.
+
+#### Cloud authentication and transport
+
+- Login success, verification-required, resend, verify, logout, and expired
+  session behavior.
+- Tokens are saved only in device-local storage and never in `data.json`.
+- A different authenticated account cannot reuse an existing account-bound
+  manifest.
+- Read-only client methods cannot invoke upload, replace, move, or recycle APIs.
+- Network errors are normalized without exposing credentials.
+
+#### Cloud mirror
+
+- New/changed files download; unchanged files skip.
+- Local edits prevent overwrite and remote-deletion cleanup.
+- Complete scans trash unchanged Cloud-deleted files.
+- Incomplete scans perform no destructive cleanup.
+- Path collisions remain stable across runs.
+- Generated paths cannot escape the Cloud root or collide with engine metadata.
+- Remote renames move unchanged managed files and protect locally edited files.
+- An included remote ID that moves outside the filter is not treated as deleted.
+- Per-file failures do not abort unrelated files.
+- Atomic per-file checkpoints recover completed writes after a later failure.
+- A checkpoint failure aborts before further ownership-changing operations.
+- After Cloud history is cleared, identical existing files can be adopted and
+  non-identical files are protected.
+- Clearing Cloud history never clears IP history, and vice versa.
+- The Cloud root cannot change while its manifest owns files.
+
+### Compatibility checklist
+
+- The default active engine remains IP, so existing installs retain their
+  current behavior until the user opts into Cloud.
+- Existing IP settings, manifest data, command ID, raw-file behavior, conflict
+  protection, logs, timeouts, tests, and real-device smoke test remain intact.
+- Scheduled sync is disabled by default.
+- Only one engine can run or be scheduled at a time.
+- Cloud is one-way and read-only with respect to the remote service.
+- Both engines expose path-mask filtering with the same syntax.
+- Cloud credentials remain device-local.
+- The Cloud implementation follows [cloud-sync-spec.md](cloud-sync-spec.md) and
+  requires no external Cloud-sync plugin at runtime.
+
+### Review checkpoints before implementation
+
+The plan is implementable with the decisions below. Review them before coding;
+if none is changed explicitly, they are requirements rather than open choices:
+
+- Cloud-deleted, locally unchanged files go to Obsidian Trash after a complete
+  scan.
+- One shared interval applies to whichever engine is active.
+- Cloud scans from the account root and uses path masks without a Cloud
+  folder-picker in the first version.
+- IP and Cloud destination roots remain separate.
+- Active-engine selection, scheduling, Cloud session token, and Cloud account ID
+  are device-local; each engine's non-secret configuration remains in plugin
+  settings.
