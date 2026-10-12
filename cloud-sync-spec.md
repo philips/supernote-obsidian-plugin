@@ -54,6 +54,7 @@ Every statement in this document has one of these labels:
 | Label                   | Meaning                                                                       |
 | ----------------------- | ----------------------------------------------------------------------------- |
 | **Documented fact**     | Directly published by a cited public API/documentation source.                |
+| **Compatible behavior** | Implemented by a cited compatible client against the hosted or Private Cloud service, but not guaranteed by the vendor. |
 | **Product requirement** | Required behavior of this plugin. It is not a claim about the remote service. |
 | **Assumption**          | A planned interpretation that must be validated before release.               |
 | **Unknown**             | Not documented by the reviewed public sources. Do not guess or depend on it.  |
@@ -70,16 +71,55 @@ project.
 
 | Source                                                                                                                                      | License                          | Use in this specification                                                                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| [Supernote Cloud support guide](https://support.supernote.com/en_US/Tools-Features/supernote-cloud)                                          | Vendor documentation             | Official user-facing confirmation of Cloud account, file-management, and download capabilities; it does not publish a protocol contract. |
 | [`allenporter/supernote` OpenAPI specification](https://github.com/allenporter/supernote/blob/main/api-spec/openapi.yaml)                   | Apache-2.0                       | Primary public source for the published server base URL, route names, request/response fields, and `x-access-token` declaration.  |
 | [`allenporter/supernote`](https://github.com/allenporter/supernote) and its [published Python package](https://pypi.org/project/supernote/) | Apache-2.0                       | Corroborating context for the project's documented private-cloud compatibility and list/download capabilities.                    |
 | [`ddulic.github.io/supernote/supernote.html`](https://ddulic.github.io/supernote/supernote.html)                                            | Apache-2.0 project documentation | Context only for a third-party self-hosted Private Cloud implementation; it is not evidence for hosted Supernote Cloud endpoints. |
 | [`adrianba/supernote-cloud-api`](https://github.com/adrianba/supernote-cloud-api)                                                           | MIT                              | Independent corroboration that a public Cloud workflow can include login, folder listing, and obtaining a file URL.               |
+| [`rnbennett/supernote-cloud`](https://github.com/rnbennett/supernote-cloud)                                                                 | Apache-2.0                       | Maintained hosted-Cloud client used as compatibility evidence for CSRF handling, password login, email OTP, listing, and downloads. |
+| [`dylanmazurek/supernote-sync`](https://github.com/dylanmazurek/supernote-sync)                                                             | MIT                              | Independent hosted-Cloud client used as compatibility evidence for string identifiers, pagination fields, account queries, and downloads. |
+| [`nickian/Supernote-Private-Cloud-PHP-Client`](https://github.com/nickian/Supernote-Private-Cloud-PHP-Client)                               | Unspecified in reviewed files    | Private Cloud compatibility evidence for password derivation, 1-based listing requests, JWT claims, and large decimal identifiers. |
 
 Attribution in implementation documentation should acknowledge these public
 references where their protocol facts are used. Do not copy their source files
 or treat their implementation choices as requirements. If any Apache-2.0 or MIT
 licensed material is incorporated verbatim or substantially, comply with that
 source's notice requirements separately.
+
+### 4.1 Compatible-client research findings
+
+The following findings were reviewed on October 12, 2026. They narrow several
+implementation unknowns, but they remain **compatible behavior**, not vendor
+contract terms:
+
+| Finding | Evidence | Specification disposition |
+| ------- | -------- | ------------------------- |
+| Password derivation | Three hosted-Cloud clients and one Private Cloud client independently use `SHA256(MD5(plaintext password) + randomCode)`. | Use this derivation for the first login attempt. Do not implement the alternative derivation unless later evidence requires it. |
+| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch is specified below as compatible behavior and must still pass a permitted production-account protocol test before release. |
+| CSRF/session state | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403. | Treat cookie and CSRF state as part of one sign-in session. Confirm whether every plugin request needs the header before release. |
+| Identifier precision | Compatible clients represent file and directory IDs as strings, and published examples include values above JavaScript's safe-integer limit. | Store and transmit identifiers as canonical decimal strings; never round-trip them through JavaScript `number`. |
+| Pagination origin | Hosted and Private Cloud clients begin with `pageNo: 1`; compatible models expose `pages`, `pageNum`, and page-size fields. | Use 1 as the first page. Maximum size and cross-page consistency remain unknown. |
+| Download transfer | Three hosted-Cloud clients request `type: 0`, then perform an unauthenticated HTTP `GET` of the returned URL. | `GET` without `x-access-token` is the compatibility baseline. Redirect and host policy remain release blockers. |
+| Path presentation | The compatible Private Cloud server deliberately flattens category containers such as `NOTE/Note` to `Note` for web APIs, while device APIs retain the physical path. | Do not infer hosted-Cloud canonical paths from listing parent IDs alone. Verify path normalization before deletion cleanup. |
+| Operational guarantees | No reviewed source publishes hosted-service rate limits, retry guidance, timeout guidance, inventory snapshot guarantees, or identifier/file-size ceilings. | Keep these as unknowns and use conservative, non-destructive behavior. |
+
+Exact implementation locations reviewed for these observations include:
+
+- [`rnbennett/supernote-cloud` authentication and transport](https://github.com/rnbennett/supernote-cloud/blob/main/supernote_cloud/api.py)
+  and its [endpoint catalogue](https://github.com/rnbennett/supernote-cloud/blob/main/supernote_cloud/endpoints.py).
+- [`dylanmazurek/supernote-sync` authentication](https://github.com/dylanmazurek/supernote-sync/blob/main/pkg/supernote-cloud/auth.go),
+  [file operations](https://github.com/dylanmazurek/supernote-sync/blob/main/pkg/supernote-cloud/files.go),
+  and [file models](https://github.com/dylanmazurek/supernote-sync/blob/main/pkg/supernote-cloud/models/files.go).
+- [`adrianba/supernote-cloud-api` hosted-Cloud API](https://github.com/adrianba/supernote-cloud-api/blob/main/src/api.ts)
+  and [download transfer](https://github.com/adrianba/supernote-cloud-api/blob/main/src/sync.ts).
+- [`allenporter/supernote` Private Cloud client](https://github.com/allenporter/supernote/blob/main/supernote/client/web.py)
+  and [web listing, path, and signed-download behavior](https://github.com/allenporter/supernote/blob/main/supernote/server/routes/file_web.py).
+- [`nickian/Supernote-Private-Cloud-PHP-Client` client](https://github.com/nickian/Supernote-Private-Cloud-PHP-Client/blob/master/SupernotePrivateCloud.php)
+  and [reverse-engineering notes and examples](https://github.com/nickian/Supernote-Private-Cloud-PHP-Client/blob/master/README.md).
+
+A general web search found no official hosted-Cloud API contract. The vendor
+support guide describes user-facing Cloud operations, not authentication,
+pagination, identity stability, transfer-host policy, rate limits, or retries.
 
 ## 5. Transport Baseline
 
@@ -88,6 +128,7 @@ source's notice requirements separately.
 | Published production server                                     | Documented fact | `https://cloud.supernote.com` is listed as the production server by the reviewed third-party OpenAPI.  |
 | Request format                                                  | Documented fact | Listed control-plane endpoints accept JSON request bodies and return JSON responses.                   |
 | Protected endpoint header                                       | Documented fact | The OpenAPI declares `x-access-token` as an API-key header for protected endpoints.                    |
+| CSRF bootstrap and cookies                                      | Compatible behavior | A maintained hosted-Cloud client first requests `GET /api/csrf`, retains the response cookies, and sends the returned `X-XSRF-TOKEN` value on control-plane requests. |
 | Success envelope                                                | Documented fact | Published responses use `success` (boolean); they may also contain `errorCode` and `errorMsg` strings. |
 | Non-200 status codes                                            | Unknown         | The reviewed OpenAPI documents `200` responses but does not enumerate HTTP error statuses.             |
 | Request timeouts, retry policy, rate limits, pagination limits  | Unknown         | No reviewed public source defines them.                                                                |
@@ -97,10 +138,23 @@ source's notice requirements separately.
 only over HTTPS. Tokens, passwords, verification codes, and full download URLs
 must never be written to plugin logs, notices, diagnostics, or synced settings.
 
+**Product requirement:** requests belonging to one sign-in attempt share one
+cookie jar and CSRF state. A CSRF refresh must not silently repeat a
+credential-bearing or verification-code request more than once.
+
 ## 6. Required Read-Only Endpoint Catalogue
 
 All routes below are relative to the published production server. A request that
 requires a token sends `x-access-token: <session token>`.
+
+### 6.0 Obtain CSRF/session state
+
+| Item              | Classification      | Specification |
+| ----------------- | ------------------- | ------------- |
+| Method and route  | Compatible behavior | `GET /api/csrf` |
+| Response state    | Compatible behavior | The hosted-Cloud client retains response cookies and reads an `X-XSRF-TOKEN` response header or cookie value. |
+| Subsequent use    | Compatible behavior | JSON control-plane requests send `X-XSRF-TOKEN` and the retained cookies. The client refreshes CSRF state and retries once after HTTP 403. |
+| Production status | Assumption          | The plugin should perform this bootstrap before authentication until a permitted test establishes the minimum required request set. |
 
 ### 6.1 Obtain login nonce
 
@@ -131,10 +185,12 @@ requires a token sends `x-access-token: <session token>`.
 credentials only in the first release. It does not present phone or WeChat
 sign-in choices.
 
-**Unknown:** which of the two published password derivations a production
-account accepts, whether additional client-identification fields are required,
-and the service behavior when either derivation is rejected. These must be
-verified against a dedicated test account before this feature is released.
+**Compatible behavior:** independently implemented hosted-Cloud clients use
+`SHA256(MD5(plaintext password) + randomCode)`. This is the specified first
+release derivation. Compatible clients disagree about whether an email login
+sends `loginMethod: "1"` or `loginMethod: "2"`, so the production-accepted
+client-field combination and any required browser, country, language, cookie,
+or CSRF fields must still be verified with a dedicated test account.
 
 ### 6.3 Request an email verification code
 
@@ -145,6 +201,17 @@ verified against a dedicated test account before this feature is released.
 | Request JSON     | Documented fact | `email` string is required; `language` string is optional.                                                     |
 | Response         | Unknown         | The route refers to an `EmailVO`, but that response schema was not present in the reviewed public schema file. |
 
+The published route above is not the route used by the reviewed compatible
+hosted-Cloud login flow. That flow uses these additional operations:
+
+| Item | Classification | Specification |
+| ---- | -------------- | ------------- |
+| Pre-auth route | Compatible behavior | `POST /api/user/validcode/pre-auth` with JSON `{ "account": <email> }`. A successful response supplies a token used only to authorize sending the code. |
+| Pre-auth key derivation | Compatible behavior | Interpret the final character of the pre-auth token as a decimal index and select that hyphen-separated token component as the signing key. Reject malformed tokens rather than guessing. |
+| Send-code route | Compatible behavior | `POST /api/user/mail/validcode/send`. |
+| Send-code JSON | Compatible behavior | `email`, the original login `timestamp`, the pre-auth `token`, and `sign = SHA256(email + extracted key)`. |
+| Send-code success | Compatible behavior | The response supplies `validCodeKey`, which must remain in memory only for the active sign-in attempt. |
+
 ### 6.4 Validate an email verification code
 
 | Item             | Classification  | Specification                                              |
@@ -154,11 +221,21 @@ verified against a dedicated test account before this feature is released.
 | Request JSON     | Documented fact | `validCodeKey` string and `validCode` string are required. |
 | Success JSON     | Documented fact | Common response envelope.                                  |
 
-**Unknown:** whether this validation route is part of the account-login flow,
-how `validCodeKey` is obtained for email verification, whether successful
-validation produces a session token, and which login response condition signals
-that verification is required. The engine must not claim verification-code
-support until those facts are recorded from a permitted public protocol test.
+**Compatible behavior:** the reviewed hosted-Cloud client does not use the
+generic validation route above for login. It treats login `errorCode: "E1760"`
+as identity verification required, obtains `validCodeKey` through Section 6.3,
+and then performs this sequence:
+
+| Item | Classification | Specification |
+| ---- | -------------- | ------------- |
+| OTP login route | Compatible behavior | `POST /api/official/user/sms/login`. Despite the route name, the compatible request supplies an `email` field. |
+| OTP login JSON | Compatible behavior | `email`, `validCode`, `validCodeKey`, the original login `timestamp`, `browser`, and `equipment`. The compatible client uses equipment `4`. |
+| Expired/rejected code | Compatible behavior | The compatible client treats `E1756`, `E0101`, and `E1760` as reasons to restart the code flow. These meanings are not vendor-documented and must not be generalized to unrelated operations. |
+| Token completion | Compatible behavior | After OTP login succeeds, call `POST /api/user/query/token` in the same cookie/CSRF session and require a non-empty `token`. |
+
+This sequence must pass a permitted hosted-Cloud test before the plugin presents
+email-code verification as supported. Until then, the UI uses the unavailable
+message defined in Section 8.2.
 
 ### 6.5 Token/session check
 
@@ -167,7 +244,7 @@ support until those facts are recorded from a permitted public protocol test.
 | Method and route           | Documented fact | `POST /api/user/query/token`                                                                     |
 | Success JSON               | Documented fact | Common response fields plus `token` string.                                                      |
 | Authentication requirement | Unknown         | The reviewed OpenAPI does not declare an `x-access-token` requirement for this route.            |
-| Product use                | Assumption      | It may be used only after a test confirms its request requirements and token-validity semantics. |
+| Product use                | Compatible behavior | A hosted-Cloud OTP flow calls this route without an access-token header, but with the active cookie/CSRF session, to obtain the final bearer token. Its general token-validation semantics remain unknown. |
 
 ### 6.6 Query current account identity
 
@@ -184,6 +261,11 @@ cross-account mirror ownership. Validate this before release. If it is not
 stable, the feature must remain blocked until a stable public identifier is
 identified.
 
+**Compatible behavior:** hosted and Private Cloud clients expose `userId` as a
+decimal string in JWT claims or as an int64-shaped profile field. The plugin
+must store the account binding as an opaque decimal string; this evidence does
+not establish lifetime stability or non-reuse by the hosted service.
+
 ### 6.7 List a directory
 
 | Item              | Classification  | Specification                                                                                                                             |
@@ -196,10 +278,17 @@ identified.
 | Success JSON      | Documented fact | Common response fields, `total` int64, and `userFileVOList`.                                                                              |
 | Entry fields      | Documented fact | Each published entry may include `id`, `directoryId`, `fileName`, `size`, `md5`, `isFolder` (`Y` or `N`), `createTime`, and `updateTime`. |
 | Root presentation | Documented fact | The published schema warns that the web listing can flatten internal root folders in its presentation.                                    |
+| First page        | Compatible behavior | Reviewed hosted and Private Cloud clients use `pageNo: 1`. |
+| Response pagination fields | Compatible behavior | Compatible clients and models recognize `pages`, `pageNum`, and a page-size field in addition to `total`. Field presence must be validated rather than assumed. |
 
-**Unknown:** pagination origin, permitted page sizes, whether the full `total`
-is stable during a multi-page inventory, whether item IDs can exceed JavaScript
-safe integers, and the exact treatment of inaccessible or deleted entries.
+**Product requirement:** treat all `id` and `directoryId` values as canonical
+decimal strings at the JSON boundary. Compatible examples contain IDs above
+JavaScript's `Number.MAX_SAFE_INTEGER`; parsing them as `number` can silently
+change the requested object.
+
+**Unknown:** permitted page sizes, whether the full `total` and page ordering
+are stable during a multi-page inventory, and the exact treatment of
+inaccessible or deleted entries.
 
 ### 6.8 Query a file path
 
@@ -231,9 +320,22 @@ safe integers, and the exact treatment of inaccessible or deleted entries.
 | Content type and length | Unknown         | The reviewed public sources do not specify response MIME types or transfer-length guarantees.                                                 |
 | Integrity field         | Documented fact | The descriptor response contains an `md5` string.                                                                                             |
 
+**Compatible behavior:** three hosted-Cloud clients fetch the descriptor URL
+with HTTP `GET` and no `x-access-token` header. Their HTTP libraries follow
+ordinary redirects by default. This supports `GET` without an API token as the
+compatibility baseline, but does not establish a vendor redirect contract,
+allowed download hosts, credential-forwarding rules, URL lifetime, or MIME and
+length guarantees.
+
 **Product requirement:** downloaded bytes must match the documented MD5 value
 before being treated as a successful Cloud file transfer. A mismatch is a
 per-file failure and must not overwrite or remove a locally protected copy.
+
+**Product requirement:** never forward `x-access-token`, cookies, CSRF headers,
+or other Cloud credentials to the descriptor host. Follow redirects only when
+every hop is HTTPS and passes the implementation's reviewed host policy. Until
+that policy is validated against production descriptors, a host-changing
+redirect is a protected per-file failure.
 
 ### 6.11 Logout
 
@@ -268,6 +370,11 @@ verification.
 For a file selected for mirroring, the engine requires a usable remote ID, file
 name, parent relation or verified canonical path, folder/file indicator, and
 checksum. The published `md5` field is the remote checksum field.
+
+Remote IDs and parent IDs are opaque decimal strings. The engine may validate
+that they contain only decimal digits, but it must not convert them to
+JavaScript `number`, perform arithmetic on them, or normalize away leading
+zeroes unless the service contract later requires that normalization.
 
 **Assumption:** an item with `isFolder: "N"` is downloadable after a valid
 download descriptor is obtained. The behavior for other values is unknown and
@@ -315,17 +422,22 @@ documented, safe user-visible resolution.
 
 ### 8.2 Verification code
 
-If a validated protocol test establishes that email verification is required:
+Compatible hosted-Cloud evidence identifies login `errorCode: "E1760"` as the
+identity-verification branch and supplies the candidate end-to-end sequence in
+Sections 6.3 through 6.5. After that sequence passes a permitted production
+protocol test:
 
-1. The plugin requests a code for the entered email address.
+1. The plugin obtains a pre-auth token and requests a code for the entered email
+  address using the signed send-code request.
 2. The user enters the code in a modal dialog.
-3. The plugin validates the code using the published verification route.
-4. The plugin continues only through the documented follow-up that produces a
-   usable session token.
+3. The plugin submits the code, `validCodeKey`, and original login timestamp to
+  the compatible OTP-login route.
+4. In the same cookie/CSRF session, the plugin queries the resulting bearer
+  token and then retrieves the account binding.
 
-Until the service's verification branch and `validCodeKey` source are verified,
-the UI must report **Email verification is not yet supported by the verified
-Cloud protocol** rather than prompt for a code that cannot complete sign-in.
+Until that production test succeeds, the UI must report **Email verification is
+not yet supported by the verified Cloud protocol** rather than prompt for a code
+that cannot complete sign-in.
 
 ### 8.3 Session lifecycle
 
@@ -420,24 +532,32 @@ codes, full signed download URLs, or remote error payloads that contain secrets.
 
 ## 11. Unknowns That Block Release Decisions
 
-The following must be resolved from a permitted public protocol test, supported
-vendor documentation, or a newly published vendor contract before the relevant
-behavior is released:
+The following unknowns require a permitted production protocol test, supported
+vendor documentation, or a newly published vendor contract before the named
+capability is released:
 
-1. The accepted password derivation for the current production service.
-2. The login response condition that requires email verification.
-3. The origin and lifecycle of `validCodeKey` for email verification.
-4. The complete verified sequence from email-code validation to session token.
-5. Pagination origin, maximum page size, and inventory consistency guarantees.
-6. The relationship between listing hierarchy, flattened root presentation, and
-   canonical paths for path-mask matching.
-7. The HTTP method, redirect behavior, headers, allowed hosts, and content
-   semantics of a returned download URL.
-8. The stability and suitability of `userId` as an account-binding identifier.
-9. The service's published authentication-expiry indicator, if any.
-10. Published rate limits, timeouts, retry guidance, and file-size limits.
-11. Exact behavior for Cloud items whose identifiers or sizes exceed local
-    runtime limits.
+1. **Password sign-in:** the production-accepted CSRF and cookie requirements,
+   `loginMethod`, and other required client-identification fields.
+2. **Email-code sign-in:** confirmation that login `E1760` and the compatible
+   sequence in Sections 6.3 through 6.5 remain accepted by production, including
+   code lifetime and restart behavior. This does not block a release that keeps
+   email-code sign-in visibly unavailable.
+3. **Deletion cleanup:** a service contract or repeatable protocol result that
+   establishes when a paginated traversal is a complete, internally consistent
+   remote inventory. A 1-based page origin does not prove absence.
+4. **Path-mask matching and deletion cleanup:** the hosted-Cloud relationship
+   between listing hierarchy, flattened root presentation, and canonical paths.
+5. **File downloads:** the allowed descriptor hosts and redirect policy. A plain
+   `GET` without credentials is observed, but following an arbitrary host or
+   redirect is not acceptable.
+6. **Mirror ownership and deletion cleanup:** the stability, lifetime, and
+   non-reuse suitability of `userId` as an account-binding identifier.
+
+Authentication-expiry signals, rate limits, timeout guidance, page-size limits,
+and service file-size ceilings remain unknown but do not block an initial
+non-destructive release. The engine can fail closed, avoid automatic retries,
+use conservative request sizes, require reauthentication, and report oversized
+or unsupported files as per-file failures.
 
 Until an unknown is resolved, the product must use the non-destructive outcome
 defined above or keep that capability unavailable.
