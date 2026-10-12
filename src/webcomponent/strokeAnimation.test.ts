@@ -171,7 +171,10 @@ describe('buildPageStrokeAnimation', () => {
         // This note is mostly pressure-varying contour fills. They get a
         // normal dashed centerline during playback, not an SVG mask.
         expect(previews.length).toBeGreaterThan(0);
-        expect(plainDraws.length).toBeGreaterThan(0);
+        // Eraser gestures are no longer drawn (white ink on a transparent page
+        // shows up as a phantom mark on dark backgrounds, #238), so every
+        // segment here is a contour preview.
+        expect(plainDraws).toHaveLength(0);
         expect(anim.segments.every((s) => s.kind === 'draw')).toBe(true);
         expect(anim.svg.querySelector('mask')).toBeNull();
 
