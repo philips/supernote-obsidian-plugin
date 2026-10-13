@@ -59,8 +59,8 @@ Follow the repository's existing opt-in integration-script pattern:
 - Read credentials from an interactive prompt or environment variables, never
   command-line arguments or tracked files.
 - Maintain an explicit cookie jar and CSRF state for each sign-in attempt.
-- Follow download redirects manually so every target can be inspected before
-  it is requested.
+- Follow download redirects manually so every target can be inspected before it
+  is requested.
 - Apply an absolute request count and traversal bound in addition to the Cloud
   policy limits.
 - Require an explicit opt-in acknowledgement before contacting production.
@@ -100,8 +100,8 @@ first and attempt to redact it afterward.
 
 ## 5. Execution Order And Pass Criteria
 
-Run the gates in dependency order so one authenticated session can establish
-the identity, inventory, path, and download observations.
+Run the gates in dependency order so one authenticated session can establish the
+identity, inventory, path, and download observations.
 
 ### 5.1 Password sign-in
 
@@ -153,8 +153,8 @@ entries, compare:
 The sanitized report should contain a table with per-run item and parent hashes,
 synthetic listing names, returned path forms, and the proposed normalized path.
 It should explicitly settle leading and trailing slashes, category flattening,
-percent decoding, `+` handling, Unicode normalization, duplicate leaf names,
-and whether the path query describes the item or only its parent.
+percent decoding, `+` handling, Unicode normalization, duplicate leaf names, and
+whether the path query describes the item or only its parent.
 
 Pass when one deterministic normalization produces unique, stable paths with a
 leading slash and agrees across two complete inventories. Any unexplained path
@@ -163,8 +163,8 @@ disagreement keeps filtering and path-based deletion unavailable.
 ### 5.5 Download transfer
 
 Request a type `"0"` descriptor for the known synthetic fixture. Parse the URL
-without logging it, then issue a credential-free `GET`. Handle redirects one
-hop at a time and validate each target before following it.
+without logging it, then issue a credential-free `GET`. Handle redirects one hop
+at a time and validate each target before following it.
 
 Pass when every hop uses HTTPS and a narrowly recordable hostname or host
 pattern; the harness sends no Cloud token, cookies, CSRF header, URL-embedded
@@ -179,8 +179,8 @@ Confirm code request, one rejected or expired code, resend or restart behavior,
 successful use of a current code, OTP login, final `/api/user/query/token`, and
 account identity retrieval in the same session.
 
-Pass only when the complete sequence succeeds and the observed failure cases
-can be handled without guessing at unrelated error-code meanings. Do not create
+Pass only when the complete sequence succeeds and the observed failure cases can
+be handled without guessing at unrelated error-code meanings. Do not create
 repeated failures merely to enumerate undocumented errors.
 
 ## 6. Obsidian Runtime Confirmation
@@ -226,9 +226,9 @@ code after all of the following are true:
 - The end-to-end Cloud workflow has passed in the intended Obsidian runtime.
 - No unresolved protocol question requires another production observation.
 
-Retain the dated secret-free observations and synthetic tests after removing
-the harness. Retention of the harness requires an explicit decision documented
-in this plan or its successor, supported by strong evidence such as a recurring
+Retain the dated secret-free observations and synthetic tests after removing the
+harness. Retention of the harness requires an explicit decision documented in
+this plan or its successor, supported by strong evidence such as a recurring
 service-compatibility need that synthetic tests cannot address. If retained, it
 must remain opt-in, credential-external, secret-redacting, bounded, and excluded
 from ordinary CI and release execution.
