@@ -139,6 +139,12 @@ export class SupernoteSettingTab extends PluginSettingTab {
     getSettingDefinitions(): SettingDefinitionItem[] {
         return [
             {
+                name: 'UI',
+                render: (setting) => {
+                    setting.setHeading();
+                },
+            },
+            {
                 name: 'Invert colors in "dark mode"',
                 desc: 'When Obsidian is in "dark mode" increase image visibility by inverting colors of images',
                 control: {
@@ -163,6 +169,12 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
+                name: 'Convert',
+                render: (setting) => {
+                    setting.setHeading();
+                },
+            },
+            {
                 name: 'Export current page as',
                 desc: 'Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.',
                 control: {
@@ -172,27 +184,26 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
-                name: 'Device file browser sort order',
-                desc: 'Default order to list files and folders in when browsing the supernote device (e.g. "attach supernote file from device"). Can also be changed from the browser itself.',
-                control: {
-                    type: 'dropdown',
-                    key: 'fileBrowserSortOrder',
-                    options: FILE_BROWSER_SORT_LABELS,
+                name: 'Custom dictionary',
+                render: (setting) => {
+                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
                 },
             },
             {
-                name: 'Default import format',
+                name: 'Date-based import',
+                render: (setting) => {
+                    setting
+                        .setHeading()
+                        .setDesc('Date-based import currently works only with the direct IP connection engine.');
+                },
+            },
+            {
+                name: 'Default format',
                 desc: 'Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.',
                 control: {
                     type: 'dropdown',
                     key: 'importFormat',
                     options: IMPORT_FORMAT_LABELS,
-                },
-            },
-            {
-                name: 'Custom dictionary',
-                render: (setting) => {
-                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
                 },
             },
             {
@@ -258,7 +269,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
-                name: 'Direct IP connection',
+                name: 'IP engine',
                 render: (setting) => {
                     setting.setHeading();
                 },
@@ -277,6 +288,15 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     },
                 },
             },
+            {
+                name: 'Device file browser sort order',
+                desc: 'Default order to list files and folders in when browsing the supernote over a direct IP connection. Can also be changed from the browser itself.',
+                control: {
+                    type: 'dropdown',
+                    key: 'fileBrowserSortOrder',
+                    options: FILE_BROWSER_SORT_LABELS,
+                },
+            },
         ];
     }
 
@@ -286,6 +306,10 @@ export class SupernoteSettingTab extends PluginSettingTab {
         containerEl.empty();
         let alert: ExtraButtonComponent;
         let extensionAlert: ExtraButtonComponent;
+
+        new Setting(containerEl)
+            .setName('UI')
+            .setHeading();
 
         new Setting(containerEl)
             .setName('Invert colors in "dark mode"')
@@ -326,32 +350,31 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     }),
             );
 
-        new Setting(containerEl)
-            .setName('Export current page as')
-            .setDesc('Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.')
-            .addDropdown(dropdown => dropdown
-                .addOptions(PAGE_EXPORT_IMAGE_FORMAT_LABELS)
-                .setValue(this.plugin.settings.pageExportImageFormat)
-                .onChange(async (value) => {
-                    this.plugin.settings.pageExportImageFormat = value as PageExportImageFormat;
-                    await this.plugin.saveSettings();
-                })
-            );
+            new Setting(containerEl)
+                .setName('Convert')
+                .setHeading();
+
+            new Setting(containerEl)
+                .setName('Export current page as')
+                .setDesc('Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.')
+                .addDropdown(dropdown => dropdown
+                    .addOptions(PAGE_EXPORT_IMAGE_FORMAT_LABELS)
+                    .setValue(this.plugin.settings.pageExportImageFormat)
+                    .onChange(async (value) => {
+                        this.plugin.settings.pageExportImageFormat = value as PageExportImageFormat;
+                        await this.plugin.saveSettings();
+                    })
+                );
+
+            createCustomDictionarySettingsUI(containerEl, this.plugin);
 
         new Setting(containerEl)
-            .setName('Device file browser sort order')
-            .setDesc('Default order to list files and folders in when browsing the supernote device (e.g. "attach supernote file from device"). Can also be changed from the browser itself.')
-            .addDropdown(dropdown => dropdown
-                .addOptions(FILE_BROWSER_SORT_LABELS)
-                .setValue(this.plugin.settings.fileBrowserSortOrder)
-                .onChange(async (value) => {
-                    this.plugin.settings.fileBrowserSortOrder = value as FileBrowserSortOrder;
-                    await this.plugin.saveSettings();
-                })
-            );
+            .setName('Date-based import')
+            .setHeading()
+            .setDesc('Date-based import currently works only with the direct IP connection engine.');
 
         new Setting(containerEl)
-            .setName('Default import format')
+            .setName('Default format')
             .setDesc('Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.')
             .addDropdown(dropdown => dropdown
                 .addOptions(IMPORT_FORMAT_LABELS)
@@ -361,8 +384,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
-
-        createCustomDictionarySettingsUI(containerEl, this.plugin);
 
         new Setting(containerEl)
             .setName('Sync')
@@ -438,7 +459,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Direct IP connection')
+            .setName('IP engine')
             .setHeading();
 
         new Setting(containerEl)
@@ -465,5 +486,18 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 alert = btn;
                 return btn;
             });
+
+        new Setting(containerEl)
+            .setName('Device file browser sort order')
+            .setDesc('Default order to list files and folders in when browsing the supernote over a direct IP connection. Can also be changed from the browser itself.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(FILE_BROWSER_SORT_LABELS)
+                .setValue(this.plugin.settings.fileBrowserSortOrder)
+                .onChange(async (value) => {
+                    this.plugin.settings.fileBrowserSortOrder = value as FileBrowserSortOrder;
+                    await this.plugin.saveSettings();
+                })
+            );
+
     }
 }
