@@ -57,13 +57,13 @@ The settings are declared in `src/settings.ts` as part of
 defaults. `saveSettings()` writes the full settings object through Obsidian's
 `saveData()`.
 
-| Setting              | Default            | IP sync role                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `directConnectIP`    | `''`               | Device IPv4 address. A sync cannot start when this is empty. This setting is shared with file browsing, uploads, date-based import, and screen mirroring; it is not owned exclusively by sync. The settings UI validates dotted-quad IPv4 input.                                                                                                                                                                                            |
-| `syncFolder`         | `'Supernote sync'` | Shared vault destination root used by whichever sync engine is active. Device directories and raw filenames are mirrored below this path, and the IP `Sync Log.md` is stored here. The engine uses deterministic paths instead of Obsidian's attachment-name uniquification.                                                                                                                                                              |
-| `syncPathFiltersRaw` | `''`               | Currently stores comma- or newline-separated device path patterns. Under the multi-sync plan it becomes the shared **Path allowlist** for both engines without a data migration. Empty means every otherwise allowed file. `*` matches within one path segment, `**` crosses directory boundaries, and `?` matches one character. The IP engine continues considering decoded path variants so human-readable paths containing spaces work. |
-| `syncFileExtensionsRaw` | `'.note, .spd'` | Shared comma- or newline-separated file-extension allowlist. Entries are case-insensitive and may include or omit the leading dot. `*` explicitly includes every trusted regular file; blank includes none. |
-| `noteSyncState`      | `{}`               | Persisted manifest keyed by device URI. Each record stores device date and size, vault path, the hash of the bytes last written, and the last-sync timestamp. It drives both efficient change detection and the local-edit overwrite guard.                                                                                                                                                                                                 |
+| Setting                 | Default            | IP sync role                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `directConnectIP`       | `''`               | Device IPv4 address. A sync cannot start when this is empty. This setting is shared with file browsing, uploads, date-based import, and screen mirroring; it is not owned exclusively by sync. The settings UI validates dotted-quad IPv4 input.                                                                                                                                                                                            |
+| `syncFolder`            | `'Supernote sync'` | Shared vault destination root used by whichever sync engine is active. Device directories and raw filenames are mirrored below this path, and the IP `Sync Log.md` is stored here. The engine uses deterministic paths instead of Obsidian's attachment-name uniquification.                                                                                                                                                                |
+| `syncPathFiltersRaw`    | `''`               | Currently stores comma- or newline-separated device path patterns. Under the multi-sync plan it becomes the shared **Path allowlist** for both engines without a data migration. Empty means every otherwise allowed file. `*` matches within one path segment, `**` crosses directory boundaries, and `?` matches one character. The IP engine continues considering decoded path variants so human-readable paths containing spaces work. |
+| `syncFileExtensionsRaw` | `'.note, .spd'`    | Shared comma- or newline-separated file-extension allowlist. Entries are case-insensitive and may include or omit the leading dot. `*` explicitly includes every trusted regular file; blank includes none.                                                                                                                                                                                                                                 |
+| `noteSyncState`         | `{}`               | Persisted manifest keyed by device URI. Each record stores device date and size, vault path, the hash of the bytes last written, and the last-sync timestamp. It drives both efficient change detection and the local-edit overwrite guard.                                                                                                                                                                                                 |
 
 The settings tab exposes two additional sync-related UI behaviors:
 
@@ -266,8 +266,9 @@ The command is registered during `SupernotePlugin.onload()`.
   or cancellable sync resource today. It only terminates the shared rendering
   worker pool.
 - The settings UI's `Forget sync history` button is an `onClick` handler that
-  clears the IP engine manifest. It changes how the next run plans work but does
-  not start a run.
+  clears the current IP manifest. Under the planned migration this becomes the
+  shared history action. It changes how the next run plans work but does not
+  start a run.
 
 ### Result and failure reporting
 
@@ -348,9 +349,10 @@ The architecture follows these constraints:
 - Both engines use one shared path allowlist and one shared configurable
   file-extension allowlist. The extension allowlist defaults to `.note` and
   `.spd`.
-- Both engines use one shared destination root. Each engine retains its own
-  configuration and manifest so switching engines does not discard history or
-  silently transfer ownership.
+- Both engines use one shared destination root and one shared mirror manifest.
+  The manifest records files managed by sync as a whole, not ownership by one
+  engine. Engine-specific remote metadata is only a change-detection snapshot
+  from the engine that last reconciled that entry.
 
 The implementation plan uses these decisions. They were selected because no
 answer was available during this planning pass and are collected again as review
@@ -359,10 +361,13 @@ checkpoints at the end:
 - One shared automatic-sync interval applies to whichever engine is active.
 - The Cloud engine scans from the Cloud account root and applies path masks to
   canonical full Cloud paths.
-- After a complete Cloud scan, a remotely deleted file is moved to Obsidian
-  Trash only if its local copy still matches the Cloud manifest. A locally
-  edited copy is protected.
-- IP and Cloud use one shared destination root and separate engine state.
+- After a complete Cloud scan, a managed in-scope file absent from Cloud is
+  moved to Obsidian Trash only if its local copy still matches the shared
+  manifest. A locally edited copy is protected.
+- IP and Cloud use one shared destination root and one shared mirror state.
+- The product assumes one user, one Supernote device, and one corresponding
+  Cloud account. IP and Cloud are alternate transports for the same logical
+  source tree, not independent authorities.
 
 ### Cloud specification boundary
 
@@ -420,7 +425,7 @@ flowchart TD
 
     Cloud --> Auth[CloudAuthService]
     Cloud --> Client[SupernoteCloudClient]
-    Cloud --> Manifest[CloudSyncManifestStore]
+    Coordinator --> Manifest[SharedSyncManifestStore]
 
     IP --> Vault[Obsidian Vault]
     Cloud --> Vault
@@ -431,8 +436,8 @@ explicit:
 
 ```ts
 const engines: Record<SyncEngineId, SyncEngine> = {
-    "ip-device": ipSyncEngine,
-    "supernote-cloud": cloudSyncEngine,
+  "ip-device": ipSyncEngine,
+  "supernote-cloud": cloudSyncEngine,
 };
 ```
 
@@ -446,36 +451,34 @@ there is no extension protocol until a real external extension use case exists.
 export type SyncEngineId = "ip-device" | "supernote-cloud";
 
 export type SyncTrigger =
-    | { kind: "manual"; commandId: string }
-    | { kind: "scheduled" };
+  | { kind: "manual"; commandId: string }
+  | { kind: "scheduled" };
 
 export interface SyncReadiness {
-    ready: boolean;
-    reason?: string;
+  ready: boolean;
+  reason?: string;
 }
 
 export interface SyncIssue {
-    kind: "protected" | "failure" | "warning";
-    item?: string;
-    message: string;
+  kind: "protected" | "failure" | "warning";
+  item?: string;
+  message: string;
 }
 
 export interface SyncRunResult {
-    engineId: SyncEngineId;
-    synced: number;
-    unchanged: number;
-    excluded: number;
-    removed: number;
-    issues: SyncIssue[];
+  engineId: SyncEngineId;
+  synced: number;
+  unchanged: number;
+  excluded: number;
+  removed: number;
+  issues: SyncIssue[];
 }
 
 export interface SyncEngine {
-    readonly id: SyncEngineId;
-    readonly name: string;
-    getReadiness(): SyncReadiness;
-    run(trigger: SyncTrigger): Promise<SyncRunResult>;
-    moveDestination(destinationRoot: string): Promise<void>;
-    clearHistory(): Promise<void>;
+  readonly id: SyncEngineId;
+  readonly name: string;
+  getReadiness(): SyncReadiness;
+  run(trigger: SyncTrigger): Promise<SyncRunResult>;
 }
 ```
 
@@ -489,11 +492,11 @@ The coordinator owns the behavior shared by both engines:
 
 ```ts
 export interface SyncCoordinator {
-    getActiveEngine(): SyncEngine;
-    setActiveEngine(engineId: SyncEngineId): Promise<void>;
-    runActive(trigger: SyncTrigger): Promise<SyncRunResult | null>;
-    isRunning(): boolean;
-    clearActiveHistory(): Promise<void>;
+  getActiveEngine(): SyncEngine;
+  setActiveEngine(engineId: SyncEngineId): Promise<void>;
+  runActive(trigger: SyncTrigger): Promise<SyncRunResult | null>;
+  isRunning(): boolean;
+  clearHistory(): Promise<void>;
 }
 ```
 
@@ -506,20 +509,20 @@ Responsibilities:
 - Invoke only the active engine.
 - Produce one normalized Notice summary and preserve engine-specific durable
   logs.
-- Route `Forget sync history` to the active engine only, after confirmation
-  naming that engine.
+- Own the shared manifest store and expose one shared `Forget sync history`
+  action. Forgetting history preserves vault files and the Cloud account/root
+  binding but relinquishes sync's per-file management records.
 - On a dispatched run's completion, set `lastRunAt` to the completion time and
   set `lastRunOutcome` to `succeeded` when there are no issues, `attention` when
   the run completes with protected/per-file warning or failure issues, and
   `failed` when the engine throws or cannot produce a reliable result. A
   readiness rejection is not a run and does not replace the previous outcome.
-- Keep inactive-engine settings and history untouched.
+- Switching engines preserves the shared manifest. It changes which source is
+  consulted and which reconciliation policy applies; it does not migrate or
+  transfer file ownership.
 
 Because only one engine can run, there is no engine ordering, aggregate result,
-or continue-after-one-engine-fails policy. The shared root still requires each
-engine to consult the other engine's ownership metadata before adopting,
-overwriting, moving, or removing a path, so one engine cannot silently take
-ownership of the other engine's managed file.
+cross-engine ownership broker, or continue-after-one-engine-fails policy.
 
 ### Shared scheduler
 
@@ -559,25 +562,25 @@ LAN reachability, and desired scheduling can differ between Obsidian devices:
 
 ```ts
 interface SyncExecutionState {
-    version: 1;
-    activeSyncEngine: SyncEngineId;
-    autoSyncMinutes: number;
-    lastAutomaticAttemptAt: Partial<Record<SyncEngineId, string>>;
-    lastRunAt: Partial<Record<SyncEngineId, string>>;
-    lastRunOutcome: Partial<
-        Record<SyncEngineId, "succeeded" | "attention" | "failed">
-    >;
-    cloudSessionToken: string | null;
-    cloudAccountId: string | null;
+  version: 1;
+  activeSyncEngine: SyncEngineId;
+  autoSyncMinutes: number;
+  lastAutomaticAttemptAt: Partial<Record<SyncEngineId, string>>;
+  lastRunAt: Partial<Record<SyncEngineId, string>>;
+  lastRunOutcome: Partial<
+    Record<SyncEngineId, "succeeded" | "attention" | "failed">
+  >;
+  cloudSessionToken: string | null;
+  cloudAccountId: string | null;
 }
 ```
 
 The default active engine is `ip-device`, preserving existing behavior. The
 Cloud email, password, and verification code are never persisted. Only the
 resulting session token and stable account ID are stored locally. Token expiry
-clears the token but retains the account ID needed to protect manifest
-ownership. This state should use the plugin's device-local storage abstraction,
-not synced `data.json`.
+clears the token but retains the account ID needed to validate the shared
+mirror's account binding. This state should use the plugin's device-local
+storage abstraction, not synced `data.json`.
 
 #### Persisted engine configuration
 
@@ -588,18 +591,20 @@ allowlist, and file-extension allowlist are shared by every engine:
 interface SupernotePluginSettings {
   // Shared sync configuration.
   syncFolder: string;
-    syncPathFiltersRaw: string;
-    syncFileExtensionsRaw: string;
+  syncPathFiltersRaw: string;
+  syncFileExtensionsRaw: string;
 
-    // Existing IP engine configuration and history.
-    directConnectIP: string;
-    noteSyncState: SyncManifest;
+  // IP transport configuration.
+  directConnectIP: string;
 }
 ```
 
 The existing `syncFolder: 'Supernote sync'` remains the shared destination
-without a data migration. `syncFileExtensionsRaw` defaults to `.note, .spd`,
-and the existing `syncPathFiltersRaw` becomes the shared path allowlist.
+without a data migration. `syncFileExtensionsRaw` defaults to `.note, .spd`, and
+the existing `syncPathFiltersRaw` becomes the shared path allowlist. Existing
+`noteSyncState` records migrate from plugin settings into the shared vault
+manifest as IP-observed entries, after which `noteSyncState` is removed from
+persisted settings.
 
 Within the Sync section, the settings tab should show shared settings first,
 then engine selection, then engine-specific settings:
@@ -610,10 +615,10 @@ then engine selection, then engine-specific settings:
 - Active sync engine dropdown.
 - `Sync now` for the active engine.
 - Active engine status and last outcome.
-- An IP configuration section with the existing IP and history controls.
+- One shared `Forget sync history` control.
+- An IP configuration section with the existing IP controls.
 - A Cloud configuration section with sign in/sign out, connection status, Cloud
-  account state, and history controls.
-- `Forget <engine> sync history`, scoped to the selected engine.
+  account state, and reset controls.
 
 Inactive-engine settings remain editable so a user can configure an engine
 before switching to it, but inactive engines cannot be run by their settings
@@ -621,15 +626,15 @@ buttons. Setup-only actions such as Cloud sign-in/sign-out, connection tests,
 and editing masks are allowed while Cloud is inactive. They never change
 `activeSyncEngine`; the user must select Cloud explicitly.
 
-The shared destination remains editable. Once either engine owns files,
-changing it invokes one coordinator-owned, confirmed root-move workflow rather
-than merely saving a new string:
+The shared destination remains editable. Once sync manages files, changing
+it invokes one coordinator-owned, confirmed root-move workflow rather than
+merely saving a new string:
 
 1. Require that no sync is running, the source root exists, and the destination
-  does not exist.
+   does not exist.
 2. Persist one small pending-move record containing the old and new roots.
 3. Rename the complete shared root once through the Obsidian Vault API.
-4. Rewrite destination paths in every engine manifest plus the shared setting,
+4. Rewrite destination paths in the shared manifest plus the shared setting,
    then clear the pending record.
 
 On startup, a pending move has only three supported states: old root only means
@@ -641,10 +646,11 @@ managed files and user-created content inside it. This also replaces the IP
 engine's current behavior, where changing `syncFolder` can gradually split one
 mirror across old and new roots.
 
-`Reset Cloud mirror` remains a separate destructive ownership-release action: it
-may trash locally unchanged managed files, preserve and report locally edited
-files, and remove Cloud ownership metadata. Moving a destination does not reset
-its history or account binding.
+`Reset Cloud mirror` remains a separate destructive action for changing the
+logical user/device pairing: it may trash locally unchanged managed files,
+preserve and report locally edited files, clear the shared manifest, and remove
+the Cloud account binding. Moving a destination does not reset history or
+account binding.
 
 ### Shared path and file-type allowlists
 
@@ -701,8 +707,9 @@ capability with its own explicit transformation contract.
 rewrite.
 
 - Reuse `runDeviceSync()` and the pure policy in `deviceSync.ts`.
-- Preserve `directConnectIP`, shared `syncFolder`, `syncPathFiltersRaw`, and
-  `noteSyncState`.
+- Preserve `directConnectIP`, shared `syncFolder`, and `syncPathFiltersRaw`.
+- Read and update the shared manifest instead of an IP-owned manifest. Existing
+  `noteSyncState` records migrate to shared entries with IP source metadata.
 - Add the shared `syncFileExtensionsRaw`, defaulting to `.note` and `.spd`.
   Refactor the device scan's currently hard-coded extension selection so
   additional trusted regular-file extensions can be selected without weakening
@@ -714,7 +721,8 @@ rewrite.
 - Move plugin-level validation/result formatting from `runSync()` into the
   wrapper or coordinator so both manual and scheduled triggers share one path.
 - Map `DeviceSyncResult` to the common result with `removed: 0`.
-- `clearHistory()` clears only `noteSyncState`.
+- The coordinator's shared history action clears shared manifest entries; the
+  IP engine has no separate history to clear.
 
 Automatic scheduling is new for the IP engine, but it does not alter the sync
 algorithm. Only the trigger and scheduled-error presentation change.
@@ -736,8 +744,8 @@ types. Suggested files:
   download bytes.
 - `src/cloudSync/cloudTypes.ts` - independently defined response and domain
   types.
-- `src/cloudSync/cloudManifest.ts` - versioned manifest, serialized writes, and
-  transaction/recovery behavior.
+- `src/sync/syncManifest.ts` - shared versioned manifest, serialized writes,
+  and transaction/recovery behavior used by both engines.
 - `src/cloudSync/cloudSyncEngine.ts` - recursive inventory, filtering, planning,
   download, safe cleanup, and normalized results.
 - `src/cloudSync/cloudSyncEngine.test.ts` and focused client/manifest tests.
@@ -751,27 +759,28 @@ types. Suggested files:
 3. On success, persist only the session token in device-local execution state.
 4. `getReadiness()` reports sign-in as the blocking reason when no token exists.
 5. Authentication expiry clears the token and asks the user to sign in again.
-6. Sign out clears the local token without modifying Cloud manifest or vault
-   files.
+6. Sign out clears the local token without modifying the shared manifest or
+   vault files.
 7. Record the authenticated account's stable ID. If a later login returns a
-   different account ID while an account-bound Cloud manifest exists, even an
-   empty one, block sync and require a different destination or
-   `Reset Cloud mirror`; never apply one account's complete-scan deletions to
-   another account's files.
+   different account ID while the shared manifest is bound to another account,
+   block sync and require `Reset Cloud mirror`; never apply one account's
+   complete-scan deletions to another account's files.
 
 #### One-way mirror workflow
 
 1. Verify authentication and Cloud destination readiness.
-2. Open the Cloud manifest and verify that its account ID and destination root
-   match the authenticated account and current configuration.
+2. Open the shared manifest and verify that its optional Cloud account binding
+  and destination root match the authenticated account and current
+  configuration.
 3. Recursively inventory the Cloud account from its root. Track whether the
    entire scan completed successfully.
 4. Retain the complete remote-ID inventory, then normalize each full Cloud path
    and apply the shared path and extension allowlists for transfer planning.
-5. Plan deterministic vault paths below the shared `syncFolder`, including stable
-   disambiguation for case-insensitive collisions.
+5. Plan deterministic vault paths below the shared `syncFolder`, including
+   stable disambiguation for case-insensitive collisions.
 6. For each in-scope file, compare remote identity/checksum metadata with the
-   manifest and verify that the local file still matches the last written hash.
+  shared manifest and verify that the local file still matches the last
+  written hash.
 7. Skip unchanged files, protect locally edited files, and download new or
    changed files.
 8. When an existing remote ID moves, rename its locally unchanged managed file
@@ -781,46 +790,66 @@ types. Suggested files:
 9. Before each create, overwrite, move, adoption, or cleanup, persist a pending
    operation record containing its previous manifest entry, intended entry,
    affected paths, and expected before/after hashes. Perform the vault mutation,
-   atomically checkpoint the intended manifest, then clear the pending record.
-   Isolate ordinary per-file transfer failures so other files continue, but stop
-   the run if ownership metadata cannot be advanced safely.
-10. Only after a complete inventory, find managed in-scope entries whose remote
-    IDs disappeared. Move an unchanged local copy to Obsidian Trash and remove
-    its manifest entry. Protect a locally edited copy and report it instead.
+   atomically checkpoint the intended shared manifest, then clear the pending
+   record. Isolate ordinary per-file transfer failures so other files continue,
+   but stop the run if the shared manifest cannot be advanced safely.
+10. Only after a complete inventory, find every managed in-scope shared entry
+    absent from Cloud, including entries last observed through IP. Move an
+    unchanged local copy to Obsidian Trash and remove its manifest entry.
+    Protect a locally edited copy and report it instead.
 11. Return a normalized result and update per-engine last-run status.
 
 Cloud files outside the current path filters are neither downloaded nor removed.
 The Cloud engine never uploads or modifies remote content.
 
-#### Cloud manifest
+#### Shared mirror manifest
 
-Store Cloud metadata in a reserved hidden directory below the destination root,
-for example `<syncFolder>/.supernote-sync/`. Its versioned manifest header
-binds ownership to one account and root:
+Store the shared manifest in a reserved hidden directory below the destination
+root, for example `<syncFolder>/.supernote-sync/`. Its versioned header binds
+the mirror to the configured root and, after Cloud is used, to one account:
 
 ```ts
-interface CloudSyncManifest {
-    version: 1;
-    accountId: string;
-    destinationRoot: string;
-    entries: Record<string, CloudSyncManifestEntry>;
+interface SharedSyncManifest {
+  version: 1;
+  destinationRoot: string;
+  cloudAccountFingerprint: string | null;
+  entries: Record<string, SharedSyncManifestEntry>;
 }
 ```
 
-Each entry contains only the fields required for one-way ownership and change
-detection:
+Each entry is keyed by normalized vault path and records what sync last wrote.
+The optional source snapshot belongs to whichever engine most recently
+reconciled that file and is replaceable when the user switches engines:
 
 ```ts
-interface CloudSyncManifestEntry {
-    remoteId: string;
-    remotePath: string;
-    remoteChecksum: string;
-    remoteUpdatedAt: number;
-    vaultPath: string;
-    contentHash: string;
-    lastSyncedAt: string;
+interface SharedSyncManifestEntry {
+  vaultPath: string;
+  contentHash: string;
+  lastSyncedAt: string;
+  source:
+    | {
+        engineId: "ip-device";
+        sourcePath: string;
+        deviceDate: string;
+        deviceSize: number;
+      }
+    | {
+        engineId: "supernote-cloud";
+        sourcePath: string;
+        remoteId: string;
+        remoteChecksum: string;
+        remoteUpdatedAt: number;
+      };
 }
 ```
+
+The source snapshot is an optimization, not ownership. If the active engine
+cannot compare its inventory with an entry's current snapshot, it downloads or
+otherwise obtains enough evidence to compare source bytes with `contentHash`.
+An identical file replaces the source snapshot without rewriting the vault
+file. A different source file follows the active engine's normal local-edit
+guard before overwrite. Thus the first run after switching engines may perform
+more downloads but needs no ownership migration.
 
 Each manifest or pending-operation checkpoint writes a sibling temporary file,
 validates the complete JSON, and atomically replaces its primary file where the
@@ -845,11 +874,11 @@ uses an independently implemented revision-aware transaction:
 - Retain the baseline manifest and its vault revision when a run begins.
 - Before commit, read the latest visible manifest when its revision changed.
 - Three-way merge the baseline, this run's result, and the latest visible
-  manifest by stable remote ID.
+  manifest by normalized vault path.
 - Preserve latest fields that this run did not change and preserve this run's
   fields when the latest manifest still matches the baseline.
-- If both sides changed the same ownership-critical field incompatibly, stop
-  with a protected conflict instead of choosing a winner or performing further
+- If both sides changed the same managed entry incompatibly, stop with a
+  protected conflict instead of choosing a winner or performing further
   cleanup.
 
 This is reconciliation, not a distributed lock. Two offline devices can act
@@ -857,16 +886,17 @@ before either sees the other's changes. Local-content hashes, pending-operation
 recovery, complete-inventory deletion gates, and protected conflicts remain the
 safety boundary when later synchronization exposes an ambiguous state.
 
-`CloudSyncEngine.clearHistory()` deletes Cloud manifest entries and pending
+The shared `Forget sync history` action deletes shared entries and pending
 operation files only after confirming no run is active. It retains the
-account/root header, managed vault files, durable log, authentication, root
-lock, and last-run display state. The next run may re-adopt byte-identical files
-and protects non-identical files. `Reset Cloud mirror` is the separate,
-destructive ownership-release workflow: it resolves pending operations, trashes
-unchanged managed files, preserves/reports edited files, removes the manifest
-and log only after no owned entries remain, clears Cloud last-run state, and
-unlocks the root/account binding. Only reset or a different destination permits
-switching Cloud accounts.
+destination/account header, vault files, durable logs, authentication, and
+last-run display state. The next run may re-adopt byte-identical files and
+protects non-identical files. Because history establishes which files are
+sync-managed, Cloud performs no deletion of pre-existing local files until they
+have been adopted into the new manifest.
+`Reset Cloud mirror` is the separate destructive workflow for changing the
+logical account/device pairing: it resolves pending operations, trashes
+unchanged managed files, preserves/reports edited files, clears the shared
+manifest and Cloud account binding, and clears Cloud last-run state.
 
 All Cloud-controlled paths must be normalized and proven to remain descendants
 of `syncFolder`. Reject absolute paths, empty/`.`/`..` segments, embedded
@@ -919,27 +949,31 @@ Engine-specific durable detail remains separate:
 A full Activity subsystem is out of scope until ordinary Notices and durable
 logs prove insufficient.
 
-### Ownership and safety invariants
+### Manifest and safety invariants
 
 - Only the active engine can run.
 - A global coordinator lock prevents overlapping manual/scheduled runs.
-- IP and Cloud share one destination root and retain distinct manifests.
-- Before claiming a path, either engine must reject conflicting ownership
-  recorded by the other engine unless a coordinator-owned adoption workflow
-  proves the content and ownership transition safe.
-- Each engine may overwrite or remove only files its own manifest proves it
-  wrote and that remain unchanged locally.
+- IP and Cloud share one destination root and one mirror manifest.
+- A manifest entry means the sync system manages that vault file; it does not
+  assign permanent ownership to the engine recorded in its source snapshot.
+- The active engine may overwrite or remove only files the shared manifest
+  proves sync wrote or adopted and that remain unchanged locally.
 - Identical incoming and existing bytes may be adopted safely after history is
   cleared. Non-identical unowned files are protected.
 - IP never propagates source deletions.
-- Cloud deletion propagation requires a complete scan and uses Obsidian Trash.
+- Cloud is authoritative while active. After a complete, stable inventory it
+  may move any unchanged, managed, in-scope file absent from Cloud to Obsidian
+  Trash, including a file last observed through IP.
 - Excluded paths are never interpreted as deleted paths.
-- Switching engines never clears, migrates, or reuses the inactive engine's
-  history.
+- Switching engines preserves the shared manifest. A source snapshot from the
+  other engine is re-baselined when needed and then replaced by the active
+  engine's snapshot.
 - Authentication secrets never enter synced plugin data or logs.
 - No remote write API is exposed by the Cloud engine.
-- A Cloud manifest is valid only for its recorded account ID and destination
-  root.
+- A shared manifest with a Cloud account binding is valid only for that account
+  and its recorded destination root.
+- IP runs preserve the Cloud account fingerprint. Only `Reset Cloud mirror`
+  releases that binding.
 
 ### Proposed implementation sequence
 
@@ -956,9 +990,9 @@ logs prove insufficient.
    through permitted public evidence or protocol tests, recording verified facts
    before implementing dependent behavior.
 7. Implement `cloudAuth`, the read-only client, and device-local token storage.
-8. Implement the Cloud manifest and one-way `CloudSyncEngine`, including path
-   masks, local-edit protection, complete-scan deletion gating, Trash, and
-   per-file fault isolation.
+8. Migrate `noteSyncState` into the shared versioned manifest, then implement
+  the one-way `CloudSyncEngine`, including path masks, local-edit protection,
+  complete-scan deletion gating, Trash, and per-file fault isolation.
 9. Add the shared destination-root rename for both engines, including its one
    pending-move record and three-state startup recovery.
 10. Add Cloud settings/status/login UI. Setup never changes the active engine;
@@ -979,7 +1013,7 @@ logs prove insufficient.
 - Missing or invalid per-engine timestamps initialize without an immediate run.
 - Per-engine automatic-attempt and last-run status remain independent and
   survive restart.
-- Inactive engine configuration and history are unchanged.
+- Switching engines preserves the shared manifest and does not run a sync.
 - Cloud setup never changes the active engine.
 - Legacy IP command is unavailable when Cloud is active.
 
@@ -1004,7 +1038,7 @@ logs prove insufficient.
   session behavior.
 - Tokens are saved only in device-local storage and never in `data.json`.
 - A different authenticated account cannot reuse an existing account-bound
-  manifest.
+  shared manifest.
 - Read-only client methods cannot invoke upload, replace, move, or recycle APIs.
 - Network errors are normalized without exposing credentials.
 
@@ -1020,16 +1054,19 @@ logs prove insufficient.
 - An included remote ID that moves outside the filter is not treated as deleted.
 - Per-file failures do not abort unrelated files.
 - Atomic per-file checkpoints recover completed writes after a later failure.
-- A checkpoint failure aborts before further ownership-changing operations.
+- A checkpoint failure aborts before further manifest-changing operations.
 - Non-conflicting manifest changes that became visible during a run merge
   without losing either device's independent updates.
-- Incompatible concurrent changes to the same ownership-critical field stop with
-  a protected conflict and suppress further cleanup.
-- After Cloud history is cleared, identical existing files can be adopted and
-  non-identical files are protected.
-- Clearing Cloud history never clears IP history, and vice versa.
-- Changing the shared destination moves the complete root and rewrites both
-  engines' manifest references without losing local edits or ownership history.
+- Incompatible concurrent changes to the same managed entry stop with a
+  protected conflict and suppress further cleanup.
+- After shared history is cleared, identical existing files can be adopted and
+  non-identical files are protected; Cloud does not delete unmanifested local
+  files.
+- Switching from IP to Cloud allows stable Cloud inventory to remove unchanged
+  managed files absent from Cloud. Switching back to IP leaves source-absent
+  files untouched under IP's additive policy.
+- Changing the shared destination moves the complete root and rewrites the
+  shared manifest paths without losing local edits or sync history.
 - An interrupted destination move resolves from the old-root-only or
   new-root-only state; both or neither roots block the affected engine.
 
@@ -1037,8 +1074,9 @@ logs prove insufficient.
 
 - The default active engine remains IP, so existing installs retain their
   current behavior until the user opts into Cloud.
-- Existing IP settings, manifest data, command ID, raw-file behavior, conflict
-  protection, logs, timeouts, tests, and real-device smoke test remain intact.
+- Existing IP settings and manifest data migrate without losing command ID,
+  raw-file behavior, conflict protection, logs, timeouts, tests, or real-device
+  smoke-test coverage.
 - Scheduled sync is disabled by default.
 - Only one engine can run or be scheduled at a time.
 - Cloud is one-way and read-only with respect to the remote service.
@@ -1062,8 +1100,8 @@ if none is changed explicitly, they are requirements rather than open choices:
 - IP and Cloud share one path allowlist and one configurable file-extension
   allowlist, with extensions defaulting to `.note` and `.spd`.
 - IP and Cloud use one shared destination setting and a coordinator-owned
-  root-rename workflow after either engine owns files.
-- The Cloud manifest has no owner-device ID; visible concurrent changes are
+  root-rename workflow after sync manages files.
+- The shared manifest has no owner-device ID; visible concurrent changes are
   reconciled with an independent three-way merge and ambiguous conflicts fail
   closed.
 - Active-engine selection, scheduling, Cloud session token, and Cloud account ID

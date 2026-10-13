@@ -267,10 +267,10 @@ message defined in Section 8.2.
 
 **Product assumption:** the canonical `userId` is stable and unique for as long
 as its account exists. The plugin uses it to prevent cross-account mirror
-ownership. The raw ID remains in secure device-local storage; the vault manifest
-stores only a versioned SHA-256 account fingerprint derived from the canonical
-decimal ID. A fingerprint mismatch blocks the mirror until the user selects
-another destination or explicitly resets it.
+reuse. The raw ID remains in secure device-local storage; the shared vault
+manifest stores only a versioned SHA-256 account fingerprint derived from the
+canonical decimal ID. A fingerprint mismatch blocks the mirror until the user
+explicitly resets it.
 
 **Compatible behavior:** hosted and Private Cloud clients expose `userId` as a
 decimal string in JWT claims or as an int64-shaped profile field. The plugin
@@ -358,7 +358,7 @@ per-file failure rather than a general release blocker.
 | Method and route | Documented fact     | `POST /api/user/logout`                                                                                                                                                      |
 | Authentication   | Documented fact     | Requires `x-access-token`.                                                                                                                                                   |
 | Success JSON     | Documented fact     | Common response envelope.                                                                                                                                                    |
-| Product behavior | Product requirement | Local sign-out clears the device-local session token even when remote logout fails or cannot be reached. It does not delete mirrored vault files or their ownership history. |
+| Product behavior | Product requirement | Local sign-out clears the device-local session token even when remote logout fails or cannot be reached. It does not delete mirrored vault files or their shared sync history. |
 
 ## 7. Data Acceptance Rules
 
@@ -437,10 +437,11 @@ The Cloud metadata directory is reserved beneath the root. A remote path that
 collides with reserved metadata is not mirrored until the collision has a
 documented, safe user-visible resolution.
 
-The IP and Cloud engines retain separate ownership manifests inside the shared
-destination model. Cloud must not adopt, overwrite, move, or trash a path owned
-by the IP engine unless a coordinator-owned ownership transition explicitly
-proves that operation safe.
+IP and Cloud use one shared mirror manifest. An entry means the sync system
+manages that vault path; its engine-specific source metadata is a replaceable
+change-detection snapshot, not permanent ownership. Cloud may adopt, overwrite,
+move, or trash a managed path only under the shared hash and complete-inventory
+safety rules in this specification.
 
 ## 8. Authentication User Experience
 
@@ -476,8 +477,9 @@ that cannot complete sign-in.
 ### 8.3 Session lifecycle
 
 - A session token is device-local and is never added to synced plugin settings.
-- The raw account ID is stored securely with the token only to protect mirror
-  ownership. Synced mirror metadata contains only the versioned account
+- The raw account ID is stored securely with the token only to protect the
+  shared mirror from cross-account reconciliation. Synced mirror metadata
+  contains only the versioned account
   fingerprint defined in Section 11.1.
 - The password and verification code are used only for the active sign-in
   attempt and are never persisted.
@@ -485,11 +487,10 @@ that cannot complete sign-in.
   status to **Sign in required**.
 - A transport failure or an unknown service error does not clear a token solely
   because its meaning is unknown.
-- Signing out removes the local token, retains local mirror ownership history,
+- Signing out removes the local token, retains shared sync history,
   and prevents future Cloud runs until a user signs in.
 - Signing in as a different account is blocked while the Cloud mirror is bound
-  to another account. The user must select a different empty destination or
-  explicitly reset the existing Cloud mirror.
+  to another account. The user must explicitly reset the existing Cloud mirror.
 
 ## 9. Mirror User-Observable Behavior
 
@@ -513,12 +514,16 @@ that cannot complete sign-in.
   root.
 - A remote file whose published checksum still matches the recorded Cloud
   checksum is reported as unchanged and is not downloaded again.
+- If an entry was last observed through IP and has no comparable Cloud
+  checksum, Cloud obtains enough source evidence to compare its bytes with the
+  last successfully mirrored bytes. Identical bytes re-baseline the entry to
+  Cloud metadata without rewriting the vault file.
 - A changed remote file replaces its local mirror copy only when the local copy
   still matches the last successfully mirrored content.
 - A locally changed mirror copy is protected; it is not silently overwritten.
-- A remote rename or move preserves the local file only when its ownership and
-  unchanged local content are established. Otherwise it is reported as protected
-  rather than duplicated or removed silently.
+- A remote rename or move preserves the local file only when its shared manifest
+  entry and unchanged local content are established. Otherwise it is reported
+  as protected rather than duplicated or removed silently.
 - A current path filter can exclude a remote file from the run. It does not
   delete the previously mirrored local copy.
 - A current file-extension filter behaves the same way.
@@ -529,6 +534,9 @@ that cannot complete sign-in.
 
 - Remote absence can affect a local mirror copy only after the entire required
   remote inventory completed successfully.
+- Cloud is authoritative while it is the active engine. A managed in-scope file
+  absent from the stable Cloud inventory is a deletion candidate even when its
+  latest source snapshot came from IP.
 - A run that finds one or more deletion candidates performs a second complete
   inventory after the configured stability delay. Deletion cleanup proceeds only
   when both inventory fingerprints match exactly.
@@ -570,7 +578,7 @@ codes, full signed download URLs, or remote error payloads that contain secrets.
 | Local destination collision or unsafe path                   | Product requirement                      | Protect the item, make no destructive local change, and report the path conflict.                                                                                        |
 | Local file differs from last mirrored content                | Product requirement                      | Protect the local file; do not overwrite or trash it.                                                                                                                    |
 | Incomplete remote inventory                                  | Product requirement                      | Disable all remote-deletion cleanup for that run.                                                                                                                        |
-| Attempt to use a different Cloud account with a bound mirror | Product requirement                      | Block mirroring until the user selects a different empty root or explicitly resets the Cloud mirror.                                                                     |
+| Attempt to use a different Cloud account with a bound mirror | Product requirement                      | Block mirroring until the user explicitly resets the shared mirror.                                                                                                      |
 | Concurrent manual or automatic trigger                       | Product requirement                      | Skip the new trigger and leave the active run unchanged.                                                                                                                 |
 
 ## 11. Release Gates and Residual Unknowns
@@ -603,10 +611,10 @@ updates.
 
 The plugin assumes a canonical `userId` remains stable and unique while its
 account exists. The raw decimal ID is stored only in secure device-local state.
-The Cloud manifest stores a versioned SHA-256 fingerprint derived from a domain
-prefix and that canonical ID. Every Cloud run compares the authenticated account
-fingerprint with the manifest binding. A mismatch never reassigns the mirror; it
-requires another destination or an explicit reset.
+The shared manifest stores a versioned SHA-256 fingerprint derived from a domain
+prefix and that canonical ID. Every Cloud run compares the authenticated
+account fingerprint with the manifest binding. A mismatch never reassigns the
+mirror; it requires an explicit reset.
 
 The plugin does not require a guarantee that an ID can never be reused after an
 account has ceased to exist. An inaccessible or deleted bound account leaves the
@@ -760,7 +768,7 @@ Section 11.1 policies define the required response: suppress deletion on an
 unstable inventory, block an account mismatch, reject an unrecognized download
 host, report an unknown error generically, and stop at a configured safety
 limit. New behavior may be reviewed and accommodated by changing the centralized
-policy without weakening existing local ownership protections.
+policy without weakening existing local-content protections.
 
 Until a gate is resolved, the product must use the non-destructive outcome
 defined above or keep that capability unavailable. A later production behavior
@@ -782,7 +790,7 @@ The first Cloud release is acceptable only when all of these are true:
   shape and successful result.
 - Email verification is either fully verified end-to-end or visibly unavailable.
 - No destructive local cleanup occurs unless the complete remote inventory,
-  account binding, path normalization, and local ownership checks are valid.
+  account binding, path normalization, and shared manifest checks are valid.
 - Every downloaded file passes the published checksum comparison before it is
   treated as mirrored.
 - User-facing behavior matches Sections 8 through 10 and the approved
