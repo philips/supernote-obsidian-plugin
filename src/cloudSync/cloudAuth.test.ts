@@ -211,4 +211,17 @@ describe('Cloud password authentication', () => {
         await expect(verifyCloudAuthIdentityGate(() => transports.shift()!, credentials))
             .rejects.toThrow('different account identities');
     });
+
+    it('returns the first verified session token for dependent protocol gates', async () => {
+        const transports = [
+            new FakeTransport(successfulPosts()),
+            new FakeTransport(successfulPosts()),
+        ];
+
+        await expect(verifyCloudAuthIdentityGate(() => transports.shift()!, credentials)).resolves.toEqual({
+            token: 'session-token',
+            accountId: '9223372036854775807',
+            emailVerificationUsed: false,
+        });
+    });
 });

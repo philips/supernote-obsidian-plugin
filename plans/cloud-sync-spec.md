@@ -163,7 +163,7 @@ requires a token sends `x-access-token: <session token>`.
 | Method and route  | Compatible behavior | `GET /api/csrf`                                                                                                                            |
 | Response state    | Compatible behavior | The hosted-Cloud client retains response cookies and reads an `X-XSRF-TOKEN` response header or cookie value.                              |
 | Subsequent use    | Compatible behavior | JSON control-plane requests send `X-XSRF-TOKEN` and the retained cookies. The client refreshes CSRF state and retries once after HTTP 403. |
-| Production status | Assumption          | The plugin should perform this bootstrap before authentication until a permitted test establishes the minimum required request set.        |
+| Production status | Compatible behavior | Two fresh sessions on October 12, 2026 required this shared cookie/CSRF state; both OTP requests succeeded after one HTTP 403, one CSRF refresh, and one retry. |
 
 ### 6.1 Obtain login nonce
 
@@ -196,10 +196,11 @@ sign-in choices.
 
 **Compatible behavior:** independently implemented hosted-Cloud clients use
 `SHA256(MD5(plaintext password) + randomCode)`. This is the specified first
-release derivation. Compatible clients disagree about whether an email login
-sends `loginMethod: "1"` or `loginMethod: "2"`, so the production-accepted
-client-field combination and any required browser, country, language, cookie, or
-CSRF fields must still be verified with a dedicated test account.
+release derivation. The request profile in Section 4.1, including
+`loginMethod: "1"`, the recorded browser/equipment/language fields, retained
+cookies, and CSRF state, succeeded in two fresh sessions on October 12, 2026.
+This remains dated compatible behavior rather than a vendor guarantee or proof
+that every accepted optional field is required.
 
 ### 6.3 Request an email verification code
 
@@ -458,9 +459,9 @@ safety rules in this specification.
 ### 8.2 Verification code
 
 Compatible hosted-Cloud evidence identifies login `errorCode: "E1760"` as the
-identity-verification branch and supplies the candidate end-to-end sequence in
-Sections 6.3 through 6.5. After that sequence passes a permitted production
-protocol test:
+identity-verification branch. The end-to-end sequence in Sections 6.3 through
+6.5 passed a permitted production protocol test in two fresh sessions on
+October 12, 2026:
 
 1. The plugin obtains a pre-auth token and requests a code for the entered email
    address using the signed send-code request.
@@ -470,9 +471,9 @@ protocol test:
 4. In the same cookie/CSRF session, the plugin queries the resulting bearer
    token and then retrieves the account binding.
 
-Until that production test succeeds, the UI must report **Email verification is
-not yet supported by the verified Cloud protocol** rather than prompt for a code
-that cannot complete sign-in.
+Rejected, expired, resend, and restart production cases remain unobserved. The
+UI must fail closed for those cases rather than infer broader meanings from the
+compatible error-code evidence.
 
 ### 8.3 Session lifecycle
 
@@ -744,8 +745,8 @@ for its sign-in, inventory, filtering, account-safety, or download contract:
    credentials. Failure to resolve this gate blocks downloads, but no knowledge
    of future hosts is required.
 5. **Account identity field:** resolved for the tested account on October 12,
-6. `/api/user/query` returned a usable canonical decimal `userId` in two fresh
-   sessions, with matching identities.
+  2026. `/api/user/query` returned a usable canonical decimal `userId` in two
+  fresh sessions, with matching identities.
 
 The following gate is optional for the initial release:
 

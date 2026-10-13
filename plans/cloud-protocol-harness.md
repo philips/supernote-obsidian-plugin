@@ -58,6 +58,13 @@ Follow the repository's existing opt-in integration-script pattern:
   modules intended for the plugin.
 - Read credentials from an interactive prompt or environment variables, never
   command-line arguments or tracked files.
+- Reuse `SUPERNOTE_CLOUD_ACCESS_TOKEN` when supplied; otherwise reuse the
+  harness-only session cache in the OS temporary directory. Validate every
+  reused token with fresh CSRF state and `/api/user/query` before using it.
+- Never fall back from a missing, expired, or rejected reusable token to
+  password login automatically. Require the separate
+  `SUPERNOTE_CLOUD_ALLOW_LOGIN=I_ACKNOWLEDGE_OTP_MAY_BE_SENT` acknowledgement
+  before prompting for credentials or requesting an email code.
 - Maintain an explicit cookie jar and CSRF state for each sign-in attempt.
 - Follow download redirects manually so every target can be inspected before it
   is requested.
@@ -80,6 +87,19 @@ The harness must never persist or print:
 - Complete signed download URLs or URL query strings.
 - Raw production response bodies.
 - Personal account paths, profile values, or file contents.
+
+The temporary session cache is the one narrow exception for the bearer token:
+it exists specifically to avoid repeatedly generating email OTP challenges. It
+stores only the production origin, token, canonical account ID, and save time;
+it is outside the repository, written with owner-only mode where the operating
+system supports it, never copied into an observation, and deleted after the
+plugin is fully developed and the account owner is ready for an end-to-end
+login test through the options-panel UI, with explicit approval for cleanup.
+Do not remove the cache merely because protocol validation is complete. Cache
+retention does not guarantee that the service will keep the token valid.
+`SUPERNOTE_CLOUD_SESSION_FILE` may point
+it at another device-local temporary path. `SUPERNOTE_CLOUD_ACCOUNT_ID` may
+accompany an environment token to enforce the same account-binding check.
 
 The harness may report only the minimum structural evidence needed for review:
 
@@ -117,6 +137,11 @@ names, and CSRF placement without recording secret values. A consistently
 accepted request may retain apparently optional fields; proving the absolutely
 minimal request is not required.
 
+This gate passed in two fresh sessions on October 12, 2026. Later inventory,
+path, and download probes should reuse the validated session cache rather than
+repeat this gate. A new login is justified only when no reusable token remains
+valid and the account owner is available for a possible OTP challenge.
+
 ### 5.2 Account identity
 
 Immediately call `/api/user/query` with the authenticated token and repeat the
@@ -139,6 +164,14 @@ produces identical inventory fingerprints for two unchanged passes.
 
 An empty second page, inconsistent total, duplicate ID, conflicting metadata,
 unexpected page number, or unclassified pagination field fails this gate.
+
+The currently available authorized account contains only two replaceable note
+files and its OTP mailbox is not directly accessible to the developer. It can
+establish partial root/list/path evidence without exposing names or contents,
+but it cannot pass the real second-page criterion unless the account owner first
+creates the required synthetic fixture through an official Supernote client.
+The read-only harness must not add undocumented write calls to manufacture that
+fixture and must not modify or delete the existing files.
 
 ### 5.4 Canonical paths
 

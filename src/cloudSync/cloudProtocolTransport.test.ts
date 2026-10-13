@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { authenticateCloudPassword } from './cloudAuth';
-import { formatCloudAuthIdentityObservation } from './cloudProtocolEvidence';
+import { formatCloudAuthIdentityObservation, formatCloudInventoryObservation } from './cloudProtocolEvidence';
 import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
 
 describe('Node Cloud protocol transport', () => {
@@ -134,6 +134,46 @@ describe('Node Cloud protocol transport', () => {
                 budget: new CloudRequestBudget(),
                 origin,
             })).toThrow('credential-free HTTPS');
+        }
+    });
+
+    it('formats inventory evidence without account paths, names, IDs, or tokens', () => {
+        const report = formatCloudInventoryObservation({
+            date: '2026-10-13',
+            origin: 'https://cloud.supernote.com',
+            harnessCommit: 'abc123',
+            cloudImplementationCommit: 'abc123',
+            sessionSource: 'temporary-file',
+            accountIdentityHash: 'account-hash',
+            directoryCount: 2,
+            itemCount: 3,
+            fileCount: 2,
+            folderCount: 1,
+            maximumObservedPageCount: 1,
+            secondPageObserved: false,
+            firstInventoryFingerprint: 'first-hash',
+            secondInventoryFingerprint: 'first-hash',
+            inventoryStable: true,
+            pathQueryCount: 3,
+            pathMatchesParent: 3,
+            pathMatchesItem: 0,
+            pathMatchesNeither: 0,
+            allQueryPathsAbsolute: true,
+            allQueryPathsTrailingSlash: true,
+            allIdPathsAbsolute: true,
+            allIdPathsTrailingSlash: true,
+            requests: [],
+        });
+
+        expect(report).toContain('incomplete fixture: no second page was observed');
+        expect(report).toContain('Session source: temporary-file');
+        for (const secret of [
+            'Personal Note.note',
+            '/Note/Personal Note.note',
+            '9223372036854775807',
+            'cached-token',
+        ]) {
+            expect(report).not.toContain(secret);
         }
     });
 });

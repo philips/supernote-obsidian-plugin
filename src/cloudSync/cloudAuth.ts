@@ -90,25 +90,31 @@ export async function authenticateCloudPassword(
         token = requireNonEmptyString(loginResponse, 'token');
     }
 
+    return {
+        token,
+        accountId: await queryCloudAccountIdentity(transport, token),
+        emailVerificationUsed,
+    };
+}
+
+export async function queryCloudAccountIdentity(
+    transport: CloudControlPlaneTransport,
+    accessToken: string,
+): Promise<string> {
     const identityResponse = parseCloudObject(await transport.post(
         CLOUD_ROUTES.accountIdentity,
         {},
-        { accessToken: token },
+        { accessToken },
     ));
     requireCloudSuccess(identityResponse);
-
-    return {
-        token,
-        accountId: requireCanonicalDecimalId(identityResponse, 'userId'),
-        emailVerificationUsed,
-    };
+    return requireCanonicalDecimalId(identityResponse, 'userId');
 }
 
 export async function verifyCloudAuthIdentityGate(
     createTransport: () => CloudControlPlaneTransport,
     credentials: CloudCredentials,
     getVerificationCode?: (sessionNumber: number) => Promise<string>,
-): Promise<{ accountId: string; emailVerificationUsed: boolean }> {
+): Promise<{ token: string; accountId: string; emailVerificationUsed: boolean }> {
     const first = await authenticateCloudPassword(createTransport(), credentials, {
         getVerificationCode: getVerificationCode ? () => getVerificationCode(1) : undefined,
     });
@@ -119,6 +125,7 @@ export async function verifyCloudAuthIdentityGate(
         throw new CloudProtocolError('Supernote Cloud returned different account identities across fresh sessions');
     }
     return {
+        token: first.token,
         accountId: first.accountId,
         emailVerificationUsed: first.emailVerificationUsed || second.emailVerificationUsed,
     };
