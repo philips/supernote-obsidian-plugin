@@ -1,4 +1,11 @@
 import { decodeDevicePathSegment, decodeDevicePathVariants, normalizeDeviceFileName } from './devicePath';
+import {
+    DEFAULT_FILE_EXTENSION_ALLOWLIST,
+    FileExtensionAllowlist,
+    matchesAnyPathPattern,
+    matchesFileExtension,
+} from './syncFilters';
+export { globToRegExp, parsePathFilters } from './syncFilters';
 
 // Pure planning/decision logic for mirroring .note/.spd files from a
 // Supernote device (over "Browse and Access") into the vault, unmodified —
@@ -18,6 +25,7 @@ export interface DeviceNoteListing {
     uri: string;
     date: string;
     size: number;
+    name?: string;
 }
 
 /** One entry in the persisted sync manifest: what we last wrote for a given device note. */
@@ -36,56 +44,13 @@ export type SyncManifest = Record<string, SyncedNoteRecord>;
 // Path scoping (which device notes are in-bounds for sync)
 // ---------------------------------------------------------------------------
 
-// Translates a small glob subset into an anchored RegExp: `*` matches any run
-// of characters except `/`, `**` matches any run of characters including `/`,
-// `?` matches a single character, everything else is literal. Deliberately
-// minimal (no brace expansion, no character classes, no dependency) — device
-// paths only need coarse folder/extension scoping, not full shell-glob
-// semantics.
-export function globToRegExp(pattern: string): RegExp {
-    let re = '';
-    for (let i = 0; i < pattern.length; i++) {
-        const c = pattern[i];
-        if (c === '*') {
-            if (pattern[i + 1] === '*') {
-                re += '.*';
-                i++;
-            } else {
-                re += '[^/]*';
-            }
-        } else if (c === '?') {
-            re += '[^/]';
-        } else if ('.+^${}()|[]\\'.includes(c)) {
-            re += '\\' + c;
-        } else {
-            re += c;
-        }
-    }
-    return new RegExp(`^${re}$`);
-}
-
 // No patterns configured means "sync everything the device has" — scoping
 // down further is opt-in, since the sync run itself (manual command, or the
 // auto-sync toggle) is already the opt-in step. Patterns match against the
 // full device URI (leading slash included, matching what fetchSupernoteDirectory
 // returns).
 export function matchesAnyPattern(deviceUri: string, patterns: string[]): boolean {
-    if (patterns.length === 0) return true;
-    const pathVariants = decodeDevicePathVariants(deviceUri);
-    return patterns.some((p) => {
-        const re = globToRegExp(p);
-        return pathVariants.some((path) => re.test(path));
-    });
-}
-
-// Settings store path filters as one text field (newline- or comma-separated)
-// since the declarative settings API's text control works on a single string,
-// not a list.
-export function parsePathFilters(raw: string): string[] {
-    return raw
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    return matchesAnyPathPattern(decodeDevicePathVariants(deviceUri), patterns);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +87,19 @@ export interface SyncPlan {
 // device-side deletions or renames are explicitly out of scope (see issue
 // #119 discussion): a sync run only ever adds or updates vault content, so a
 // bug here can't destroy something the device no longer has.
-export function planSync(files: DeviceNoteListing[], manifest: SyncManifest, pathFilters: string[]): SyncPlan {
+export function planSync(
+    files: DeviceNoteListing[],
+    manifest: SyncManifest,
+    pathFilters: string[],
+    fileExtensions: FileExtensionAllowlist = DEFAULT_FILE_EXTENSION_ALLOWLIST,
+): SyncPlan {
     const toSync: DeviceNoteListing[] = [];
     const unchanged: DeviceNoteListing[] = [];
     const excluded: DeviceNoteListing[] = [];
 
     for (const file of files) {
-        if (!matchesAnyPattern(file.uri, pathFilters)) {
+        if (!matchesAnyPattern(file.uri, pathFilters)
+            || !matchesFileExtension(file.name ?? file.uri, fileExtensions)) {
             excluded.push(file);
             continue;
         }

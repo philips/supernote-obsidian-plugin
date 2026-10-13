@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
     globToRegExp,
-    matchesAnyPattern,
+    matchesFileExtension,
+    parseFileExtensionAllowlist,
     parsePathFilters,
+    validateFileExtensionAllowlist,
+} from './syncFilters';
+import {
+    matchesAnyPattern,
     classifyChange,
     planSync,
     deviceUriToVaultPath,
@@ -108,6 +113,34 @@ describe('parsePathFilters', () => {
     });
 });
 
+describe('file extension allowlist', () => {
+    it('normalizes optional leading dots, case, and duplicates', () => {
+        expect(parseFileExtensionAllowlist('NOTE, .Spd, note')).toEqual({
+            allowAll: false,
+            extensions: ['.note', '.spd'],
+        });
+    });
+
+    it('requires an explicit * to include every regular file', () => {
+        expect(matchesFileExtension('README', parseFileExtensionAllowlist('*'))).toBe(true);
+        expect(matchesFileExtension('README', parseFileExtensionAllowlist(''))).toBe(false);
+        expect(matchesFileExtension('report.pdf', parseFileExtensionAllowlist(''))).toBe(false);
+    });
+
+    it('matches configured extensions case-insensitively', () => {
+        const allowlist = parseFileExtensionAllowlist('.note, pdf');
+        expect(matchesFileExtension('Journal.NOTE', allowlist)).toBe(true);
+        expect(matchesFileExtension('report.PDF', allowlist)).toBe(true);
+        expect(matchesFileExtension('drawing.spd', allowlist)).toBe(false);
+    });
+
+    it('rejects path fragments and wildcard fragments other than *', () => {
+        expect(validateFileExtensionAllowlist('.note, ../pdf')).toBe('Invalid file extension: ../pdf');
+        expect(validateFileExtensionAllowlist('.n*te')).toBe('Invalid file extension: .n*te');
+        expect(validateFileExtensionAllowlist('.note, *')).toBeUndefined();
+    });
+});
+
 describe('classifyChange', () => {
     it('is "new" when there is no manifest record for the device URI', () => {
         expect(classifyChange(listing(), {})).toBe('new');
@@ -169,6 +202,15 @@ describe('planSync (efficiency: skip unchanged, respect scope, never propose del
         const plan = planSync([changedButOutOfScope], manifest, ['/Diary/**']);
         expect(plan.toSync).toEqual([]);
         expect(plan.excluded).toEqual([changedButOutOfScope]);
+    });
+
+    it('excludes files outside the shared extension allowlist', () => {
+        const note = listing({ uri: '/Note/foo.note', name: 'foo.note' });
+        const pdf = listing({ uri: '/Note/report.pdf', name: 'report.pdf' });
+        const plan = planSync([note, pdf], {}, [], parseFileExtensionAllowlist('.pdf'));
+
+        expect(plan.toSync).toEqual([pdf]);
+        expect(plan.excluded).toEqual([note]);
     });
 
     it('partitions a mixed batch into the three buckets correctly', () => {

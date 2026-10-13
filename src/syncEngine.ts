@@ -1,6 +1,6 @@
 import { App, TFile } from 'obsidian';
 import { SupernotePluginSettings } from './settings';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
     DeviceNoteListing,
@@ -11,8 +11,11 @@ import {
     parsePathFilters,
     syncLogPath,
     formatSyncLogEntry,
+    formatSyncFailureLogEntry,
     hashBytes,
 } from './deviceSync';
+import type { SyncEngine, SyncRunResult, SyncTrigger } from './syncAbstraction';
+import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from './syncFilters';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
 // concurrent creator (createFolder throwing because another call already
@@ -78,6 +81,59 @@ export interface DeviceSyncResult {
     failed: { file: string; error: string }[];
 }
 
+export class IpSyncEngine implements SyncEngine {
+    readonly id = 'ip-device' as const;
+    readonly name = 'Direct IP connection';
+
+    constructor(
+        private readonly app: App,
+        private readonly settings: SupernotePluginSettings,
+        private readonly saveSettings: () => Promise<void>,
+    ) {}
+
+    getReadiness() {
+        return this.settings.directConnectIP.length > 0
+            ? { ready: true }
+            : { ready: false, reason: 'Supernote IP is unset' };
+    }
+
+    async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
+        let result: DeviceSyncResult;
+        try {
+            result = await runDeviceSync(this.app, this.settings, this.saveSettings);
+        } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            await appendSyncLogEntry(this.app, this.settings.syncFolder, formatSyncFailureLogEntry(error.message))
+                .catch((logErr) => console.error('Failed to write to Supernote sync log:', logErr));
+            throw error;
+        }
+        return {
+            engineId: this.id,
+            synced: result.synced,
+            unchanged: result.unchanged,
+            excluded: result.excluded,
+            removed: 0,
+            issues: [
+                ...result.skippedConflicts.map((item) => ({
+                    kind: 'protected' as const,
+                    item,
+                    message: 'Skipped because the vault copy was edited locally',
+                })),
+                ...result.failed.map(({ file, error }) => ({
+                    kind: 'failure' as const,
+                    item: file,
+                    message: error,
+                })),
+            ],
+        };
+    }
+
+    async clearHistory(): Promise<void> {
+        this.settings.noteSyncState = {};
+        await this.saveSettings();
+    }
+}
+
 // Reads a vault file's current bytes and hashes them, or returns null if
 // there's no file there at all. Shared by the toSync and unchanged passes
 // below — both need "what's actually at this path right now" to run
@@ -107,10 +163,16 @@ export async function runDeviceSync(
         throw new Error('Supernote IP is unset');
     }
 
-    const deviceFiles = await scanDeviceSupernoteTree(ip);
-    const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({ uri: f.uri, date: f.date, size: f.size }));
+    const deviceFiles = await scanDeviceSupernoteTreeWithExtensions(ip, ALL_FILE_EXTENSIONS);
+    const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({
+        uri: f.uri,
+        date: f.date,
+        size: f.size,
+        name: f.name,
+    }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
-    const plan = planSync(listings, settings.noteSyncState, patterns);
+    const fileExtensions = parseFileExtensionAllowlist(settings.syncFileExtensionsRaw ?? '.note, .spd');
+    const plan = planSync(listings, settings.noteSyncState, patterns, fileExtensions);
     // A device listing can be unchanged while its vault copy was deleted.
     // Restore those files from the unchanged bucket; a missing file is safe to
     // create, unlike a present file whose hash no longer matches the manifest.

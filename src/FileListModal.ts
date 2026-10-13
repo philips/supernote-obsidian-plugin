@@ -5,6 +5,11 @@ import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { decodeDeviceFormPathSegment, decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
 import { ErrorModal } from './ErrorModal';
+import {
+    DEFAULT_FILE_EXTENSION_ALLOWLIST,
+    FileExtensionAllowlist,
+    matchesFileExtension,
+} from './syncFilters';
 
 export interface SupernoteFile {
     name: string;
@@ -51,15 +56,40 @@ export async function fetchSupernoteDirectory(
     return data.fileList.sort(compareByDirectoryThenNameThenDate);
 }
 
-const SYNCABLE_EXTENSION_PATTERN = /\.(note|spd)$/i;
-
 // Recursively walks the whole device tree starting at `path`, collecting
-// every `.note`/`.spd` file found. Shared by ImportTodayModal (which further
-// filters by date) and the device auto-sync engine (which filters by the
-// configured path patterns) — both need the same "list everything once"
-// traversal, just with different downstream filtering.
+// every trusted regular file matching `fileExtensions`. ImportTodayModal uses
+// the default `.note`/`.spd` set, while sync requests all trusted files and
+// applies its shared extension allowlist in the planner so excluded files are
+// represented in completion counts.
 export async function scanDeviceSupernoteTree(
     ip: string,
+    path = '/',
+    visited: Set<string> = new Set(),
+    pathLeafName?: string,
+    directoryNames: string[] = [],
+    directoryNamesByUri: Map<string, string[]> = new Map(),
+): Promise<SupernoteFile[]> {
+    return scanDeviceSupernoteTreeWithAllowlist(
+        ip,
+        DEFAULT_FILE_EXTENSION_ALLOWLIST,
+        path,
+        visited,
+        pathLeafName,
+        directoryNames,
+        directoryNamesByUri,
+    );
+}
+
+export async function scanDeviceSupernoteTreeWithExtensions(
+    ip: string,
+    fileExtensions: FileExtensionAllowlist,
+): Promise<SupernoteFile[]> {
+    return scanDeviceSupernoteTreeWithAllowlist(ip, fileExtensions);
+}
+
+async function scanDeviceSupernoteTreeWithAllowlist(
+    ip: string,
+    fileExtensions: FileExtensionAllowlist,
     path = '/',
     visited: Set<string> = new Set(),
     pathLeafName?: string,
@@ -84,15 +114,16 @@ export async function scanDeviceSupernoteTree(
         if (entry.isDirectory) {
             const entryDirectoryNames = [...parentNames, entry.name];
             directoryNamesByUri.set(entry.uri, entryDirectoryNames);
-            results.push(...await scanDeviceSupernoteTree(
+            results.push(...await scanDeviceSupernoteTreeWithAllowlist(
                 ip,
+                fileExtensions,
                 entry.uri,
                 visited,
                 entry.name,
                 entryDirectoryNames,
                 directoryNamesByUri,
             ));
-        } else if (SYNCABLE_EXTENSION_PATTERN.test(entry.name) && isTrustedListingEntry(entry)) {
+        } else if (isTrustedListingEntry(entry) && matchesFileExtension(entry.name, fileExtensions)) {
             results.push({ ...entry, directoryNames: parentNames });
         }
     }

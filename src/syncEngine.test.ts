@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TFile } from 'obsidian';
 import type { App } from 'obsidian';
-import { runDeviceSync } from './syncEngine';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { IpSyncEngine } from './syncEngine';
+import { scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice } from './deviceFetch';
 import { buildSyncRecord, hashBytes } from './deviceSync';
 import type { DeviceNoteListing, SyncManifest, SyncedNoteRecord } from './deviceSync';
 import type { SupernotePluginSettings } from './settings';
+import { ALL_FILE_EXTENSIONS } from './syncFilters';
 
 vi.mock('obsidian', () => ({
     // syncEngine only uses TFile at runtime (instanceof checks in
@@ -18,7 +19,7 @@ vi.mock('obsidian', () => ({
 }));
 
 vi.mock('./FileListModal', () => ({
-    scanDeviceSupernoteTree: vi.fn(),
+    scanDeviceSupernoteTreeWithExtensions: vi.fn(),
 }));
 
 vi.mock('./deviceFetch', () => ({
@@ -100,11 +101,16 @@ function makeVault() {
 
 const SYNC_FOLDER = 'Supernote sync';
 
-function settingsWith(noteSyncState: SyncManifest, syncPathFiltersRaw = ''): SupernotePluginSettings {
+function settingsWith(
+    noteSyncState: SyncManifest,
+    syncPathFiltersRaw = '',
+    syncFileExtensionsRaw = '.note, .spd',
+): SupernotePluginSettings {
     return {
         directConnectIP: '10.11.12.13',
         syncFolder: SYNC_FOLDER,
         syncPathFiltersRaw,
+        syncFileExtensionsRaw,
         noteSyncState,
     } as unknown as SupernotePluginSettings;
 }
@@ -150,8 +156,13 @@ function fetchedUris(): string[] {
     return vi.mocked(fetchFromDevice).mock.calls.map((call) => call[1]);
 }
 
+async function runIpSync(app: App, settings: SupernotePluginSettings) {
+    const engine = new IpSyncEngine(app, settings, async () => {});
+    return engine.run({ kind: 'manual', commandId: 'test-sync' });
+}
+
 beforeEach(() => {
-    vi.mocked(scanDeviceSupernoteTree).mockReset();
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockReset();
     vi.mocked(fetchFromDevice).mockReset();
 });
 
@@ -164,13 +175,13 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
     it('re-downloads an unchanged device file whose vault copy was deleted', async () => {
         const vault = makeVault();
         const listing = deviceFile('foo.note', 'device content');
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([listing]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([listing]);
         mockDeviceContents(new Map([['/foo.note', 'device content']]));
         const settings = settingsWith({
             '/foo.note': manifestRecord(listing, vaultPathFor('foo.note'), 'device content'),
         });
 
-        const result = await runDeviceSync(vault.app, settings, async () => {});
+        const result = await runIpSync(vault.app, settings);
 
         // Restored: fetched, rewritten at the exact same path, counted as synced.
         expect(fetchedUris()).toContain('/foo.note');
@@ -183,13 +194,13 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
     it('recreates missing parent folders when restoring a nested deleted file', async () => {
         const vault = makeVault();
         const listing = deviceFile('deep.note', 'nested', { uri: '/Projects/Deep/deep.note' });
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([listing]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([listing]);
         mockDeviceContents(new Map([['/Projects/Deep/deep.note', 'nested']]));
         const settings = settingsWith({
             '/Projects/Deep/deep.note': manifestRecord(listing, vaultPathFor('Projects/Deep/deep.note'), 'nested'),
         });
 
-        await runDeviceSync(vault.app, settings, async () => {});
+        await runIpSync(vault.app, settings);
 
         expect(vault.readText(vaultPathFor('Projects/Deep/deep.note'))).toBe('nested');
     });
@@ -197,14 +208,14 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
     it('leaves intact unchanged files untouched and un-fetched', async () => {
         const vault = makeVault();
         const listing = deviceFile('foo.note', 'device content');
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([listing]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([listing]);
         mockDeviceContents(new Map());
         vault.seedFile(vaultPathFor('foo.note'), 'device content');
         const settings = settingsWith({
             '/foo.note': manifestRecord(listing, vaultPathFor('foo.note'), 'device content'),
         });
 
-        const result = await runDeviceSync(vault.app, settings, async () => {});
+        const result = await runIpSync(vault.app, settings);
 
         expect(fetchedUris()).not.toContain('/foo.note');
         expect(result.synced).toBe(0);
@@ -215,16 +226,20 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
     it('still flags locally edited unchanged files as conflicts instead of restoring over them', async () => {
         const vault = makeVault();
         const listing = deviceFile('foo.note', 'device content');
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([listing]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([listing]);
         mockDeviceContents(new Map());
         vault.seedFile(vaultPathFor('foo.note'), 'user edited this');
         const settings = settingsWith({
             '/foo.note': manifestRecord(listing, vaultPathFor('foo.note'), 'device content'),
         });
 
-        const result = await runDeviceSync(vault.app, settings, async () => {});
+        const result = await runIpSync(vault.app, settings);
 
-        expect(result.skippedConflicts).toEqual([vaultPathFor('foo.note')]);
+        expect(result.issues).toContainEqual({
+            kind: 'protected',
+            item: vaultPathFor('foo.note'),
+            message: 'Skipped because the vault copy was edited locally',
+        });
         expect(fetchedUris()).not.toContain('/foo.note');
         expect(vault.readText(vaultPathFor('foo.note'))).toBe('user edited this');
     });
@@ -236,7 +251,7 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
         const intact = deviceFile('intact.note', 'same bytes', { uri: '/Notes/intact.note' });
         const edited = deviceFile('edited.note', 'device version', { uri: '/Notes/edited.note' });
         const hidden = deviceFile('hidden.note', 'secret', { uri: '/Secret/hidden.note' });
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([newFile, restored, intact, edited, hidden]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([newFile, restored, intact, edited, hidden]);
         mockDeviceContents(new Map([
             ['/Notes/new.note', 'brand new'],
             ['/Notes/restored.note', 'restore me'],
@@ -249,9 +264,20 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
             '/Notes/edited.note': manifestRecord(edited, vaultPathFor('Notes/edited.note'), 'device version'),
         }, '/Notes/**');
 
-        const result = await runDeviceSync(vault.app, settings, async () => {});
+        const result = await runIpSync(vault.app, settings);
 
-        expect(result).toMatchObject({ synced: 2, unchanged: 2, excluded: 1, skippedConflicts: [vaultPathFor('Notes/edited.note')], failed: [] });
+        expect(result).toMatchObject({
+            engineId: 'ip-device',
+            synced: 2,
+            unchanged: 2,
+            excluded: 1,
+            removed: 0,
+            issues: [{
+                kind: 'protected',
+                item: vaultPathFor('Notes/edited.note'),
+                message: 'Skipped because the vault copy was edited locally',
+            }],
+        });
         expect(vault.readText(vaultPathFor('Notes/new.note'))).toBe('brand new');
         expect(vault.readText(vaultPathFor('Notes/restored.note'))).toBe('restore me');
         expect(vault.readText(vaultPathFor('Notes/intact.note'))).toBe('same bytes');
@@ -259,20 +285,44 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
         expect(vault.exists(vaultPathFor('Secret/hidden.note'))).toBe(false);
     });
 
+    it('applies the shared extension allowlist and counts other files as excluded', async () => {
+        const vault = makeVault();
+        const note = deviceFile('journal.note', 'note bytes');
+        const pdf = deviceFile('reference.pdf', 'pdf bytes', { uri: '/reference.pdf' });
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([note, pdf]);
+        mockDeviceContents(new Map([['/reference.pdf', 'pdf bytes']]));
+        const settings = settingsWith({}, '', '.pdf');
+
+        const result = await runIpSync(vault.app, settings);
+
+        expect(scanDeviceSupernoteTreeWithExtensions).toHaveBeenCalledWith(
+            '10.11.12.13',
+            ALL_FILE_EXTENSIONS,
+        );
+        expect(result).toMatchObject({ synced: 1, excluded: 1 });
+        expect(fetchedUris()).toEqual(['/reference.pdf']);
+        expect(vault.readText(vaultPathFor('reference.pdf'))).toBe('pdf bytes');
+        expect(vault.exists(vaultPathFor('journal.note'))).toBe(false);
+    });
+
     it('reports a failed restore in result.failed and keeps the rest of the run going', async () => {
         const vault = makeVault();
         const broken = deviceFile('broken.note', 'never arrives');
         const healthy = deviceFile('healthy.note', 'fine');
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([broken, healthy]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([broken, healthy]);
         mockDeviceContents(new Map([['/healthy.note', 'fine']]), ['/broken.note']);
         const settings = settingsWith({
             '/broken.note': manifestRecord(broken, vaultPathFor('broken.note'), 'never arrives'),
             '/healthy.note': manifestRecord(healthy, vaultPathFor('healthy.note'), 'fine'),
         });
 
-        const result = await runDeviceSync(vault.app, settings, async () => {});
+        const result = await runIpSync(vault.app, settings);
 
-        expect(result.failed).toEqual([{ file: '/broken.note', error: 'Supernote responded with status 500' }]);
+        expect(result.issues).toEqual([{
+            kind: 'failure',
+            item: '/broken.note',
+            message: 'Supernote responded with status 500',
+        }]);
         expect(result.unchanged).toBe(0); // not quietly counted as unchanged either
         expect(vault.exists(vaultPathFor('broken.note'))).toBe(false);
         expect(vault.readText(vaultPathFor('healthy.note'))).toBe('fine');
@@ -291,7 +341,7 @@ describe('runDeviceSync: fault isolation', () => {
         const vault = makeVault();
         const unreadable = deviceFile('unreadable.note', 'device version');
         const healthy = deviceFile('healthy.note', 'fine');
-        vi.mocked(scanDeviceSupernoteTree).mockResolvedValue([unreadable, healthy]);
+        vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([unreadable, healthy]);
         mockDeviceContents(new Map());
         vault.seedFile(vaultPathFor('unreadable.note'), 'device version');
         vault.seedFile(vaultPathFor('healthy.note'), 'fine');
@@ -307,7 +357,7 @@ describe('runDeviceSync: fault isolation', () => {
 
         // Must not reject: one unreadable file degrades to a per-file failure
         // (like the toSync and drift-check loops) rather than aborting the run.
-        const result = await runDeviceSync(vault.app, settings, async () => {});
+        const result = await runIpSync(vault.app, settings);
 
         expect(result.synced).toBe(0);
         // Conservatively kept in the unchanged bucket on error — never

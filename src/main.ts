@@ -15,8 +15,9 @@ import { ImageConverter, pageMayNeedRasterOverlay, terminateSharedWorkerPool } f
 import './webcomponent/SupernoteViewerElement';
 import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
-import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
-import { formatSyncFailureLogEntry } from './deviceSync';
+import { IpSyncEngine } from './syncEngine';
+import { SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
+import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
@@ -1134,7 +1135,7 @@ export class SupernoteEmbed extends Component {
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
-	private syncInFlight = false;
+	private syncCoordinator!: SyncCoordinator;
 	// Live reference handed to VaultWriter — registering/unregistering here
 	// after construction still takes effect, since both hold the same Set.
 	pageTextProcessors: Set<PageTextProcessor> = new Set();
@@ -1162,6 +1163,11 @@ export default class SupernotePlugin extends Plugin {
         installAtPolyfill();
 
 		await this.loadSettings();
+		const ipSyncEngine = new IpSyncEngine(this.app, this.settings, () => this.saveSettings());
+		this.syncCoordinator = new SingleEngineSyncCoordinator(
+			{ 'ip-device': ipSyncEngine },
+			new ObsidianSyncExecutionStateStore(this.app),
+		);
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
 
@@ -1471,51 +1477,68 @@ export default class SupernotePlugin extends Plugin {
 		this.addCommand({
 			id: 'sync-notes-from-device',
 			name: 'Sync supernote notes now',
-			callback: () => { void this.runSync(); },
+			checkCallback: (checking) => {
+				if (this.getActiveSyncEngineId() !== 'ip-device') return false;
+				if (!checking) void this.runSync('sync-notes-from-device');
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'sync-now',
+			name: 'Sync supernote now',
+			callback: () => { void this.runSync('sync-now'); },
 		});
 	}
 
-	async runSync(): Promise<void> {
-		if (this.settings.directConnectIP.length === 0) {
-			new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
-			return;
+	getActiveSyncEngineId(): SyncEngineId {
+		return this.syncCoordinator.getActiveEngineId();
+	}
+
+	async setActiveSyncEngine(engineId: SyncEngineId): Promise<void> {
+		await this.syncCoordinator.setActiveEngine(engineId);
+	}
+
+	async clearActiveSyncHistory(): Promise<void> {
+		await this.syncCoordinator.clearActiveHistory();
+	}
+
+	private showSyncResult(result: SyncRunResult): void {
+		const protectedCount = result.issues.filter((issue) => issue.kind === 'protected').length;
+		const failureCount = result.issues.filter((issue) => issue.kind === 'failure').length;
+		const warningCount = result.issues.filter((issue) => issue.kind === 'warning').length;
+		const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
+		if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
+		if (result.removed > 0) parts.push(`${result.removed} removed`);
+		if (protectedCount > 0) parts.push(`${protectedCount} skipped (locally edited)`);
+		if (failureCount > 0) parts.push(`${failureCount} failed`);
+		if (warningCount > 0) parts.push(`${warningCount} warnings`);
+		new Notice(`Supernote sync: ${parts.join(', ')}`);
+
+		if (protectedCount > 0) {
+			console.warn('Supernote sync protected these items:', result.issues.filter((issue) => issue.kind === 'protected'));
 		}
-		// A slow sync (large device, slow LAN) could still be running when the
-		// command is invoked again — e.g. the user re-runs it by hand right
-		// after triggering it. Two runs racing on the same manifest could each
-		// read a stale copy and clobber the other's updates when they save.
-		if (this.syncInFlight) {
+		if (failureCount > 0) {
+			console.error('Supernote sync failed for these items:', result.issues.filter((issue) => issue.kind === 'failure'));
+		}
+	}
+
+	async runSync(commandId = 'sync-now'): Promise<void> {
+		if (this.syncCoordinator.isRunning()) {
 			new Notice('Supernote sync is already running');
 			return;
 		}
 
-		this.syncInFlight = true;
 		try {
-			const result = await runDeviceSync(this.app, this.settings, () => this.saveSettings());
-
-			const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
-			if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
-			if (result.skippedConflicts.length > 0) parts.push(`${result.skippedConflicts.length} skipped (locally edited)`);
-			if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
-			new Notice(`Supernote sync: ${parts.join(', ')}`);
-
-			if (result.skippedConflicts.length > 0) {
-				console.warn('Supernote sync skipped these files because they were edited locally since the last sync:', result.skippedConflicts);
-			}
-			if (result.failed.length > 0) {
-				console.error('Supernote sync failed for these files:', result.failed);
-			}
+			const result = await this.syncCoordinator.runActive({ kind: 'manual', commandId });
+			if (result) this.showSyncResult(result);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
-			// Best-effort: a run that fails before producing a per-file result at
-			// all (e.g. the device was unreachable) is exactly the kind of thing
-			// worth a Sync Log entry, but a logging failure on top of that
-			// shouldn't hide the real error from the modal below.
-			await appendSyncLogEntry(this.app, this.settings.syncFolder, formatSyncFailureLogEntry(error.message))
-				.catch((logErr) => console.error('Failed to write to Supernote sync log:', logErr));
-			new DirectConnectErrorModal(this.app, this.settings, error).open();
-		} finally {
-			this.syncInFlight = false;
+			if (this.getActiveSyncEngineId() === 'ip-device') {
+				new DirectConnectErrorModal(this.app, this.settings, error).open();
+			} else {
+				new ErrorModal(this.app, error).open();
+			}
 		}
 	}
 

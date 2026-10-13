@@ -21,6 +21,7 @@ The Cloud engine supports exactly these user-facing capabilities:
 - Automatically run that same one-way mirror on the plugin's shared interval
   when Cloud is the active engine.
 - Filter Cloud paths with the established `*`, `**`, and `?` path-mask syntax.
+- Filter Cloud files with the plugin's shared file-extension allowlist.
 - Download new or changed Cloud files.
 - Preserve a locally edited mirrored file instead of silently overwriting or
   removing it.
@@ -43,6 +44,9 @@ for:
 - Sending files to Supernote.
 - Cloud browsing or Cloud-folder selection UI.
 - A simultaneous or combined run of multiple sync engines.
+- Applying the custom dictionary to mirrored files. The dictionary transforms
+  recognized text during Markdown generation; Cloud sync preserves source file
+  bytes.
 
 Remote API operations outside the endpoint table in this document are out of
 scope, even where public references describe them.
@@ -410,16 +414,33 @@ The exact relationship between public web-listing paths and a canonical Cloud
 path is **unknown** until validated with a test account. The feature must not
 enable destructive cleanup until this normalization is verified.
 
-### 7.4 Local destination safety
+### 7.4 File extension allowlist
+
+**Product requirement:** Cloud and IP use the same comma- or newline-separated
+file-extension allowlist.
+
+- Entries are case-insensitive and may include or omit a leading dot.
+- The default is `.note, .spd`.
+- `*` explicitly includes every supported regular file.
+- A blank value includes no files; clearing the setting must not broaden scope.
+- A file excluded by the current extension allowlist remains outside transfer
+  and deletion decisions and is not treated as remotely deleted.
+
+### 7.5 Local destination safety
 
 **Product requirement:** every mirrored destination remains below the configured
-Cloud vault root. A remote name or path that cannot be represented safely below
-that root is a protected per-file failure. It must not create, overwrite, move,
-or delete a file outside that root.
+shared sync destination root. A remote name or path that cannot be represented
+safely below that root is a protected per-file failure. It must not create,
+overwrite, move, or delete a file outside that root.
 
 The Cloud metadata directory is reserved beneath the root. A remote path that
 collides with reserved metadata is not mirrored until the collision has a
 documented, safe user-visible resolution.
+
+The IP and Cloud engines retain separate ownership manifests inside the shared
+destination model. Cloud must not adopt, overwrite, move, or trash a path owned
+by the IP engine unless a coordinator-owned ownership transition explicitly
+proves that operation safe.
 
 ## 8. Authentication User Experience
 
@@ -488,7 +509,8 @@ that cannot complete sign-in.
 
 - The Cloud engine scans the Cloud account from its root, subject to the
   verified listing contract.
-- A new in-scope file is downloaded into the configured Cloud vault root.
+- A new in-scope file is downloaded into the configured shared sync destination
+  root.
 - A remote file whose published checksum still matches the recorded Cloud
   checksum is reported as unchanged and is not downloaded again.
 - A changed remote file replaces its local mirror copy only when the local copy
@@ -499,6 +521,9 @@ that cannot complete sign-in.
   rather than duplicated or removed silently.
 - A current path filter can exclude a remote file from the run. It does not
   delete the previously mirrored local copy.
+- A current file-extension filter behaves the same way.
+- Downloaded source bytes are mirrored unchanged. The custom dictionary is not
+  applied because it operates only on recognized text converted to Markdown.
 
 ### 9.3 Remote deletion outcomes
 

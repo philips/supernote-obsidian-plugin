@@ -2,6 +2,8 @@ import { createCustomDictionarySettingsUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, C
 import SupernotePlugin from "./main";
 import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { SyncManifest } from './deviceSync';
+import { SyncEngineId } from './syncAbstraction';
+import { validateFileExtensionAllowlist } from './syncFilters';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
@@ -29,6 +31,10 @@ export type PageExportImageFormat = 'png' | 'svg';
 export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, string> = {
     png: 'PNG',
     svg: 'SVG',
+};
+
+export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
+    'ip-device': 'Direct IP connection',
 };
 
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
@@ -85,7 +91,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
      *  attachment" commands are unaffected — each always writes its own
      *  named format regardless of this setting. */
     pageExportImageFormat: PageExportImageFormat;
-    /** Vault folder that device sync writes into; never touches anything outside it. */
+    /** Shared vault destination root used by the active sync engine. */
     syncFolder: string;
     /**
      * Device path glob patterns (comma/newline separated) scoping which
@@ -94,6 +100,8 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
      * control only speaks in single strings — see parsePathFilters().
      */
     syncPathFiltersRaw: string;
+    /** Shared comma/newline-separated extension allowlist. `*` includes all regular files. */
+    syncFileExtensionsRaw: string;
     /**
      * Persisted record of what sync last wrote for each device note — see
      * deviceSync.ts. Drives both change detection (skip unchanged files) and
@@ -112,6 +120,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     pageExportImageFormat: 'png',
     syncFolder: 'Supernote sync',
     syncPathFiltersRaw: '',
+    syncFileExtensionsRaw: '.note, .spd',
     noteSyncState: {},
 	...CUSTOM_DICTIONARY_DEFAULT_SETTINGS,
 }
@@ -129,20 +138,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
     // which is still called on those older versions.
     getSettingDefinitions(): SettingDefinitionItem[] {
         return [
-            {
-                name: 'Supernote IP address',
-                desc: 'The IP address of your Supernote is needed to sync notes, attach files, upload files, or attach screenshots. To find your IP address swipe down on your Supernote device and enable Screen Mirroring and/or Browse & Access; then the IP will be displayed',
-                control: {
-                    type: 'text',
-                    key: 'directConnectIP',
-                    placeholder: 'IP only e.g. 192.168.1.2',
-                    validate: (value) => {
-                        if (value !== '' && !IP_VALIDATION_PATTERN.test(value)) {
-                            return 'Invalid IP format: must be xxx.xxx.xxx.xxx';
-                        }
-                    },
-                },
-            },
             {
                 name: 'Invert colors in "dark mode"',
                 desc: 'When Obsidian is in "dark mode" increase image visibility by inverting colors of images',
@@ -195,14 +190,20 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
+                name: 'Custom dictionary',
+                render: (setting) => {
+                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                },
+            },
+            {
                 name: 'Sync',
                 render: (setting) => {
                     setting.setHeading();
                 },
             },
             {
-                name: 'Sync folder',
-                desc: 'Vault folder that "sync supernote notes now" writes into, mirroring the device\'s own folder structure underneath it (including a "Sync Log.md" recording any conflicts or errors). The sync command never writes anywhere outside this folder.',
+                name: 'Destination folder',
+                desc: 'Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.',
                 control: {
                     type: 'text',
                     key: 'syncFolder',
@@ -210,8 +211,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
-                name: 'Sync device paths',
-                desc: 'Limit sync to these device paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every note on the device.',
+                name: 'Path allowlist',
+                desc: 'Limit sync to these source paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every supported file.',
                 control: {
                     type: 'text',
                     key: 'syncPathFiltersRaw',
@@ -219,23 +220,61 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
-                name: 'Sync history',
+                name: 'File extension allowlist',
+                desc: 'Comma- or newline-separated file extensions to sync, with or without a leading dot. Use * to include every trusted regular file. A blank value syncs no files.',
+                control: {
+                    type: 'text',
+                    key: 'syncFileExtensionsRaw',
+                    placeholder: '.note, .spd',
+                    validate: validateFileExtensionAllowlist,
+                },
+            },
+            {
+                name: 'Sync engine',
                 render: (setting) => {
                     setting
-                        .setDesc('Forgets which device notes have already been synced. The next sync re-checks every matching note from scratch — already-synced files are still protected by the same edit-conflict check, so this is safe to use, just slower for one run.')
-                        .addButton((btn) => {
-                            btn.setButtonText('Forget sync history').onClick(async () => {
-                                this.plugin.settings.noteSyncState = {};
-                                await this.plugin.saveSettings();
-                                new Notice('Supernote sync history cleared');
-                            });
+                        .setDesc('Choose which sync engine is used by manual sync commands.')
+                        .addDropdown((dropdown) => {
+                            dropdown
+                                .addOptions(SYNC_ENGINE_LABELS)
+                                .setValue(this.plugin.getActiveSyncEngineId())
+                                .onChange(async (value) => {
+                                    await this.plugin.setActiveSyncEngine(value as SyncEngineId);
+                                });
                         });
                 },
             },
             {
-                name: 'Custom dictionary',
+                name: 'Direct IP connection',
                 render: (setting) => {
-                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                    setting.setHeading();
+                },
+            },
+            {
+                name: 'Supernote IP address',
+                desc: 'The IP address used by Browse and Access, file transfer, screen mirroring, and the Direct IP sync engine. To find it, enable Screen Mirroring and/or Browse & Access on the Supernote device.',
+                control: {
+                    type: 'text',
+                    key: 'directConnectIP',
+                    placeholder: 'IP only e.g. 192.168.1.2',
+                    validate: (value) => {
+                        if (value !== '' && !IP_VALIDATION_PATTERN.test(value)) {
+                            return 'Invalid IP format: must be xxx.xxx.xxx.xxx';
+                        }
+                    },
+                },
+            },
+            {
+                name: 'Direct IP sync history',
+                render: (setting) => {
+                    setting
+                        .setDesc('Forgets which device files have already been synced. The next sync re-checks every matching file while preserving local-edit conflict protection.')
+                        .addButton((btn) => {
+                            btn.setButtonText('Forget direct IP history').onClick(async () => {
+                                await this.plugin.clearActiveSyncHistory();
+                                new Notice('Direct IP sync history cleared');
+                            });
+                        });
                 },
             },
         ];
@@ -246,31 +285,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         containerEl.empty();
         let alert: ExtraButtonComponent;
-
-        new Setting(containerEl)
-            .setName('Supernote IP address')
-            .setDesc('(Optional) when using the supernote "browse and access" for document upload/download or "screen mirroring" screenshot attachment this is the IP of the supernote device')
-            .addText(text => text
-                .setPlaceholder('IP only e.g. 192.168.1.2')
-                .setValue(this.plugin.settings.directConnectIP)
-                .onChange(async (value) => {
-                    if (IP_VALIDATION_PATTERN.test(value) || value === '') {
-                        this.plugin.settings.directConnectIP = value;
-                        alert.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
-                        await this.plugin.saveSettings();
-                    } else {
-                        alert.extraSettingsEl.toggleClass('supernote-settings-hidden', false);
-                    }
-                })
-                .inputEl.setAttribute('pattern', IP_VALIDATION_PATTERN.source)
-            )
-            .addExtraButton(btn => {
-                btn.setIcon('alert-triangle')
-                    .setTooltip('Invalid IP format: must be xxx.xxx.xxx.xxx');
-                btn.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
-                alert = btn
-                return btn;
-            });
+        let extensionAlert: ExtraButtonComponent;
 
         new Setting(containerEl)
             .setName('Invert colors in "dark mode"')
@@ -347,13 +362,15 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
+        createCustomDictionarySettingsUI(containerEl, this.plugin);
+
         new Setting(containerEl)
             .setName('Sync')
             .setHeading();
 
         new Setting(containerEl)
-            .setName('Sync folder')
-            .setDesc('Vault folder that "sync supernote notes now" writes into, mirroring the device\'s own folder structure underneath it (including a "Sync Log.md" recording any conflicts or errors). The sync command never writes anywhere outside this folder.')
+            .setName('Destination folder')
+            .setDesc('Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.')
             .addText(text => text
                 .setPlaceholder('Supernote sync')
                 .setValue(this.plugin.settings.syncFolder)
@@ -364,8 +381,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Sync device paths')
-            .setDesc('Limit sync to these device paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every note on the device.')
+            .setName('Path allowlist')
+            .setDesc('Limit sync to these source paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every supported file.')
             .addText(text => text
                 .setPlaceholder('/diary/**')
                 .setValue(this.plugin.settings.syncPathFiltersRaw)
@@ -376,18 +393,77 @@ export class SupernoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Sync history')
-            .setDesc('Forgets which device notes have already been synced. The next sync re-checks every matching note from scratch — already-synced files are still protected by the same edit-conflict check, so this is safe to use, just slower for one run.')
-            .addButton(btn => btn
-                .setButtonText('Forget sync history')
-                .onClick(async () => {
-                    this.plugin.settings.noteSyncState = {};
-                    await this.plugin.saveSettings();
-                    new Notice('Supernote sync history cleared');
+            .setName('File extension allowlist')
+            .setDesc('Comma- or newline-separated file extensions to sync, with or without a leading dot. Use * to include every trusted regular file. A blank value syncs no files.')
+            .addText(text => text
+                .setPlaceholder('.note, .spd')
+                .setValue(this.plugin.settings.syncFileExtensionsRaw)
+                .onChange(async (value) => {
+                    const validationError = validateFileExtensionAllowlist(value);
+                    extensionAlert.extraSettingsEl.toggleClass('supernote-settings-hidden', validationError === undefined);
+                    if (validationError === undefined) {
+                        this.plugin.settings.syncFileExtensionsRaw = value;
+                        await this.plugin.saveSettings();
+                    }
+                })
+            )
+            .addExtraButton(btn => {
+                btn.setIcon('alert-triangle')
+                    .setTooltip('Enter extensions separated by commas or newlines, or * for all files');
+                btn.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
+                extensionAlert = btn;
+                return btn;
+            });
+
+        new Setting(containerEl)
+            .setName('Sync engine')
+            .setDesc('Choose which sync engine is used by manual sync commands.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(SYNC_ENGINE_LABELS)
+                .setValue(this.plugin.getActiveSyncEngineId())
+                .onChange(async (value) => {
+                    await this.plugin.setActiveSyncEngine(value as SyncEngineId);
                 })
             );
 
-		// Add custom dictionary settings to the settings tab
-		createCustomDictionarySettingsUI(containerEl, this.plugin);
+        new Setting(containerEl)
+            .setName('Direct IP connection')
+            .setHeading();
+
+        new Setting(containerEl)
+            .setName('Supernote IP address')
+            .setDesc('The IP address used by browse and access, file transfer, screen mirroring, and the direct IP sync engine. To find it, enable screen mirroring and/or browse & access on the supernote device.')
+            .addText(text => text
+                .setPlaceholder('IP only e.g. 192.168.1.2')
+                .setValue(this.plugin.settings.directConnectIP)
+                .onChange(async (value) => {
+                    if (IP_VALIDATION_PATTERN.test(value) || value === '') {
+                        this.plugin.settings.directConnectIP = value;
+                        alert.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
+                        await this.plugin.saveSettings();
+                    } else {
+                        alert.extraSettingsEl.toggleClass('supernote-settings-hidden', false);
+                    }
+                })
+                .inputEl.setAttribute('pattern', IP_VALIDATION_PATTERN.source)
+            )
+            .addExtraButton(btn => {
+                btn.setIcon('alert-triangle')
+                    .setTooltip('Invalid IP format: must be xxx.xxx.xxx.xxx');
+                btn.extraSettingsEl.toggleClass('supernote-settings-hidden', true);
+                alert = btn;
+                return btn;
+            });
+
+        new Setting(containerEl)
+            .setName('Direct IP sync history')
+            .setDesc('Forgets which device files have already been synced. The next sync re-checks every matching file while preserving local-edit conflict protection.')
+            .addButton(btn => btn
+                .setButtonText('Forget direct IP history')
+                .onClick(async () => {
+                    await this.plugin.clearActiveSyncHistory();
+                    new Notice('Direct IP sync history cleared');
+                })
+            );
     }
 }
