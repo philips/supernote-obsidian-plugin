@@ -26,29 +26,51 @@
   previous Cloud session without exposing secret values. One Cloud-linked
   candidate was tested using only CSRF bootstrap (HTTP 200) and account identity
   (HTTP 401). It was not cached; no password login or OTP request was made.
+- The settings groundwork has been organized for future sync-engine selection;
+  the Cloud engine itself, shared Cloud manifest integration, and Cloud product
+  authentication UI have not been implemented.
+- Added a pure, synthetic-tested Cloud mirror planner that accepts only
+  caller-verified canonical paths, compares Cloud checksums with manifest
+  snapshots, protects locally edited copies, re-queues missing copies, and
+  applies shared path and extension filters. It does not fetch or write files.
 
 ## Next
 
 - Rotate the diagnostic account password because it was previously entered
   directly in terminal history, after the remaining protocol probes no longer
   need a fresh login.
-- When the account owner is available for a possible OTP, run one explicitly
-  authorized login to populate the temporary session cache. The harness only
-  reads the consent variables and never clears or changes them. If login consent
-  is enabled, it is used only when no reusable session is available.
+- Default while the account owner is unavailable: continue offline with
+  synthetic Cloud protocol fixtures and a fake transport. Recommended next
+  implementation step is to connect verified canonical paths to the planner,
+  define the versioned shared manifest and metadata reservation, and test the
+  raw-byte-only write boundary with fake transport and vault. The planner is
+  not yet wired into a Cloud engine; do not make production requests as part
+  of this offline work.
+- OTP interruption point: if the account owner becomes available at any time,
+  pause offline work immediately. Proceed with authentication only after the
+  user explicitly authorizes the attempt and the account owner is present to
+  receive the possible email code. The harness only reads the consent variables
+  and never clears or changes them. Login consent is used only when no reusable
+  session is available.
 - Retain the cached token throughout plugin development, until the account owner
   is ready for an end-to-end options-panel login test and explicitly approves
   cleanup. Completing protocol probes is not permission to remove it; service
   expiry or revocation can still require another authorized login.
-- Run the two-pass inventory and path probe against the current two-file account
-  to establish partial production response and path-shape evidence without
-  recording filenames, paths, IDs, or contents.
+- After authorized authentication, immediately validate the token with the
+  account-identity query and bind the resulting canonical account identity to
+  the local session. Then run the two-pass inventory and path probe against the
+  current two-file account, recording only redacted aggregate/path-shape
+  evidence and no filenames, paths, IDs, or contents.
 - The real second-page pagination gate remains blocked until the account owner
   prepares at least 101 synthetic files in one directory through an official
   client. The harness remains read-only and will not manufacture this fixture.
-- Validate download descriptors, redirect hosts, and checksum-protected
-  transfers.
-- Then implement the shared manifest and one-way Cloud mirror.
+- Once listing and path behavior are understood, validate download descriptors,
+  redirect hosts, and checksum-protected transfers using an authorized
+  synthetic fixture. Never forward Cloud credentials or cookies to a download
+  host.
+- After the protocol gates pass, implement the shared manifest integration and
+  one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
+  format conversions remain separate work.
 
-No production inventory observation, download validation, manifest, or product
-UI work has completed yet.
+No production inventory observation, download validation, Cloud sync engine,
+shared manifest integration, or Cloud authentication UI has been completed.
