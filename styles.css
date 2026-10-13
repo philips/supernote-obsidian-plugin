@@ -188,6 +188,11 @@
 }
 
 /* Custom dictionary settings styles */
+.setting-item.supernote-settings-custom-dictionary-setting {
+    flex-direction: column;
+    align-items: stretch;
+}
+
 .supernote-settings-custom-dictionary-subtitle {
 	padding: 0 0 0.75em;
 }

@@ -186,6 +186,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
             {
                 name: 'Custom dictionary',
                 render: (setting) => {
+                    setting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
+                    setting.setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
                     createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
                 },
             },
@@ -366,7 +368,11 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     })
                 );
 
-            createCustomDictionarySettingsUI(containerEl, this.plugin);
+            const customDictionarySetting = new Setting(containerEl)
+                .setName('Custom dictionary')
+                .setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
+            customDictionarySetting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
+            createCustomDictionarySettingsUI(customDictionarySetting.settingEl, this.plugin);
 
         new Setting(containerEl)
             .setName('Date-based import')

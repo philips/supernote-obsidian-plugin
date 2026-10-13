@@ -159,11 +159,7 @@ export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugi
 	const customDictionaryContainer = containerEl.createDiv();
 	customDictionaryContainer
 		.addClasses(['supernote-settings-custom-dictionary']);
-	customDictionaryContainer.createEl('h3', { text: 'Custom dictionary' })
-		// .addClass('setting-item-name');
-	customDictionaryContainer.createDiv({ text: 'You can add custom entries to fix errors in Supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.' })
-		.addClasses(['setting-item-description', 'supernote-settings-custom-dictionary-subtitle']);
-		
+
 	// Create the "Enable Custom Dictionary" setting
 	new Setting(customDictionaryContainer)
 		.setName('Enable custom dictionary')
