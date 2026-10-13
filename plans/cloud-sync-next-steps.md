@@ -20,8 +20,8 @@
   possible OTP request now require the additional explicit acknowledgement
   `SUPERNOTE_CLOUD_ALLOW_LOGIN=I_ACKNOWLEDGE_OTP_MAY_BE_SENT`.
 - Added a redacted two-pass inventory report that retains only aggregate counts,
-  salted fingerprints, structural path relationships, and request/response
-  field types.
+  salted fingerprints, structural path relationships, and request/response field
+  types.
 - On October 13, 2026, inspected local history and saved workspace chats for a
   previous Cloud session without exposing secret values. One Cloud-linked
   candidate was tested using only CSRF bootstrap (HTTP 200) and account identity

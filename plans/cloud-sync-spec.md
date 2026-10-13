@@ -158,11 +158,11 @@ requires a token sends `x-access-token: <session token>`.
 
 ### 6.0 Obtain CSRF/session state
 
-| Item              | Classification      | Specification                                                                                                                              |
-| ----------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Method and route  | Compatible behavior | `GET /api/csrf`                                                                                                                            |
-| Response state    | Compatible behavior | The hosted-Cloud client retains response cookies and reads an `X-XSRF-TOKEN` response header or cookie value.                              |
-| Subsequent use    | Compatible behavior | JSON control-plane requests send `X-XSRF-TOKEN` and the retained cookies. The client refreshes CSRF state and retries once after HTTP 403. |
+| Item              | Classification      | Specification                                                                                                                                                   |
+| ----------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Method and route  | Compatible behavior | `GET /api/csrf`                                                                                                                                                 |
+| Response state    | Compatible behavior | The hosted-Cloud client retains response cookies and reads an `X-XSRF-TOKEN` response header or cookie value.                                                   |
+| Subsequent use    | Compatible behavior | JSON control-plane requests send `X-XSRF-TOKEN` and the retained cookies. The client refreshes CSRF state and retries once after HTTP 403.                      |
 | Production status | Compatible behavior | Two fresh sessions on October 12, 2026 required this shared cookie/CSRF state; both OTP requests succeeded after one HTTP 403, one CSRF refresh, and one retry. |
 
 ### 6.1 Obtain login nonce
@@ -460,8 +460,8 @@ safety rules in this specification.
 
 Compatible hosted-Cloud evidence identifies login `errorCode: "E1760"` as the
 identity-verification branch. The end-to-end sequence in Sections 6.3 through
-6.5 passed a permitted production protocol test in two fresh sessions on
-October 12, 2026:
+6.5 passed a permitted production protocol test in two fresh sessions on October
+12, 2026:
 
 1. The plugin obtains a pre-auth token and requests a code for the entered email
    address using the signed send-code request.
@@ -745,8 +745,8 @@ for its sign-in, inventory, filtering, account-safety, or download contract:
    credentials. Failure to resolve this gate blocks downloads, but no knowledge
    of future hosts is required.
 5. **Account identity field:** resolved for the tested account on October 12,
-  2026. `/api/user/query` returned a usable canonical decimal `userId` in two
-  fresh sessions, with matching identities.
+6. `/api/user/query` returned a usable canonical decimal `userId` in two fresh
+   sessions, with matching identities.
 
 The following gate is optional for the initial release:
 

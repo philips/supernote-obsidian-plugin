@@ -88,18 +88,18 @@ The harness must never persist or print:
 - Raw production response bodies.
 - Personal account paths, profile values, or file contents.
 
-The temporary session cache is the one narrow exception for the bearer token:
-it exists specifically to avoid repeatedly generating email OTP challenges. It
+The temporary session cache is the one narrow exception for the bearer token: it
+exists specifically to avoid repeatedly generating email OTP challenges. It
 stores only the production origin, token, canonical account ID, and save time;
 it is outside the repository, written with owner-only mode where the operating
 system supports it, never copied into an observation, and deleted after the
-plugin is fully developed and the account owner is ready for an end-to-end
-login test through the options-panel UI, with explicit approval for cleanup.
-Do not remove the cache merely because protocol validation is complete. Cache
-retention does not guarantee that the service will keep the token valid.
-`SUPERNOTE_CLOUD_SESSION_FILE` may point
-it at another device-local temporary path. `SUPERNOTE_CLOUD_ACCOUNT_ID` may
-accompany an environment token to enforce the same account-binding check.
+plugin is fully developed and the account owner is ready for an end-to-end login
+test through the options-panel UI, with explicit approval for cleanup. Do not
+remove the cache merely because protocol validation is complete. Cache retention
+does not guarantee that the service will keep the token valid.
+`SUPERNOTE_CLOUD_SESSION_FILE` may point it at another device-local temporary
+path. `SUPERNOTE_CLOUD_ACCOUNT_ID` may accompany an environment token to enforce
+the same account-binding check.
 
 The harness may report only the minimum structural evidence needed for review:
 
@@ -169,8 +169,8 @@ The currently available authorized account contains only two replaceable note
 files and its OTP mailbox is not directly accessible to the developer. It can
 establish partial root/list/path evidence without exposing names or contents,
 but it cannot pass the real second-page criterion unless the account owner first
-creates the required synthetic fixture through an official Supernote client.
-The read-only harness must not add undocumented write calls to manufacture that
+creates the required synthetic fixture through an official Supernote client. The
+read-only harness must not add undocumented write calls to manufacture that
 fixture and must not modify or delete the existing files.
 
 ### 5.4 Canonical paths
