@@ -8,9 +8,9 @@ import { pathToFileURL } from 'node:url';
 
 const temporaryDirectory = await mkdtemp(`${tmpdir()}/supernote-cloud-protocol-`);
 const outputFile = resolve(temporaryDirectory, 'test-cloud-protocol.mjs');
-const descriptorMode = process.argv[2] === 'descriptor';
+const descriptorMode = ['descriptor', 'host-review', 'fixture-transfer'].includes(process.argv[2]);
 if (process.argv.length > 3 || (process.argv[2] && !descriptorMode)) {
-    throw new Error('Expected optional descriptor mode');
+    throw new Error('Expected optional descriptor, host-review, or fixture-transfer mode');
 }
 
 try {

@@ -875,11 +875,22 @@ colliding forms must still fail closed. Passing this path gate alone does not
 enable deletion cleanup, which also requires the other inventory, account, and
 mirror safety gates.
 
-**Still unknown.** Download descriptor hosts, redirects, transfer method and
-integrity have not been validated against production. The hosted API's
-pagination snapshot semantics and its behavior for unsupported path forms, other
-root configurations, rejected OTPs, and future token expiry are not established
-by these observations.
+**Fixture download (October 13).** With explicit approval, a bound cached
+session requested a fresh `type: "0"` descriptor for a disposable test file.
+Host review identified an HTTPS virtual-hosted S3 bucket endpoint. A second
+descriptor named the same exact reviewed host, and an unauthenticated GET
+without cookies, CSRF headers, token, or referrer returned bytes matching the
+listed size and MD5. The transfer used manual redirect handling with only that
+host allowed; the harness did not record whether same-host redirects occurred.
+Bytes were held in memory and discarded without a vault write. The signed URL,
+account ID, file ID, checksum value, and contents were not recorded. This
+verifies the tested host and fixture, not an exhaustive host policy, future
+redirects, or the plugin's mirror workflow.
+
+**Still unknown.** Other download hosts and production redirect behavior have
+not been validated. The hosted API's pagination snapshot semantics and its
+behavior for unsupported path forms, other root configurations, rejected OTPs,
+and future token expiry are not established by these observations.
 
 ## 13. Release Acceptance Criteria
 

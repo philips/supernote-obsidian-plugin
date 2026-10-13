@@ -88,6 +88,16 @@
   The URL and checksum value were not retained or printed. This does not
   establish an approved download host, redirect behavior, byte integrity, or
   whether the descriptor checksum matches the inventory checksum.
+- On October 13, 2026, with explicit approval, a host-review pass identified a
+  single HTTPS S3 bucket hostname for that disposable file. A subsequent
+  descriptor request to the bound account returned that same exact host; the
+  in-memory GET succeeded with the listed byte length and MD5. The harness sent
+  no Cloud token, cookies, CSRF header, or referrer to the transfer host, and
+  discarded the bytes without vault writes. Only the exact observed host was
+  allowed; unreviewed redirect hosts fail closed. The harness did not record a
+  redirect count, so production redirect behavior remains unknown. The remote
+  ID, checksum value, signed URL, and contents were not committed or included in
+  the report.
 
 ## Next
 
@@ -111,16 +121,15 @@
 - Retain the harness under `scripts/` as an opt-in, bounded compatibility probe
   outside CI and releases; review redacted observations before sharing. Its
   retention does not authorize clearing the separately cached token.
-- Validate download descriptors, redirect hosts, and checksum-protected
-  transfers using an authorized synthetic fixture. Never forward Cloud
-  credentials or cookies to a download host.
-- Review the descriptor host locally before separately authorizing a transfer;
-  the redacted descriptor probe did not validate redirects or download bytes. A
-  future host-review probe needs its own scoped authorization and should not
-  print or persist signed URLs, query strings, or other credentials.
+- Keep the reviewed host narrowly scoped to the observed fixture; any new
+  descriptor or redirect host must be reviewed separately before it is added to
+  a product allowlist. Never forward Cloud credentials or cookies to a download
+  host. Synthetic redirect tests do not establish which future production
+  redirect destinations, if any, are legitimate.
 - After the protocol gates pass, implement the shared manifest integration and
   one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
   format conversions remain separate work.
 
-No production download validation, Cloud sync engine, shared manifest
-integration, or Cloud authentication UI has been completed.
+The disposable fixture download was validated, but no plugin Cloud sync engine,
+shared manifest integration, general download host allowlist, or Cloud
+authentication UI has been completed.
