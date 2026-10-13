@@ -54,8 +54,8 @@
   to define safe manifest persistence and IP migration, the Obsidian vault
   adapter, and the verified-path provider contract. The production Cloud engine
   must remain disabled until canonical paths, account binding, and transfer
-  behavior pass their authorized protocol gates. Do not make production
-  requests as part of offline work.
+  behavior pass their authorized protocol gates. Do not make production requests
+  as part of offline work.
 - OTP interruption point: if the account owner becomes available at any time,
   pause offline work immediately. Proceed with authentication only after the
   user explicitly authorizes the attempt and the account owner is present to
