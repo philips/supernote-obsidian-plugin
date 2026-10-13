@@ -72,7 +72,12 @@ interface SettingDefinitionRender {
     name: string;
     render: (setting: Setting) => void;
 }
-type SettingDefinitionItem = SettingDefinitionControl | SettingDefinitionRender;
+interface SettingDefinitionGroup {
+    type: 'group';
+    heading: string;
+    items: SettingDefinitionItem[];
+}
+type SettingDefinitionItem = SettingDefinitionControl | SettingDefinitionRender | SettingDefinitionGroup;
 
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
@@ -139,165 +144,171 @@ export class SupernoteSettingTab extends PluginSettingTab {
     getSettingDefinitions(): SettingDefinitionItem[] {
         return [
             {
-                name: 'UI',
-                render: (setting) => {
-                    setting.setHeading();
-                },
-            },
-            {
-                name: 'Invert colors in "dark mode"',
-                desc: 'When Obsidian is in "dark mode" increase image visibility by inverting colors of images',
-                control: {
-                    type: 'toggle',
-                    key: 'invertColorsWhenDark',
-                },
-            },
-            {
-                name: 'Show export buttons',
-                desc: 'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
-                control: {
-                    type: 'toggle',
-                    key: 'showExportButtons',
-                },
-            },
-            {
-                name: 'Vector ink',
-                desc: 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
-                control: {
-                    type: 'toggle',
-                    key: 'vectorInk',
-                },
-            },
-            {
-                name: 'Convert',
-                render: (setting) => {
-                    setting.setHeading();
-                },
-            },
-            {
-                name: 'Export current page as',
-                desc: 'Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.',
-                control: {
-                    type: 'dropdown',
-                    key: 'pageExportImageFormat',
-                    options: PAGE_EXPORT_IMAGE_FORMAT_LABELS,
-                },
-            },
-            {
-                name: 'Custom dictionary',
-                render: (setting) => {
-                    setting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
-                    setting.setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
-                    createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
-                },
-            },
-            {
-                name: 'Date-based import',
-                render: (setting) => {
-                    setting
-                        .setHeading()
-                        .setDesc('Date-based import currently works only with the direct IP connection engine.');
-                },
-            },
-            {
-                name: 'Default format',
-                desc: 'Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.',
-                control: {
-                    type: 'dropdown',
-                    key: 'importFormat',
-                    options: IMPORT_FORMAT_LABELS,
-                },
-            },
-            {
-                name: 'Sync',
-                render: (setting) => {
-                    setting.setHeading();
-                },
-            },
-            {
-                name: 'Destination folder',
-                desc: 'Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.',
-                control: {
-                    type: 'text',
-                    key: 'syncFolder',
-                    placeholder: 'Supernote sync',
-                },
-            },
-            {
-                name: 'Path allowlist',
-                desc: 'Limit sync to these source paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every supported file.',
-                control: {
-                    type: 'text',
-                    key: 'syncPathFiltersRaw',
-                    placeholder: '/diary/**',
-                },
-            },
-            {
-                name: 'File extension allowlist',
-                desc: 'Comma- or newline-separated file extensions to sync, with or without a leading dot. Use * to include every trusted regular file. A blank value syncs no files.',
-                control: {
-                    type: 'text',
-                    key: 'syncFileExtensionsRaw',
-                    placeholder: '.note, .spd',
-                    validate: validateFileExtensionAllowlist,
-                },
-            },
-            {
-                name: 'Sync history',
-                render: (setting) => {
-                    setting
-                        .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
-                        .addButton((btn) => {
-                            btn.setButtonText('Forget sync history').onClick(async () => {
-                                await this.plugin.clearActiveSyncHistory();
-                                new Notice('Sync history cleared');
-                            });
-                        });
-                },
-            },
-            {
-                name: 'Sync engine',
-                render: (setting) => {
-                    setting
-                        .setDesc('Choose which sync engine is used for manual and scheduled sync.')
-                        .addDropdown((dropdown) => {
-                            dropdown
-                                .addOptions(SYNC_ENGINE_LABELS)
-                                .setValue(this.plugin.getActiveSyncEngineId())
-                                .onChange(async (value) => {
-                                    await this.plugin.setActiveSyncEngine(value as SyncEngineId);
-                                });
-                        });
-                },
-            },
-            {
-                name: 'IP engine',
-                render: (setting) => {
-                    setting.setHeading();
-                },
-            },
-            {
-                name: 'Supernote IP address',
-                desc: 'The IP address used by Browse and Access, file transfer, screen mirroring, and the Direct IP sync engine. To find it, enable Screen Mirroring and/or Browse & Access on the Supernote device.',
-                control: {
-                    type: 'text',
-                    key: 'directConnectIP',
-                    placeholder: 'IP only e.g. 192.168.1.2',
-                    validate: (value) => {
-                        if (value !== '' && !IP_VALIDATION_PATTERN.test(value)) {
-                            return 'Invalid IP format: must be xxx.xxx.xxx.xxx';
-                        }
+                type: 'group',
+                heading: 'UI',
+                items: [
+                    {
+                        name: 'Invert colors in "dark mode"',
+                        desc: 'When Obsidian is in "dark mode" increase image visibility by inverting colors of images',
+                        control: {
+                            type: 'toggle',
+                            key: 'invertColorsWhenDark',
+                        },
                     },
-                },
+                    {
+                        name: 'Show export buttons',
+                        desc: 'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
+                        control: {
+                            type: 'toggle',
+                            key: 'showExportButtons',
+                        },
+                    },
+                    {
+                        name: 'Vector ink',
+                        desc: 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
+                        control: {
+                            type: 'toggle',
+                            key: 'vectorInk',
+                        },
+                    },
+                ],
             },
             {
-                name: 'Device file browser sort order',
-                desc: 'Default order to list files and folders in when browsing the supernote over a direct IP connection. Can also be changed from the browser itself.',
-                control: {
-                    type: 'dropdown',
-                    key: 'fileBrowserSortOrder',
-                    options: FILE_BROWSER_SORT_LABELS,
-                },
+                type: 'group',
+                heading: 'Convert',
+                items: [
+                    {
+                        name: 'Export current page as',
+                        desc: 'Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.',
+                        control: {
+                            type: 'dropdown',
+                            key: 'pageExportImageFormat',
+                            options: PAGE_EXPORT_IMAGE_FORMAT_LABELS,
+                        },
+                    },
+                    {
+                        name: 'Custom dictionary',
+                        render: (setting) => {
+                            setting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
+                            setting.setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
+                            createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                        },
+                    },
+                ],
+            },
+            {
+                type: 'group',
+                heading: 'Date-based import',
+                items: [
+                    {
+                        name: '',
+                        render: (setting) => {
+                            setting
+                                .setName('')
+                                .setDesc('Date-based import currently works only with the direct IP connection engine.');
+                        },
+                    },
+                    {
+                        name: 'Default format',
+                        desc: 'Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.',
+                        control: {
+                            type: 'dropdown',
+                            key: 'importFormat',
+                            options: IMPORT_FORMAT_LABELS,
+                        },
+                    },
+                ],
+            },
+            {
+                type: 'group',
+                heading: 'Sync',
+                items: [
+                    {
+                        name: 'Destination folder',
+                        desc: 'Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.',
+                        control: {
+                            type: 'text',
+                            key: 'syncFolder',
+                            placeholder: 'Supernote sync',
+                        },
+                    },
+                    {
+                        name: 'Path allowlist',
+                        desc: 'Limit sync to these source paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every supported file.',
+                        control: {
+                            type: 'text',
+                            key: 'syncPathFiltersRaw',
+                            placeholder: '/diary/**',
+                        },
+                    },
+                    {
+                        name: 'File extension allowlist',
+                        desc: 'Comma- or newline-separated file extensions to sync, with or without a leading dot. Use * to include every trusted regular file. A blank value syncs no files.',
+                        control: {
+                            type: 'text',
+                            key: 'syncFileExtensionsRaw',
+                            placeholder: '.note, .spd',
+                            validate: validateFileExtensionAllowlist,
+                        },
+                    },
+                    {
+                        name: 'Sync history',
+                        render: (setting) => {
+                            setting
+                                .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
+                                .addButton((btn) => {
+                                    btn.setButtonText('Forget sync history').onClick(async () => {
+                                        await this.plugin.clearActiveSyncHistory();
+                                        new Notice('Sync history cleared');
+                                    });
+                                });
+                        },
+                    },
+                    {
+                        name: 'Sync engine',
+                        render: (setting) => {
+                            setting
+                                .setDesc('Choose which sync engine is used for manual and scheduled sync.')
+                                .addDropdown((dropdown) => {
+                                    dropdown
+                                        .addOptions(SYNC_ENGINE_LABELS)
+                                        .setValue(this.plugin.getActiveSyncEngineId())
+                                        .onChange(async (value) => {
+                                            await this.plugin.setActiveSyncEngine(value as SyncEngineId);
+                                        });
+                                });
+                        },
+                    },
+                ],
+            },
+            {
+                type: 'group',
+                heading: 'IP engine',
+                items: [
+                    {
+                        name: 'Supernote IP address',
+                        desc: 'The IP address used by Browse and Access, file transfer, screen mirroring, and the Direct IP sync engine. To find it, enable Screen Mirroring and/or Browse & Access on the Supernote device.',
+                        control: {
+                            type: 'text',
+                            key: 'directConnectIP',
+                            placeholder: 'IP only e.g. 192.168.1.2',
+                            validate: (value) => {
+                                if (value !== '' && !IP_VALIDATION_PATTERN.test(value)) {
+                                    return 'Invalid IP format: must be xxx.xxx.xxx.xxx';
+                                }
+                            },
+                        },
+                    },
+                    {
+                        name: 'Device file browser sort order',
+                        desc: 'Default order to list files and folders in when browsing the supernote over a direct IP connection. Can also be changed from the browser itself.',
+                        control: {
+                            type: 'dropdown',
+                            key: 'fileBrowserSortOrder',
+                            options: FILE_BROWSER_SORT_LABELS,
+                        },
+                    },
+                ],
             },
         ];
     }
@@ -306,14 +317,19 @@ export class SupernoteSettingTab extends PluginSettingTab {
         const { containerEl } = this;
 
         containerEl.empty();
+        containerEl.classList.add('supernote-settings-sections');
         let alert: ExtraButtonComponent;
         let extensionAlert: ExtraButtonComponent;
 
-        new Setting(containerEl)
-            .setName('UI')
-            .setHeading();
+        const createSection = (heading: string): HTMLElement => {
+            const group = containerEl.createDiv({ cls: 'setting-group' });
+            new Setting(group).setName(heading).setHeading();
+            return group.createDiv({ cls: 'setting-items' });
+        };
 
-        new Setting(containerEl)
+        let sectionEl = createSection('UI');
+
+        new Setting(sectionEl)
             .setName('Invert colors in "dark mode"')
             .setDesc('When Obsidian is in "dark mode" increase image visibility by inverting colors of images')
             .addToggle(text => text
@@ -324,7 +340,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Show export buttons')
             .setDesc(
                 'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
@@ -338,7 +354,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     }),
             );
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Vector ink')
             .setDesc(
                 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
@@ -352,11 +368,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     }),
             );
 
-            new Setting(containerEl)
-                .setName('Convert')
-                .setHeading();
+            sectionEl = createSection('Convert');
 
-            new Setting(containerEl)
+            new Setting(sectionEl)
                 .setName('Export current page as')
                 .setDesc('Format the note viewer toolbar\'s page-export button saves the page as. The command palette\'s PNG/SVG-specific export commands are unaffected by this setting.')
                 .addDropdown(dropdown => dropdown
@@ -368,18 +382,17 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     })
                 );
 
-            const customDictionarySetting = new Setting(containerEl)
-                .setName('Custom dictionary')
-                .setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
-            customDictionarySetting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
-            createCustomDictionarySettingsUI(customDictionarySetting.settingEl, this.plugin);
+        const customDictionarySetting = new Setting(sectionEl)
+            .setName('Custom dictionary')
+            .setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
+        customDictionarySetting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
+        createCustomDictionarySettingsUI(customDictionarySetting.settingEl, this.plugin);
 
-        new Setting(containerEl)
-            .setName('Date-based import')
-            .setHeading()
+        sectionEl = createSection('Date-based import');
+        new Setting(sectionEl)
             .setDesc('Date-based import currently works only with the direct IP connection engine.');
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Default format')
             .setDesc('Default format used when importing today\'s (or a chosen date\'s) pages via "import new or edited pages by date". Can also be changed per-import from the import dialog.')
             .addDropdown(dropdown => dropdown
@@ -391,11 +404,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(containerEl)
-            .setName('Sync')
-            .setHeading();
+        sectionEl = createSection('Sync');
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Destination folder')
             .setDesc('Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.')
             .addText(text => text
@@ -407,7 +418,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Path allowlist')
             .setDesc('Limit sync to these source paths (comma or newline separated; supports * and ** wildcards, e.g. "/diary/**"). Leave empty to sync every supported file.')
             .addText(text => text
@@ -419,7 +430,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('File extension allowlist')
             .setDesc('Comma- or newline-separated file extensions to sync, with or without a leading dot. Use * to include every trusted regular file. A blank value syncs no files.')
             .addText(text => text
@@ -442,7 +453,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 return btn;
             });
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Sync history')
             .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
             .addButton(btn => btn
@@ -453,7 +464,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Sync engine')
             .setDesc('Choose which sync engine is used for manual and scheduled sync.')
             .addDropdown(dropdown => dropdown
@@ -464,11 +475,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(containerEl)
-            .setName('IP engine')
-            .setHeading();
+        sectionEl = createSection('IP engine');
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Supernote IP address')
             .setDesc('The IP address used by browse and access, file transfer, screen mirroring, and the direct IP sync engine. To find it, enable screen mirroring and/or browse & access on the supernote device.')
             .addText(text => text
@@ -493,7 +502,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 return btn;
             });
 
-        new Setting(containerEl)
+        new Setting(sectionEl)
             .setName('Device file browser sort order')
             .setDesc('Default order to list files and folders in when browsing the supernote over a direct IP connection. Can also be changed from the browser itself.')
             .addDropdown(dropdown => dropdown

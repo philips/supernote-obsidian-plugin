@@ -188,6 +188,32 @@
 }
 
 /* Custom dictionary settings styles */
+.supernote-settings-sections > .setting-group {
+    margin-block: 1.5em;
+}
+
+.supernote-settings-sections > .setting-group > .setting-item-heading {
+    margin: 0;
+    padding: 1em 1.25em 0.5em;
+}
+
+.supernote-settings-sections > .setting-group > .setting-items {
+    padding: 0 1.25em 0.5em;
+    border: 0;
+    border-radius: var(--radius-m);
+    background-color: var(--background-secondary);
+}
+
+.supernote-settings-sections > .setting-group > .setting-items > .setting-item {
+    margin: 0;
+    padding: 1em 0;
+    border: 0;
+}
+
+.supernote-settings-sections > .setting-group > .setting-items > .setting-item + .setting-item {
+    border-top: 1px solid var(--background-modifier-border);
+}
+
 .setting-item.supernote-settings-custom-dictionary-setting {
     flex-direction: column;
     align-items: stretch;
