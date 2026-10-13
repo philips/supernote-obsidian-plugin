@@ -62,23 +62,22 @@
   parentheses. Two stable inventories and two path-query passes covered all 116
   items; the tested canonical-path gate passed. The result and its untested
   Unicode variants are recorded in the external specification.
+- Inventory code now verifies queried path and ID-path hierarchy, reconciles
+  only the observed root-category casing, and rejects path collisions. Listing
+  parsing accepts the observed six-folder flattened root and omitted response
+  `pageNum`/`pageSize` while keeping other directory checks strict; synthetic
+  tests cover these cases. The verifier is not yet connected to the offline
+  planning pipeline, which still requires a caller-supplied verified path map.
+- Moved the dated production observations into Section 12, "Resolved Unknowns
+  and Undocumented Behaviors," of the external specification. Release acceptance
+  criteria are now Section 13; unresolved development gates remain in Section
+  11.3.
 
 ## Next
 
-- Rotate the diagnostic account password because it was previously entered
-  directly in terminal history, after the remaining protocol probes no longer
-  need a fresh login.
-- Default while the account owner is unavailable: continue offline with
-  synthetic Cloud protocol fixtures and a fake transport. Next offline work is
-  to define the verified-path provider contract and the binary Obsidian vault
-  adapter, then coordinate IP writes with the new shared manifest before any
-  Cloud engine uses it. The production Cloud engine must remain disabled until
-  canonical paths, account binding, and transfer behavior pass their authorized
-  protocol gates. Do not make production requests as part of offline work.
-- OTP interruption point: if the account owner becomes available at any time,
-  pause offline work immediately. Proceed with authentication only after the
-  user explicitly authorizes the attempt and the account owner is present to
-  receive the possible email code. The harness only reads the consent variables
+- If the cached session is rejected or expires, do not initiate a new login or
+  OTP request without explicit user authorization and the account owner present
+  to receive a possible email code. The harness only reads the consent variables
   and never clears or changes them. Login consent is used only when no reusable
   session is available.
 - Retain the cached token throughout plugin development, until the account owner
