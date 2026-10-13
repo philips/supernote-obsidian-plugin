@@ -667,8 +667,14 @@ The following questions no longer block implementation planning:
   and file-extension allowlists; it does not require a Cloud folder picker in
   the first release.
 - A dedicated, secret-redacting local protocol harness may be used with an
-  authorized test account. Credentials and complete signed download URLs must
-  not enter fixtures, source control, logs, diagnostics, or test reports.
+  authorized test account according to the temporary development plan in
+  [`cloud-protocol-harness.md`](cloud-protocol-harness.md). Credentials and
+  complete signed download URLs must not enter fixtures, source control, logs,
+  diagnostics, or test reports.
+- The protocol harness is temporary by default. Remove it after the outstanding
+  gates are resolved, the Cloud implementation is validated in Obsidian, and
+  synthetic automated tests cover the accepted protocol shapes. Retaining it
+  requires an explicit review and strong evidence of continuing value.
 
 These decisions define what to do when evidence is incomplete. They do not
 convert compatible behavior into a documented service guarantee.
@@ -681,7 +687,9 @@ error codes, or undocumented operational ceilings. The following gates still
 require the authorized local harness because the dependent capability cannot
 function without knowing the current production behavior. Record the tested
 date, request shape, response category, and secret-free result before enabling
-that capability.
+that capability. The harness's setup, execution order, pass criteria, evidence
+rules, and removal review are defined in
+[`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 The following gates block the initial Cloud release because they are required
 for its sign-in, inventory, filtering, account-safety, or download contract:
