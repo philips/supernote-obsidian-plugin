@@ -154,6 +154,8 @@ describe('Node Cloud protocol transport', () => {
             firstInventoryFingerprint: 'first-hash',
             secondInventoryFingerprint: 'first-hash',
             inventoryStable: true,
+            canonicalPathsStable: true,
+            canonicalPathEdgeFixturesObserved: false,
             pathQueryCount: 3,
             pathMatchesParent: 3,
             pathMatchesItem: 0,
@@ -166,6 +168,7 @@ describe('Node Cloud protocol transport', () => {
         });
 
         expect(report).toContain('incomplete fixture: no second page was observed');
+        expect(report).toContain('Canonical-path gate: partial: stable queried hierarchy; encoding and duplicate-name fixtures missing');
         expect(report).toContain('Session source: temporary-file');
         for (const secret of [
             'Personal Note.note',

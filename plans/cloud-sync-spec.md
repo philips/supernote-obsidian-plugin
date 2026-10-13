@@ -1,7 +1,7 @@
 # Cloud Sync External Specification
 
 **Status:** Draft for implementation planning only. **Scope date:** October
-12, 2026.
+12-13, 2026.
 
 This document specifies the externally observable contract for the proposed
 Cloud engine in `obsidian-supernote-companion`. It is a behavior-and-protocol
@@ -411,9 +411,12 @@ leading slash, for example `/Note/Work/Journal.note`.
 - A file excluded by a current filter remains outside the current transfer and
   deletion decision. It is not treated as remotely deleted.
 
-The exact relationship between public web-listing paths and a canonical Cloud
-path is **unknown** until validated with a test account. The feature must not
-enable destructive cleanup until this normalization is verified.
+The tested relationship between web-listing paths and the relative, trailing-
+slash path-query result is recorded under "Resolved Unknowns and Undocumented
+Behaviors" in Section 12. Root category casing is reconciled narrowly; a query
+that fails the verified parent/child and ID-path rules is not usable as a
+canonical path. Path validation alone does not enable destructive cleanup; the
+independent complete-inventory and local-content protections still apply.
 
 ### 7.4 File extension allowlist
 
@@ -700,14 +703,16 @@ The following questions no longer block implementation planning:
   and file-extension allowlists; it does not require a Cloud folder picker in
   the first release.
 - A dedicated, secret-redacting local protocol harness may be used with an
-  authorized test account according to the temporary development plan in
+  authorized test account according to the safety and maintenance plan in
   [`cloud-protocol-harness.md`](cloud-protocol-harness.md). Credentials and
   complete signed download URLs must not enter fixtures, source control, logs,
   diagnostics, or test reports.
-- The protocol harness is temporary by default. Remove it after the outstanding
-  gates are resolved, the Cloud implementation is validated in Obsidian, and
-  synthetic automated tests cover the accepted protocol shapes. Retaining it
-  requires an explicit review and strong evidence of continuing value.
+- Retain the protocol harness as an opt-in compatibility and documentation
+  instrument after implementation: the hosted API is undocumented, so synthetic
+  tests alone cannot detect later service changes. Keep it in `scripts/`,
+  outside routine CI and releases, and require explicit production consent and
+  review of redacted output before sharing observations. Never commit cached
+  sessions or use fixture creation as a reason to add Cloud write routes.
 
 These decisions define what to do when evidence is incomplete. They do not
 convert compatible behavior into a documented service guarantee.
@@ -721,7 +726,7 @@ require the authorized local harness because the dependent capability cannot
 function without knowing the current production behavior. Record the tested
 date, request shape, response category, and secret-free result before enabling
 that capability. The harness's setup, execution order, pass criteria, evidence
-rules, and removal review are defined in
+rules, and retention review are defined in
 [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 The following gates block the initial Cloud release because they are required
@@ -731,21 +736,25 @@ for its sign-in, inventory, filtering, account-safety, or download contract:
    The observed request used the nonce route, compatible password derivation,
    retained cookies, CSRF state, and the recorded client fields. This remains
    dated compatible behavior, not a vendor guarantee.
-2. **Inventory response shape:** confirm that 1-based requests with the Section
-   11.1 page size are accepted and identify the actual list, total, and page
-   fields needed to execute the bounded consistency policy. Failure to resolve
-   this gate blocks Cloud inventory and therefore Cloud mirroring.
-3. **Canonical paths:** compare recursive listing paths, flattened root
-   presentation, and `/api/file/path/query` results for representative nested
-   content. Failure to establish one stable normalized path blocks the shared
-   path allowlist and all path-based deletion decisions.
+2. **Inventory response shape:** resolved for the October 13 tested account:
+   1-based requests with page size 100 reached a real second page, and two
+   complete inventories matched. The hosted `pages`/`size` envelope and the
+   exact six-folder root exception are recorded above; unexpected shapes still
+   fail closed.
+3. **Canonical paths:** passed for the October 13 tested account and fixtures.
+   Two passes verified root-category case reconciliation, relative
+   trailing-slash paths, and parent/child name and ID-path hierarchy, including
+   nested files. A later two-pass run verified duplicate names across parents
+   with literal `%`, `+`, and non-ASCII characters. Unrecognized or colliding
+   forms still fail closed; this result alone does not authorize path-based
+   deletion without the remaining independent safety gates.
 4. **Current download transfer:** record the current descriptor URL scheme,
    reviewed host or host pattern, redirect behavior, required method, and
    whether an unauthenticated `GET` succeeds without forwarding Cloud
    credentials. Failure to resolve this gate blocks downloads, but no knowledge
    of future hosts is required.
-5. **Account identity field:** resolved for the tested account on October 12,
-6. `/api/user/query` returned a usable canonical decimal `userId` in two fresh
+5. **Account identity field:** resolved for the tested account on October 12;
+   `/api/user/query` returned a usable canonical decimal `userId` in two fresh
    sessions, with matching identities.
 
 The following gate is optional for the initial release:
@@ -773,7 +782,106 @@ defined above or keep that capability unavailable. A later production behavior
 that falls outside the recorded evidence reopens the relevant gate; it must not
 be silently accepted as equivalent.
 
-## 12. Release Acceptance Criteria
+## 12. Resolved Unknowns and Undocumented Behaviors
+
+These are **dated hosted-production observations**, not vendor API guarantees.
+They describe only the authorized account, requests, and fixtures tested on
+October 12-13, 2026. The tested production origin was
+`https://cloud.supernote.com`. The local harness records aggregate counts,
+response field names/types, and salted fingerprints; no account paths, remote
+IDs, credentials, tokens, signed URLs, or raw bodies belong in a published
+observation.
+
+**Authentication and identity (October 12).** Two fresh sessions began with
+`GET /api/csrf` and retained cookies and CSRF state through the login attempt.
+After the nonce request and compatible password derivation, the password-login
+route returned the `E1760` verification-required branch for the tested account.
+`POST /api/user/validcode/pre-auth` and `POST /api/user/mail/validcode/send`
+supplied the email-code continuation. In both sessions the first
+`POST /api/official/user/sms/login` returned HTTP 403; one CSRF refresh and one
+retry of that request succeeded. The same session then obtained a bearer token
+from `POST /api/user/query/token` and a usable canonical decimal `userId` from
+`POST /api/user/query`; the account ID agreed across the two sessions. This does
+not establish how rejected or expired codes, resends, or other accounts behave.
+A previously recovered token candidate was rejected by the account-identity
+query (HTTP 401) on October 13; it was not treated as a reusable session or as
+proof of a general token-expiry signal.
+
+Each fresh October 12 session followed this observed order:
+
+1. `GET /api/csrf`.
+2. `POST /api/official/user/query/random/code`.
+3. `POST /api/official/user/account/login/new` (verification required).
+4. `POST /api/user/validcode/pre-auth`.
+5. `POST /api/user/mail/validcode/send`.
+6. `POST /api/official/user/sms/login` (HTTP 403).
+7. `GET /api/csrf` (refresh).
+8. Retry `POST /api/official/user/sms/login` once (success).
+9. `POST /api/user/query/token`.
+10. `POST /api/user/query` (same canonical account identity in both sessions).
+
+The October 12 record preserved only route shapes, response categories, field
+types, cookie names, and confirmation of matching identities. Passwords,
+verification codes, session/CSRF/pre-auth tokens, valid-code keys, cookie
+values, profile values, the raw account ID, and response bodies were not
+retained. This is evidence for those two sessions, not a service-wide guarantee.
+
+**Directory listing and pagination (October 13).** With a separately validated
+cached, account-bound token and no login/OTP consent, requests used
+`POST /api/file/list/query` with `directoryId`, `order: "filename"`,
+`sequence: "asc"`, `pageNo` starting at 1, and `pageSize: 100`. The hosted
+response returned `success`, `errorCode`/`errorMsg` (null in the tested
+successes), `pages`, `size`, `total`, and `userFileVOList`. It omitted `pageNum`
+and `pageSize`, so the requested page number is used only when the response
+omits `pageNum`; a supplied unexpected page number still fails. The first
+observed root response presented six folders (Note, Document, Screenshot,
+Export, Inbox, Mystyle) on one page with `total: 5`. All six were also visible
+in the web UI. Three root entries reported parent IDs other than `0` (two
+distinct internal parents, neither an ID of another displayed root folder),
+consistent with a flattened root presentation. The implementation accepts the
+count and parent discrepancy **only** for that exact six-folder root shape; all
+other directory totals and parent relations remain strict. Child directory
+listings observed exact totals of 2/2, 1/1, and 0/0, so `total` is not generally
+zero-based. A later one-page Note listing held 80 direct entries with
+`total: 80`; after additional direct folders were created, the harness observed
+a real second page. Two complete inventory passes then matched (111 directories,
+114 items, including 110 folders and 4 files; maximum page count 2). The service
+has not been shown to provide a snapshot across pages; inconsistent totals,
+counts, or IDs must still fail closed.
+
+**Path queries (October 13).** For each of 114 items, the read-only harness
+queried `POST /api/file/path/query` by opaque ID twice. Observed `path` and
+`idPath` values were relative (no initial slash) and trailing-slash-terminated.
+All 114 ID paths ended in their queried item's ID; all 108 child ID paths
+extended the queried parent's ID path. Every child path extended its queried
+parent's path by exactly its listed name, including a `.note` file in a nested
+Note folder. All six root path leaves matched the web-listing name ignoring
+case; four differed in case, and one descendant inherited that difference.
+Adding a leading slash matched 109/114 listing-derived item paths exactly;
+reconciling only the known root-category casing explained the other five. Both
+inventory and queried-path passes were stable (228 path queries total). This
+supports a deterministic normalized path for the tested items, not an
+unrestricted case-folding or percent-decoding rule. A subsequent authorized
+fixture run on October 13 created the same `Path%+é (test)` folder name in two
+different parent folders through the official Cloud interface. Two complete
+inventories were stable (113 directories, 116 items: 112 folders and 4 files),
+and all 232 read-only path queries across two passes verified the parent/child
+path and ID-path hierarchy, with no collisions. Literal `%` and `+`, the
+fixture's Unicode spelling, spaces, parentheses, and duplicate leaf names across
+parents passed the tested **canonical-path gate**. The probe used the validated
+cached session without login or OTP. This does not establish how the service
+handles decomposed Unicode spellings or every possible path form; unknown or
+colliding forms must still fail closed. Passing this path gate alone does not
+enable deletion cleanup, which also requires the other inventory, account, and
+mirror safety gates.
+
+**Still unknown.** Download descriptor hosts, redirects, transfer method and
+integrity have not been validated against production. The hosted API's
+pagination snapshot semantics and its behavior for unsupported path forms, other
+root configurations, rejected OTPs, and future token expiry are not established
+by these observations.
+
+## 13. Release Acceptance Criteria
 
 The first Cloud release is acceptable only when all of these are true:
 

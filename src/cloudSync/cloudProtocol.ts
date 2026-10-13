@@ -67,7 +67,9 @@ export function requireNonEmptyString(response: CloudJsonObject, field: string):
 export function requireSafeInteger(response: CloudJsonObject, field: string): number {
     const value = response[field];
     if (typeof value !== 'bigint' || value < BigInt(0) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new CloudProtocolError(`Supernote Cloud response has an invalid ${field} field`);
+        const type = value === undefined ? 'missing' : value === null ? 'null'
+            : Array.isArray(value) ? 'array' : typeof value;
+        throw new CloudProtocolError(`Supernote Cloud response has an invalid ${field} field (type: ${type})`);
     }
     const parsed = Number(value);
     return parsed;

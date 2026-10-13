@@ -44,6 +44,8 @@ export interface CloudInventoryObservation {
     firstInventoryFingerprint: string;
     secondInventoryFingerprint: string;
     inventoryStable: boolean;
+    canonicalPathsStable: boolean;
+    canonicalPathEdgeFixturesObserved: boolean;
     pathQueryCount: number;
     pathMatchesParent: number;
     pathMatchesItem: number;
@@ -96,9 +98,11 @@ export function formatCloudInventoryObservation(observation: CloudInventoryObser
     const paginationStatus = observation.secondPageObserved
         ? 'pass'
         : 'incomplete fixture: no second page was observed';
-    const pathStatus = observation.pathQueryCount > 0 && observation.pathMatchesNeither === 0
-        ? 'partial: observed paths matched listed item or parent paths'
-        : 'unresolved';
+    const verifiedHierarchy = observation.inventoryStable && observation.canonicalPathsStable
+        && observation.pathQueryCount > 0;
+    const pathStatus = !verifiedHierarchy ? 'unresolved'
+        : observation.canonicalPathEdgeFixturesObserved ? 'pass: stable queried paths and edge-case fixtures'
+            : 'partial: stable queried hierarchy; encoding and duplicate-name fixtures missing';
     const lines = [
         '# Supernote Cloud Inventory Observation',
         '',
@@ -122,9 +126,11 @@ export function formatCloudInventoryObservation(observation: CloudInventoryObser
         `- First inventory fingerprint: ${observation.firstInventoryFingerprint}`,
         `- Second inventory fingerprint: ${observation.secondInventoryFingerprint}`,
         `- Path queries: ${observation.pathQueryCount}`,
-        `- Query path matched listed parent: ${observation.pathMatchesParent}`,
-        `- Query path matched listed item: ${observation.pathMatchesItem}`,
-        `- Query path matched neither: ${observation.pathMatchesNeither}`,
+        `- Queried path hierarchy stable: ${yesNo(verifiedHierarchy)}`,
+        `- Encoding and duplicate-name fixtures observed: ${yesNo(observation.canonicalPathEdgeFixturesObserved)}`,
+        `- Slash-prefixed query path matched listed parent: ${observation.pathMatchesParent}`,
+        `- Slash-prefixed query path matched listed item: ${observation.pathMatchesItem}`,
+        `- Slash-prefixed query path differed before root-case reconciliation: ${observation.pathMatchesNeither}`,
         `- All query paths absolute: ${yesNo(observation.allQueryPathsAbsolute)}`,
         `- All query paths trailing-slash-terminated: ${yesNo(observation.allQueryPathsTrailingSlash)}`,
         `- All ID paths absolute: ${yesNo(observation.allIdPathsAbsolute)}`,

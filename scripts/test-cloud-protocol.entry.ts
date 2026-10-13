@@ -2,10 +2,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 import { authenticateCloudPassword } from '../src/cloudSync/cloudAuth';
-import { collectCloudInventory, CloudInventoryItem, queryCloudPath } from '../src/cloudSync/cloudInventory';
+import { collectCloudInventory, CloudInventoryItem, CloudPathResult, queryCloudPath, verifyCloudInventoryPaths } from '../src/cloudSync/cloudInventory';
 import { CloudProtocolError } from '../src/cloudSync/cloudProtocol';
 import { formatCloudInventoryObservation } from '../src/cloudSync/cloudProtocolEvidence';
-import { CLOUD_PRODUCTION_ORIGIN } from '../src/cloudSync/cloudPolicy';
+import { CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/cloudSync/cloudPolicy';
 import { CloudRequestBudget, NodeCloudProtocolTransport } from './cloudProtocolTransport';
 import {
     getCloudProtocolSessionPath,
@@ -83,30 +83,42 @@ if (reusableSession) {
 
 const firstInventoryTransport = createTransport('inventory-pass-1');
 await firstInventoryTransport.bootstrapCsrf();
-const firstInventory = await collectCloudInventory(firstInventoryTransport, token);
+let firstInventory: Awaited<ReturnType<typeof collectCloudInventory>>;
+try {
+    firstInventory = await collectCloudInventory(firstInventoryTransport, token);
+} catch (error) {
+    const listing = firstInventoryTransport.evidence.findLast((request) => request.route === CLOUD_ROUTES.directoryList);
+    if (listing) {
+        process.stderr.write(`Directory response fields (names and types only): ${JSON.stringify(listing.responseFields)}\n`);
+    }
+    throw error;
+}
 const secondInventoryTransport = createTransport('inventory-pass-2');
 await secondInventoryTransport.bootstrapCsrf();
 const secondInventory = await collectCloudInventory(secondInventoryTransport, token);
-if (firstInventory.items.length > maximumPathQueries) {
+if (firstInventory.items.length + secondInventory.items.length > maximumPathQueries) {
     throw new CloudProtocolError(`Cloud protocol path-query limit exceeded (${maximumPathQueries})`);
 }
 
 const pathRelations = { parent: 0, item: 0, neither: 0 };
+const firstQueries = new Map<string, CloudPathResult>();
 let allQueryPathsAbsolute = true;
 let allQueryPathsTrailingSlash = true;
 let allIdPathsAbsolute = true;
 let allIdPathsTrailingSlash = true;
-const pathTransport = createTransport('path-query');
+const pathTransport = createTransport('path-query-1');
 await pathTransport.bootstrapCsrf();
 for (const item of firstInventory.items) {
     const result = await queryCloudPath(pathTransport, token, item.id);
-    const relation = classifyPathRelation(item, result.path);
+    firstQueries.set(item.id, result);
+    const relation = classifyPathRelation(item, `/${result.path.replace(/^\/+/, '')}`);
     pathRelations[relation]++;
     allQueryPathsAbsolute &&= result.path.startsWith('/');
     allQueryPathsTrailingSlash &&= result.path.endsWith('/');
     allIdPathsAbsolute &&= result.idPath.startsWith('/');
     allIdPathsTrailingSlash &&= result.idPath.endsWith('/');
 }
+const verifiedFirstPaths = verifyCloudInventoryPaths(firstInventory, firstQueries);
 
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const observationSalt = randomBytes(32);
@@ -116,6 +128,32 @@ const accountIdentityHash = createHash('sha256')
     .digest('hex');
 const firstInventoryFingerprint = fingerprintInventory(firstInventory.items, observationSalt);
 const secondInventoryFingerprint = fingerprintInventory(secondInventory.items, observationSalt);
+const namesByLeaf = new Map<string, Set<string>>();
+for (const item of firstInventory.items) {
+    const parents = namesByLeaf.get(item.fileName) ?? new Set<string>();
+    parents.add(item.parentPath);
+    namesByLeaf.set(item.fileName, parents);
+}
+const canonicalPathEdgeFixturesObserved = [...namesByLeaf.values()].some((parents) => parents.size > 1)
+    && firstInventory.items.some((item) => item.fileName.includes('%'))
+    && firstInventory.items.some((item) => item.fileName.includes('+'))
+    && firstInventory.items.some((item) => /[^\x00-\x7f]/.test(item.fileName));
+let canonicalPathsStable = false;
+if (firstInventoryFingerprint === secondInventoryFingerprint) {
+    const secondQueries = new Map<string, CloudPathResult>();
+    const secondPathTransport = createTransport('path-query-2');
+    await secondPathTransport.bootstrapCsrf();
+    for (const item of secondInventory.items) {
+        secondQueries.set(item.id, await queryCloudPath(secondPathTransport, token, item.id));
+    }
+    const verifiedSecondPaths = verifyCloudInventoryPaths(secondInventory, secondQueries);
+    canonicalPathsStable = firstInventory.items.every((item) => {
+        const first = firstQueries.get(item.id);
+        const second = secondQueries.get(item.id);
+        return first?.path === second?.path && first?.idPath === second?.idPath
+            && verifiedFirstPaths.get(item.id) === verifiedSecondPaths.get(item.id);
+    });
+}
 
 process.stdout.write(formatCloudInventoryObservation({
     date: formatLocalDate(new Date()),
@@ -133,7 +171,10 @@ process.stdout.write(formatCloudInventoryObservation({
     firstInventoryFingerprint,
     secondInventoryFingerprint,
     inventoryStable: firstInventoryFingerprint === secondInventoryFingerprint,
-    pathQueryCount: firstInventory.items.length,
+    canonicalPathsStable,
+    canonicalPathEdgeFixturesObserved,
+    pathQueryCount: firstInventory.items.length
+        + (firstInventoryFingerprint === secondInventoryFingerprint ? secondInventory.items.length : 0),
     pathMatchesParent: pathRelations.parent,
     pathMatchesItem: pathRelations.item,
     pathMatchesNeither: pathRelations.neither,

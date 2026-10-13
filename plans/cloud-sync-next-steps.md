@@ -7,8 +7,8 @@
   completion, and account identity in two fresh sessions on October 12, 2026.
 - Confirmed that OTP submission may return HTTP 403 and requires one CSRF
   refresh followed by one retry.
-- Recorded the result in
-  `plans/cloud-protocol-observations/2026-10-12-auth-identity.md`.
+- Recorded the dated, secret-free result under "Resolved Unknowns and
+  Undocumented Behaviors" in the Cloud Sync External Specification.
 - Updated the specification so password sign-in, CSRF handling, email-code
   completion, and canonical account identity reflect the dated production
   observation.
@@ -49,6 +49,19 @@
   copy, and loading can recover the previous valid revision after an interrupted
   update. Invalid or colliding legacy records and fully corrupt storage fail
   closed. The store is not yet called by the IP or Cloud engine.
+- On October 13, 2026, a validated cached token supported two stable hosted
+  inventories with a real second page and two stable path-query passes. The
+  observed `pages`/`size` listing envelope omits `pageNum`/`pageSize`; the six
+  displayed root folders report `total: 5` and some have internal parent IDs.
+  Other tested directory totals were exact, not zero-based. Relative
+  trailing-slash path queries matched the queried parent/child hierarchy after
+  reconciling only standard root-category casing. These dated facts and their
+  limits are recorded in the external specification.
+- A later October 13 read-only run verified two same-named folders under
+  different parents containing literal `%`, `+`, Unicode, spaces, and
+  parentheses. Two stable inventories and two path-query passes covered all 116
+  items; the tested canonical-path gate passed. The result and its untested
+  Unicode variants are recorded in the external specification.
 
 ## Next
 
@@ -72,20 +85,23 @@
   is ready for an end-to-end options-panel login test and explicitly approves
   cleanup. Completing protocol probes is not permission to remove it; service
   expiry or revocation can still require another authorized login.
-- After authorized authentication, immediately validate the token with the
-  account-identity query and bind the resulting canonical account identity to
-  the local session. Then run the two-pass inventory and path probe against the
-  current two-file account, recording only redacted aggregate/path-shape
-  evidence and no filenames, paths, IDs, or contents.
-- The real second-page pagination gate remains blocked until the account owner
-  prepares at least 101 synthetic files in one directory through an official
-  client. The harness remains read-only and will not manufacture this fixture.
-- Once listing and path behavior are understood, validate download descriptors,
-  redirect hosts, and checksum-protected transfers using an authorized synthetic
-  fixture. Never forward Cloud credentials or cookies to a download host.
+- On future cached-token runs, first validate the token with the
+  account-identity query and require its canonical account identity to match the
+  local session. Record only redacted aggregate/path-shape evidence from
+  two-pass inventory and path probes, never filenames, paths, IDs, or contents.
+- Continue to fail closed on unrecognized or colliding path forms. The tested
+  canonical-path gate now passes, but that does not complete the independent
+  download, account-safety, Obsidian runtime, or deletion gates. Never create or
+  remove production fixtures through harness writes.
+- Retain the harness under `scripts/` as an opt-in, bounded compatibility probe
+  outside CI and releases; review redacted observations before sharing. Its
+  retention does not authorize clearing the separately cached token.
+- Validate download descriptors, redirect hosts, and checksum-protected
+  transfers using an authorized synthetic fixture. Never forward Cloud
+  credentials or cookies to a download host.
 - After the protocol gates pass, implement the shared manifest integration and
   one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
   format conversions remain separate work.
 
-No production inventory observation, download validation, Cloud sync engine,
-shared manifest integration, or Cloud authentication UI has been completed.
+No production download validation, Cloud sync engine, shared manifest
+integration, or Cloud authentication UI has been completed.

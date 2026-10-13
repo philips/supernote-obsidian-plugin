@@ -1,20 +1,16 @@
 # Cloud Protocol Harness Plan
 
-**Status:** Temporary development plan. **Scope date:** October 12, 2026.
+**Status:** Opt-in protocol validation and compatibility plan. **Scope date:**
+October 12-13, 2026.
 
 This document defines an opt-in, secret-redacting local harness for resolving
 the production-protocol validation gates in Section 11.3 of the
 [Cloud Sync External Specification](cloud-sync-spec.md). The harness is a
-development instrument, not a product feature or a general integration-test
-fixture.
-
-The harness should exist only long enough to establish the current production
-behavior required to implement and test the Cloud engine. After the dependent
-Cloud behavior is implemented and covered by synthetic automated tests, remove
-the harness unless a specific review finds strong evidence that retaining it
-provides continuing value that cannot be met safely by those tests. Convenience
-alone is not sufficient reason to keep credential-bearing production probes in
-the project.
+development and maintenance instrument, not a product feature or a general
+integration-test fixture. Retain it under `scripts/` after the Cloud engine is
+implemented: synthetic tests establish what the plugin accepts, but cannot
+detect changes to the undocumented hosted service. As with the opt-in device
+sync and browser smoke scripts, ordinary tests and releases never run it.
 
 ## 1. Objectives
 
@@ -43,8 +39,8 @@ The account should contain:
 - Names containing spaces, `+`, parentheses, and non-ASCII characters.
 - An empty directory.
 - A file whose local bytes, length, MD5, and SHA-256 are known.
-- At least 101 small files in one directory so a page size of 100 requires a
-  real second page.
+- At least 101 direct entries (files or folders) in one directory so a page size
+  of 100 requires a real second page.
 
 Use only synthetic names and content that may safely appear in a redacted test
 report. Keep personal files out of the account.
@@ -154,24 +150,25 @@ same in both sessions. Persist only a hash of the observed value in the report.
 ### 5.3 Inventory response shape
 
 List the root and diagnostic directories with `pageNo: 1`, `pageSize: 100`,
-`order: "filename"`, and `sequence: "asc"`. Traverse the 101-item directory
+`order: "filename"`, and `sequence: "asc"`. Traverse a 101+-entry directory
 through its second page, then perform a second unchanged inventory.
 
-Pass when the harness identifies the exact item-list, total, current-page, and
-page-count or page-size fields needed by the bounded inventory policy; validates
-their observed types; reaches every expected synthetic item exactly once; and
-produces identical inventory fingerprints for two unchanged passes.
+Pass when the harness identifies the actual item-list, total, and page-count or
+page-size fields needed by the bounded inventory policy; validates their
+observed types; reaches every expected synthetic item exactly once; and produces
+identical inventory fingerprints for two unchanged passes. The October 13 hosted
+envelope used `pages` and `size` but omitted `pageNum` and `pageSize`; an absent
+current-page field is not a failure when the bounded requested page and
+accumulated total can be verified.
 
-An empty second page, inconsistent total, duplicate ID, conflicting metadata,
-unexpected page number, or unclassified pagination field fails this gate.
+An empty second page, inconsistent total outside the exact documented six-folder
+root exception, duplicate ID, conflicting metadata, unexpected supplied page
+number, or unclassified pagination field fails this gate.
 
-The currently available authorized account contains only two replaceable note
-files and its OTP mailbox is not directly accessible to the developer. It can
-establish partial root/list/path evidence without exposing names or contents,
-but it cannot pass the real second-page criterion unless the account owner first
-creates the required synthetic fixture through an official Supernote client. The
-read-only harness must not add undocumented write calls to manufacture that
-fixture and must not modify or delete the existing files.
+On October 13, the authorized account yielded a real second page and two
+matching complete inventories after the account owner created direct folders
+through the official client. The read-only harness must not add undocumented
+write calls to manufacture or remove fixtures.
 
 ### 5.4 Canonical paths
 
@@ -189,9 +186,15 @@ It should explicitly settle leading and trailing slashes, category flattening,
 percent decoding, `+` handling, Unicode normalization, duplicate leaf names, and
 whether the path query describes the item or only its parent.
 
-Pass when one deterministic normalization produces unique, stable paths with a
-leading slash and agrees across two complete inventories. Any unexplained path
-disagreement keeps filtering and path-based deletion unavailable.
+On October 13, relative trailing-slash query paths were stable across two passes
+after reconciling known root-category casing; a nested `.note` file agreed with
+its queried parent. A second two-pass run verified two same-named folders under
+different parents containing literal `%`, `+`, Unicode, spaces, and parentheses
+(116 items, 232 path queries). The tested path gate passed: one deterministic
+normalization produced unique stable leading-slash paths. This does not
+establish every Unicode representation or authorize deletion without the other
+safety gates. Any unexplained path disagreement keeps filtering and path-based
+deletion unavailable.
 
 ### 5.5 Download transfer
 
@@ -232,15 +235,17 @@ constraint.
 
 ## 7. Evidence And Automated Tests
 
-For each run, produce or update a dated, reviewed protocol observation that
-contains:
+For each meaningful new production finding, review the temporary harness output
+and update the dated "Resolved Unknowns and Undocumented Behaviors" section of
+[Cloud Sync External Specification](cloud-sync-spec.md), rather than keeping
+per-run observation files. Where applicable, record:
 
 - Production base origin and test date.
 - Harness and Cloud implementation commit identifiers.
 - Secret-free request shapes and response schemas.
 - Reviewed download hosts and redirect origins.
 - Synthetic fixture counts and inventory fingerprints.
-- Pass, fail, or unavailable status for every Section 11.3 gate.
+- Pass, fail, or unavailable status for the relevant Section 11.3 gate.
 - Capabilities that must remain disabled.
 
 After review, create synthetic JSON and transfer fixtures that reproduce the
@@ -248,20 +253,22 @@ observed structures without production values. Parser, inventory, path,
 transfer, and failure-policy tests must use those synthetic fixtures, never
 captured production responses.
 
-## 8. Removal Review
+## 8. Retention And Sharing Review
 
-Remove the harness, its package script, and any production-probe-only support
-code after all of the following are true:
+Keep the harness and synthetic tests as separate tools: the former checks the
+current hosted protocol with explicit account-owner authorization, and the
+latter runs without credentials or network access in ordinary CI. The harness
+stays opt-in, read-only apart from expressly authorized authentication, bounded,
+credential-external, secret-redacting, and excluded from CI, release builds, and
+automatic schedules. Do not ship token caches or recovery files; their separate
+cleanup timing remains governed by Section 4.
 
-- Required Section 11.3 gates have dated, reviewed observations.
-- The Cloud implementation uses the verified request and response contracts.
-- Synthetic automated tests cover the accepted shapes and fail-closed variants.
-- The end-to-end Cloud workflow has passed in the intended Obsidian runtime.
-- No unresolved protocol question requires another production observation.
-
-Retain the dated secret-free observations and synthetic tests after removing the
-harness. Retention of the harness requires an explicit decision documented in
-this plan or its successor, supported by strong evidence such as a recurring
-service-compatibility need that synthetic tests cannot address. If retained, it
-must remain opt-in, credential-external, secret-redacting, bounded, and excluded
-from ordinary CI and release execution.
+Before publishing or sharing a harness run, review the output for account names,
+file paths, remote IDs, profile fields, tokens, cookies, raw responses, signed
+URLs, and stable account-identifying hashes. Publish only a dated, manually
+reviewed, secret-free observation and synthetic fixtures, not the live output by
+default. Re-review the route allowlist, consent gates, request budget,
+redaction, cache permissions, and documentation whenever the hosted protocol or
+the harness changes. Remove the harness only after an explicit maintainer
+decision that its compatibility value no longer justifies its credential-bearing
+production surface.

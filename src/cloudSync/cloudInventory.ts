@@ -83,6 +83,7 @@ export async function collectCloudInventory(
     for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
         const directory = queue[queueIndex];
         const listing = await readCloudDirectory(transport, accessToken, directory.id);
+        const flattenedRoot = isObservedFlattenedRoot(directory.id, listing);
         directories.push({
             id: directory.id,
             path: directory.path,
@@ -91,7 +92,7 @@ export async function collectCloudInventory(
         });
 
         for (const entry of listing.entries) {
-            if (entry.directoryId !== directory.id) {
+            if (entry.directoryId !== directory.id && !flattenedRoot) {
                 throw new CloudProtocolError('Supernote Cloud directory item has an unexpected parent ID');
             }
             if (itemIds.has(entry.id)) {
@@ -144,6 +145,77 @@ export async function queryCloudPath(
     };
 }
 
+export function verifyCloudInventoryPaths(
+    inventory: CloudInventoryPass,
+    queriedPaths: ReadonlyMap<string, CloudPathResult>,
+): Map<string, string> {
+    if (queriedPaths.size !== inventory.items.length) {
+        throw new CloudProtocolError('Supernote Cloud path queries did not cover the inventory');
+    }
+    const rootCategories = new Set(['Note', 'Document', 'Screenshot', 'Export', 'Inbox', 'Mystyle']);
+    const foldersByPath = new Map(inventory.items.filter((item) => item.isFolder)
+        .map((item) => [item.parentDerivedPath, item]));
+    const canonicalPaths = new Map<string, string>();
+    const uniquePaths = new Set<string>();
+    const uniqueIdPaths = new Set<string>();
+
+    for (const item of inventory.items) {
+        const query = queriedPaths.get(item.id);
+        if (!query) throw new CloudProtocolError('Supernote Cloud item is missing a path query');
+        const pathSegments = parseQueriedSegments(query.path);
+        const idSegments = parseQueriedSegments(query.idPath);
+        if (!idSegments.every((segment) => /^(0|[1-9]\d*)$/.test(segment)) || idSegments.at(-1) !== item.id) {
+            throw new CloudProtocolError('Supernote Cloud item has an inconsistent ID path');
+        }
+        const fileName = item.fileName.normalize('NFC');
+        if (pathSegments.at(-1) !== fileName) {
+            const rootCategory = item.depth === 1 && item.isFolder && rootCategories.has(item.fileName);
+            if (!rootCategory || pathSegments.length !== 1 || pathSegments[0].toLowerCase() !== fileName.toLowerCase()) {
+                throw new CloudProtocolError('Supernote Cloud item path does not match its listed name');
+            }
+        }
+
+        let canonicalPath: string;
+        if (item.depth === 1) {
+            if (pathSegments.length !== 1) throw new CloudProtocolError('Supernote Cloud root path is inconsistent');
+            canonicalPath = `/${fileName}`;
+        } else {
+            const parent = foldersByPath.get(item.parentPath);
+            const parentQuery = parent && queriedPaths.get(parent.id);
+            const verifiedParent = parent && canonicalPaths.get(parent.id);
+            if (!parentQuery || !verifiedParent) throw new CloudProtocolError('Supernote Cloud path parent is missing');
+            const parentSegments = parseQueriedSegments(parentQuery.path);
+            const parentIdSegments = parseQueriedSegments(parentQuery.idPath);
+            if (pathSegments.length !== parentSegments.length + 1
+                || pathSegments.slice(0, -1).some((segment, index) => segment !== parentSegments[index])
+                || idSegments.length !== parentIdSegments.length + 1
+                || idSegments.slice(0, -1).some((segment, index) => segment !== parentIdSegments[index])) {
+                throw new CloudProtocolError('Supernote Cloud path does not extend its listed parent');
+            }
+            canonicalPath = `${verifiedParent}/${fileName}`;
+        }
+        if (uniquePaths.has(canonicalPath) || uniqueIdPaths.has(query.idPath)) {
+            throw new CloudProtocolError('Supernote Cloud inventory contains colliding paths');
+        }
+        uniquePaths.add(canonicalPath);
+        uniqueIdPaths.add(query.idPath);
+        canonicalPaths.set(item.id, canonicalPath);
+    }
+    return canonicalPaths;
+}
+
+function parseQueriedSegments(path: string): string[] {
+    if (path.startsWith('/') || !path.endsWith('/')) {
+        throw new CloudProtocolError('Supernote Cloud returned an unexpected path form');
+    }
+    const segments = path.slice(0, -1).split('/').map((segment) => segment.normalize('NFC'));
+    if (segments.some((segment) => !segment || segment === '.' || segment === '..'
+        || segment.includes('\\') || [...segment].some((character) => character.charCodeAt(0) < 32))) {
+        throw new CloudProtocolError('Supernote Cloud returned an unsafe path segment');
+    }
+    return segments;
+}
+
 async function readCloudDirectory(
     transport: CloudControlPlaneTransport,
     accessToken: string,
@@ -181,14 +253,34 @@ async function readCloudDirectory(
         }
 
         if (pageNumber === page.pageCount || (page.pageCount === 0 && pageNumber === 1)) {
-            if (entries.length !== page.total) {
-                throw new CloudProtocolError('Supernote Cloud directory listing total is inconsistent');
+            // On October 13, 2026, the hosted root listed all six standard
+            // folders with total=5; each child reported an exact item total.
+            // Limit this exception to that observed root shape.
+            const observedRootException = isObservedFlattenedRoot(directoryId, {
+                entries, pageCount: page.pageCount, total: page.total,
+            });
+            if (entries.length !== page.total && !observedRootException) {
+                const folderCount = entries.filter((entry) => entry.isFolder).length;
+                throw new CloudProtocolError(
+                    `Supernote Cloud directory listing total is inconsistent (entries: ${entries.length}, files: ${entries.length - folderCount}, folders: ${folderCount}, total: ${page.total}, pages: ${page.pageCount})`,
+                );
             }
             return { entries, pageCount: page.pageCount, total: page.total };
         }
     }
 
     throw new CloudProtocolError(`Supernote Cloud directory exceeded ${CLOUD_MAX_PAGES_PER_DIRECTORY} pages`);
+}
+
+function isObservedFlattenedRoot(
+    directoryId: string,
+    listing: { entries: CloudDirectoryEntry[]; pageCount: number; total: number },
+): boolean {
+    if (directoryId !== '0' || listing.pageCount !== 1 || listing.total !== 5 || listing.entries.length !== 6) {
+        return false;
+    }
+    const names = new Set(['Note', 'Document', 'Screenshot', 'Export', 'Inbox', 'Mystyle']);
+    return listing.entries.every((entry) => entry.isFolder && names.delete(entry.fileName)) && names.size === 0;
 }
 
 export function parseCloudDirectoryPage(
@@ -199,9 +291,12 @@ export function parseCloudDirectoryPage(
     const parsed = parseCloudObject(response);
     requireCloudSuccess(parsed);
 
-    const pageNumber = requireSafeInteger(parsed, 'pageNum');
+    // The October 13, 2026 hosted listing omitted pageNum/pageSize but returned
+    // pages/size/total. Use the requested page only when no pageNum is supplied;
+    // the complete item count and duplicate-ID checks still gate the traversal.
+    const pageNumber = parsed.pageNum === undefined ? expectedPageNumber : requireSafeInteger(parsed, 'pageNum');
     const pageCount = requireSafeInteger(parsed, 'pages');
-    const pageSize = requireSafeInteger(parsed, 'pageSize');
+    const pageSize = requireSafeInteger(parsed, parsed.pageSize === undefined ? 'size' : 'pageSize');
     const total = requireSafeInteger(parsed, 'total');
     if (pageNumber !== expectedPageNumber) {
         throw new CloudProtocolError('Supernote Cloud returned an unexpected directory page number');
