@@ -77,15 +77,15 @@
   reviewed HTTPS hosts at every redirect, limits redirects and streamed bytes,
   and omits ambient credentials and referrers. No hosts are approved by default;
   this is not wired to descriptor retrieval or the Cloud mirror engine.
-- Added an opt-in, descriptor-only harness mode and a synthetic test. It requires
-  an explicitly designated replaceable file ID and a bound reusable session,
-  validates account identity first, requests only a `type: "0"` descriptor, and
-  prints only scheme class, host class, and checksum format. It never fetches
-  the returned URL, logs in, or saves descriptor values.
+- Added an opt-in, descriptor-only harness mode and a synthetic test. It
+  requires an explicitly designated replaceable file ID and a bound reusable
+  session, validates account identity first, requests only a `type: "0"`
+  descriptor, and prints only scheme class, host class, and checksum format. It
+  never fetches the returned URL, logs in, or saves descriptor values.
 - On October 13, 2026, an explicitly approved descriptor-only probe for a
-  disposable test file passed cached-session account validation and returned
-  an HTTPS URL on a host outside the Cloud API origin with a well-formed MD5
-  field. The URL and checksum value were not retained or printed. This does not
+  disposable test file passed cached-session account validation and returned an
+  HTTPS URL on a host outside the Cloud API origin with a well-formed MD5 field.
+  The URL and checksum value were not retained or printed. This does not
   establish an approved download host, redirect behavior, byte integrity, or
   whether the descriptor checksum matches the inventory checksum.
 
@@ -115,8 +115,8 @@
   transfers using an authorized synthetic fixture. Never forward Cloud
   credentials or cookies to a download host.
 - Review the descriptor host locally before separately authorizing a transfer;
-  the redacted descriptor probe did not validate redirects or download bytes.
-  A future host-review probe needs its own scoped authorization and should not
+  the redacted descriptor probe did not validate redirects or download bytes. A
+  future host-review probe needs its own scoped authorization and should not
   print or persist signed URLs, query strings, or other credentials.
 - After the protocol gates pass, implement the shared manifest integration and
   one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
