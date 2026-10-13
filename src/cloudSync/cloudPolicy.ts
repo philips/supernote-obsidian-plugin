@@ -22,6 +22,7 @@ export const CLOUD_ROUTES = {
     accountIdentity: '/api/user/query',
     directoryList: '/api/file/list/query',
     pathQuery: '/api/file/path/query',
+    downloadDescriptor: '/api/file/download/url',
 } as const;
 
 // Candidate request shape from compatible hosted-Cloud clients. The protocol

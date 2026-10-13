@@ -13,6 +13,7 @@
 		"lint": "eslint .",
 		"test": "vitest run",
 		"test:cloud-protocol": "node scripts/test-cloud-protocol.mjs",
+		"test:cloud-descriptor": "node scripts/test-cloud-protocol.mjs descriptor",
 		"typecheck:cloud-protocol": "tsc -p tsconfig.cloud-protocol.json --noEmit",
 		"test:device-sync": "node scripts/test-device-sync.mjs",
 		"test:webcomponent:playwright": "npm run build:webcomponent && node scripts/test-webcomponent-playwright.mjs",

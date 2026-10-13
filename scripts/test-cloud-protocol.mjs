@@ -8,10 +8,14 @@ import { pathToFileURL } from 'node:url';
 
 const temporaryDirectory = await mkdtemp(`${tmpdir()}/supernote-cloud-protocol-`);
 const outputFile = resolve(temporaryDirectory, 'test-cloud-protocol.mjs');
+const descriptorMode = process.argv[2] === 'descriptor';
+if (process.argv.length > 3 || (process.argv[2] && !descriptorMode)) {
+    throw new Error('Expected optional descriptor mode');
+}
 
 try {
     await build({
-        entryPoints: [resolve('scripts/test-cloud-protocol.entry.ts')],
+        entryPoints: [resolve(descriptorMode ? 'scripts/test-cloud-descriptor.entry.ts' : 'scripts/test-cloud-protocol.entry.ts')],
         outfile: outputFile,
         bundle: true,
         format: 'esm',

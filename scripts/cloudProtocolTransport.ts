@@ -25,6 +25,7 @@ const AUTH_IDENTITY_ROUTES = new Set<string>([
     CLOUD_ROUTES.accountIdentity,
     CLOUD_ROUTES.directoryList,
     CLOUD_ROUTES.pathQuery,
+    CLOUD_ROUTES.downloadDescriptor,
 ]);
 const FIXED_VALUE_FIELDS = new Set(['browser', 'countryCode', 'equipment', 'language', 'loginMethod']);
 
