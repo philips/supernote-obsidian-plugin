@@ -99,8 +99,8 @@ contract terms:
 | Finding                     | Evidence                                                                                                                                                               | Specification disposition                                                                                                                                       |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Password derivation         | Three hosted-Cloud clients and one Private Cloud client independently use `SHA256(MD5(plaintext password) + randomCode)`.                                              | Use this derivation for the first login attempt. Do not implement the alternative derivation unless later evidence requires it.                                 |
-| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch passed an authorized hosted-service test in two fresh sessions on October 12, 2026; this remains dated compatible behavior. |
-| CSRF/session state          | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403.                | The October 12, 2026 test observed one CSRF refresh and one OTP retry after HTTP 403 in both fresh sessions. |
+| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch passed an authorized hosted-service test in two fresh sessions on October 12, 2026; this remains dated compatible behavior.                          |
+| CSRF/session state          | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403.                | The October 12, 2026 test observed one CSRF refresh and one OTP retry after HTTP 403 in both fresh sessions.                                                    |
 | Identifier precision        | Compatible clients represent file and directory IDs as strings, and published examples include values above JavaScript's safe-integer limit.                           | Store and transmit identifiers as canonical decimal strings; never round-trip them through JavaScript `number`.                                                 |
 | Pagination origin           | Hosted and Private Cloud clients begin with `pageNo: 1`; compatible models expose `pages`, `pageNum`, and page-size fields.                                            | Use 1 as the first page. Maximum size and cross-page consistency remain unknown.                                                                                |
 | Download transfer           | Three hosted-Cloud clients request `type: 0`, then perform an unauthenticated HTTP `GET` of the returned URL.                                                          | `GET` without `x-access-token` is the compatibility baseline. Validate the current production host and redirect chain; future unrecognized hosts fail per file. |
@@ -727,9 +727,9 @@ The following gates block the initial Cloud release because they are required
 for its sign-in, inventory, filtering, account-safety, or download contract:
 
 1. **Password sign-in:** resolved for the tested account on October 12, 2026.
-  The observed request used the nonce route, compatible password derivation,
-  retained cookies, CSRF state, and the recorded client fields. This remains
-  dated compatible behavior, not a vendor guarantee.
+   The observed request used the nonce route, compatible password derivation,
+   retained cookies, CSRF state, and the recorded client fields. This remains
+   dated compatible behavior, not a vendor guarantee.
 2. **Inventory response shape:** confirm that 1-based requests with the Section
    11.1 page size are accepted and identify the actual list, total, and page
    fields needed to execute the bounded consistency policy. Failure to resolve
@@ -744,15 +744,15 @@ for its sign-in, inventory, filtering, account-safety, or download contract:
    credentials. Failure to resolve this gate blocks downloads, but no knowledge
    of future hosts is required.
 5. **Account identity field:** resolved for the tested account on October 12,
-  2026. `/api/user/query` returned a usable canonical decimal `userId` in two
-  fresh sessions, with matching identities.
+6. `/api/user/query` returned a usable canonical decimal `userId` in two fresh
+   sessions, with matching identities.
 
 The following gate is optional for the initial release:
 
 6. **Email-code sign-in:** the successful `E1760` continuation, final token
-  retrieval, and account identity were observed in two fresh sessions on
-  October 12, 2026. Rejected/expired-code and resend/restart production cases
-  remain untested and must retain fail-closed handling.
+   retrieval, and account identity were observed in two fresh sessions on
+   October 12, 2026. Rejected/expired-code and resend/restart production cases
+   remain untested and must retain fail-closed handling.
 
 A successful test resolves only the observed production behavior needed by the
 implemented capability. It is not evidence that the service can never change.
