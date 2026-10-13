@@ -33,6 +33,16 @@
   caller-verified canonical paths, compares Cloud checksums with manifest
   snapshots, protects locally edited copies, re-queues missing copies, and
   applies shared path and extension filters. It does not fetch or write files.
+- Added an offline, synthetic-tested inventory-to-manifest boundary: complete
+  inventories require explicit per-ID canonical paths, vault-local hashes feed
+  planning, and a versioned destination-keyed manifest can adapt existing IP
+  records without inventing Cloud checksums. `.supernote-sync` is reserved for
+  mirror metadata. Planning and writes reject a mismatched account binding.
+- Added a fake-transfer/fake-vault byte-write boundary that checks size and MD5
+  through an injected digest provider, protects local edits immediately before
+  writing, and re-baselines identical IP bytes without rewriting. No production
+  download transport, vault adapter, manifest persistence, or Cloud engine is
+  wired up yet.
 
 ## Next
 
@@ -40,12 +50,12 @@
   directly in terminal history, after the remaining protocol probes no longer
   need a fresh login.
 - Default while the account owner is unavailable: continue offline with
-  synthetic Cloud protocol fixtures and a fake transport. Recommended next
-  implementation step is to connect verified canonical paths to the planner,
-  define the versioned shared manifest and metadata reservation, and test the
-  raw-byte-only write boundary with fake transport and vault. The planner is
-  not yet wired into a Cloud engine; do not make production requests as part
-  of this offline work.
+  synthetic Cloud protocol fixtures and a fake transport. Next offline work is
+  to define safe manifest persistence and IP migration, the Obsidian vault
+  adapter, and the verified-path provider contract. The production Cloud engine
+  must remain disabled until canonical paths, account binding, and transfer
+  behavior pass their authorized protocol gates. Do not make production
+  requests as part of offline work.
 - OTP interruption point: if the account owner becomes available at any time,
   pause offline work immediately. Proceed with authentication only after the
   user explicitly authorizes the attempt and the account owner is present to
@@ -65,9 +75,8 @@
   prepares at least 101 synthetic files in one directory through an official
   client. The harness remains read-only and will not manufacture this fixture.
 - Once listing and path behavior are understood, validate download descriptors,
-  redirect hosts, and checksum-protected transfers using an authorized
-  synthetic fixture. Never forward Cloud credentials or cookies to a download
-  host.
+  redirect hosts, and checksum-protected transfers using an authorized synthetic
+  fixture. Never forward Cloud credentials or cookies to a download host.
 - After the protocol gates pass, implement the shared manifest integration and
   one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
   format conversions remain separate work.

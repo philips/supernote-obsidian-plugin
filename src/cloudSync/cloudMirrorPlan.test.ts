@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_FILE_EXTENSION_ALLOWLIST } from '../syncFilters';
 import { CloudInventoryItem } from './cloudInventory';
-import { planCloudMirror, VerifiedCloudFile } from './cloudMirrorPlan';
+import { bindVerifiedCloudPaths, planCloudMirror, VerifiedCloudFile } from './cloudMirrorPlan';
 
 function file(path: string, id: string, md5: string | null = '0123456789abcdef0123456789abcdef'): VerifiedCloudFile {
     const fileName = path.split('/').at(-1)!;
@@ -13,6 +13,20 @@ function file(path: string, id: string, md5: string | null = '0123456789abcdef01
 }
 
 describe('Cloud mirror planning boundary', () => {
+    it('binds a complete inventory only to explicitly verified file paths', () => {
+        const first = file('/Note/First.note', '100');
+        const second = file('/Note/Second.note', '101');
+        const inventory = { directories: [], items: [first.item, second.item] };
+        expect(bindVerifiedCloudPaths(inventory, {
+            '100': '/Note/First.note', '101': '/Note/Second.note',
+        }).map((entry) => entry.canonicalPath)).toEqual(['/Note/First.note', '/Note/Second.note']);
+        expect(() => bindVerifiedCloudPaths(inventory, { '100': '/Note/First.note' }))
+            .toThrow('Missing verified Cloud file path');
+        expect(() => bindVerifiedCloudPaths({ directories: [], items: [first.item, first.item] }, {
+            '100': '/Note/First.note',
+        })).toThrow('duplicate file IDs');
+    });
+
     it('uses verified paths and shared hash ownership when classifying inventory', () => {
         const files = [
             file('/Note/Changed.note', '1', '11111111111111111111111111111111'),
@@ -70,5 +84,7 @@ describe('Cloud mirror planning boundary', () => {
         expect(() => plan([file('/Note/../escape.note', '1')])).toThrow('Unsafe verified Cloud path');
         expect(() => plan([file('/Note/Same.note', '1'), file('/Note/Same.note', '2')]))
             .toThrow('colliding paths');
+        expect(() => plan([file('/.supernote-sync/history.note', '3')]))
+            .toThrow('reserved mirror metadata');
     });
 });

@@ -434,9 +434,9 @@ shared sync destination root. A remote name or path that cannot be represented
 safely below that root is a protected per-file failure. It must not create,
 overwrite, move, or delete a file outside that root.
 
-The Cloud metadata directory is reserved beneath the root. A remote path that
-collides with reserved metadata is not mirrored until the collision has a
-documented, safe user-visible resolution.
+The `.supernote-sync` Cloud metadata directory is reserved beneath the root. A
+remote path that collides with reserved metadata is not mirrored until the
+collision has a documented, safe user-visible resolution.
 
 IP and Cloud use one shared mirror manifest. An entry means the sync system
 manages that vault path; its engine-specific source metadata is a replaceable

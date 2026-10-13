@@ -1,0 +1,57 @@
+import { SyncManifest } from '../deviceSync';
+import { CloudMirrorRecord } from './cloudMirrorPlan';
+
+export const MIRROR_METADATA_DIRECTORY = '.supernote-sync';
+
+export interface SharedMirrorRecord {
+    contentHash: string;
+    source: {
+        engineId: 'ip-device';
+        deviceUri: string;
+        deviceDate: string;
+        deviceSize: number;
+    } | {
+        engineId: 'supernote-cloud';
+        md5: string;
+    };
+}
+
+export interface SharedMirrorManifest {
+    version: 1;
+    cloudAccountFingerprint: string | null;
+    records: Record<string, SharedMirrorRecord>;
+}
+
+export function requireBoundCloudAccount(manifest: SharedMirrorManifest, fingerprint: string): void {
+    if (!fingerprint || !manifest.cloudAccountFingerprint
+        || manifest.cloudAccountFingerprint !== fingerprint) {
+        throw new Error('Cloud mirror account binding is missing or does not match');
+    }
+}
+
+export function fromIpSyncManifest(legacy: SyncManifest): SharedMirrorManifest {
+    const records: Record<string, SharedMirrorRecord> = {};
+    for (const record of Object.values(legacy)) {
+        if (Object.hasOwn(records, record.vaultPath)) {
+            throw new Error('IP manifest contains duplicate mirror destinations');
+        }
+        records[record.vaultPath] = {
+            contentHash: record.contentHash,
+            source: {
+                engineId: 'ip-device',
+                deviceUri: record.deviceUri,
+                deviceDate: record.deviceDate,
+                deviceSize: record.deviceSize,
+            },
+        };
+    }
+    return { version: 1, cloudAccountFingerprint: null, records };
+}
+
+export function cloudPlanningRecords(manifest: SharedMirrorManifest): Record<string, CloudMirrorRecord> {
+    return Object.fromEntries(Object.entries(manifest.records).map(([path, record]) => [
+        path,
+        { contentHash: record.contentHash, cloudMd5: record.source.engineId === 'supernote-cloud'
+            ? record.source.md5 : undefined },
+    ]));
+}

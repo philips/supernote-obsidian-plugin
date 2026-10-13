@@ -1,9 +1,24 @@
 import { matchesAnyPathPattern, matchesFileExtension, FileExtensionAllowlist } from '../syncFilters';
-import { CloudInventoryItem } from './cloudInventory';
+import { CloudInventoryItem, CloudInventoryPass } from './cloudInventory';
+import { MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
 
 export interface VerifiedCloudFile {
     item: CloudInventoryItem;
     canonicalPath: string;
+}
+
+export function bindVerifiedCloudPaths(
+    inventory: CloudInventoryPass,
+    canonicalPathsById: Readonly<Record<string, string>>,
+): VerifiedCloudFile[] {
+    const seen = new Set<string>();
+    return inventory.items.filter((item) => !item.isFolder).map((item) => {
+        if (seen.has(item.id)) throw new Error('Cloud inventory contains duplicate file IDs');
+        seen.add(item.id);
+        const canonicalPath = Object.hasOwn(canonicalPathsById, item.id) ? canonicalPathsById[item.id] : undefined;
+        if (!canonicalPath) throw new Error('Missing verified Cloud file path');
+        return { item, canonicalPath };
+    });
 }
 
 export interface CloudMirrorRecord {
@@ -43,6 +58,9 @@ export function planCloudMirror(
         const segments = file.canonicalPath.split('/');
         if (segments[0] !== '' || segments.length < 2 || segments.slice(1).some((segment) => !isSafeSegment(segment))) {
             throw new Error('Unsafe verified Cloud path');
+        }
+        if (segments[1] === MIRROR_METADATA_DIRECTORY) {
+            throw new Error('Cloud path collides with reserved mirror metadata');
         }
         const vaultPath = `${root}/${segments.slice(1).join('/')}`;
         if (destinations.has(vaultPath)) throw new Error('Cloud inventory contains colliding paths');
