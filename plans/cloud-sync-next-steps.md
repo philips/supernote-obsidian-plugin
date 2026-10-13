@@ -43,6 +43,12 @@
   writing, and re-baselines identical IP bytes without rewriting. No production
   download transport, vault adapter, manifest persistence, or Cloud engine is
   wired up yet.
+- Added an offline two-slot shared-manifest store and Obsidian vault storage
+  adapter under `.supernote-sync`. First load copies valid legacy IP history
+  without deleting settings, later writes alternate slots and verify the new
+  copy, and loading can recover the previous valid revision after an interrupted
+  update. Invalid or colliding legacy records and fully corrupt storage fail
+  closed. The store is not yet called by the IP or Cloud engine.
 
 ## Next
 
@@ -51,11 +57,11 @@
   need a fresh login.
 - Default while the account owner is unavailable: continue offline with
   synthetic Cloud protocol fixtures and a fake transport. Next offline work is
-  to define safe manifest persistence and IP migration, the Obsidian vault
-  adapter, and the verified-path provider contract. The production Cloud engine
-  must remain disabled until canonical paths, account binding, and transfer
-  behavior pass their authorized protocol gates. Do not make production requests
-  as part of offline work.
+  to define the verified-path provider contract and the binary Obsidian vault
+  adapter, then coordinate IP writes with the new shared manifest before any
+  Cloud engine uses it. The production Cloud engine must remain disabled until
+  canonical paths, account binding, and transfer behavior pass their authorized
+  protocol gates. Do not make production requests as part of offline work.
 - OTP interruption point: if the account owner becomes available at any time,
   pause offline work immediately. Proceed with authentication only after the
   user explicitly authorizes the attempt and the account owner is present to

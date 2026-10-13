@@ -1,6 +1,8 @@
 import { SyncManifest } from '../deviceSync';
 import { CloudMirrorRecord } from './cloudMirrorPlan';
 
+// Kept below the shared sync root so IP and Cloud reserve the same location;
+// remote paths using this first segment must not shadow plugin metadata.
 export const MIRROR_METADATA_DIRECTORY = '.supernote-sync';
 
 export interface SharedMirrorRecord {
@@ -30,6 +32,8 @@ export function requireBoundCloudAccount(manifest: SharedMirrorManifest, fingerp
 }
 
 export function fromIpSyncManifest(legacy: SyncManifest): SharedMirrorManifest {
+    // Migration is keyed by destination because that is the resource both
+    // engines manage. Conflicting old sources cannot be merged safely.
     const records: Record<string, SharedMirrorRecord> = {};
     for (const record of Object.values(legacy)) {
         if (Object.hasOwn(records, record.vaultPath)) {

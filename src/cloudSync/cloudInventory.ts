@@ -17,6 +17,9 @@ import {
     CLOUD_ROUTES,
 } from './cloudPolicy';
 
+// Parent-derived paths are useful for traversal and diagnostics, but are not
+// treated as canonical Cloud paths: production's flattened folder presentation
+// leaves that relationship unresolved until each file's path query is checked.
 export interface CloudDirectoryEntry {
     id: string;
     directoryId: string;
@@ -69,6 +72,8 @@ export async function collectCloudInventory(
     transport: CloudControlPlaneTransport,
     accessToken: string,
 ): Promise<CloudInventoryPass> {
+    // Return only after every queued directory and page has validated. Callers
+    // must never infer remote deletion from a partially completed traversal.
     const directories: CloudInventoryDirectory[] = [];
     const items: CloudInventoryItem[] = [];
     const itemIds = new Set<string>();
@@ -144,6 +149,9 @@ async function readCloudDirectory(
     accessToken: string,
     directoryId: string,
 ): Promise<{ entries: CloudDirectoryEntry[]; pageCount: number; total: number }> {
+    // Listings are treated as live queries, not snapshots. Repeated IDs or a
+    // changing total/page count make the pass incomplete rather than selecting
+    // whichever page happened to arrive last.
     const entries: CloudDirectoryEntry[] = [];
     const ids = new Set<string>();
     let expectedTotal: number | null = null;
@@ -267,6 +275,8 @@ function isCloudJsonObject(value: unknown): value is CloudJsonObject {
 }
 
 function appendCloudPath(parentPath: string, fileName: string): string {
+    // Reject separators before joining: decoding or normalizing an unsafe name
+    // later could turn one remote leaf into a vault path outside its parent.
     const hasControlCharacters = [...fileName].some((character) => {
         const characterCode = character.charCodeAt(0);
         return characterCode <= 31 || characterCode === 127;

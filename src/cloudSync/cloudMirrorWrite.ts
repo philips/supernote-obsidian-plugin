@@ -2,6 +2,9 @@ import { hashBytes } from '../deviceSync';
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
 import { requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
 
+// These ports keep protocol/download and Obsidian details out of the safety
+// decision, allowing byte integrity and overwrite behavior to be tested with
+// deterministic fakes.
 export interface CloudMirrorVault {
     read(path: string): Promise<Uint8Array | null>;
     write(path: string, bytes: Uint8Array): Promise<void>;
@@ -25,6 +28,8 @@ export async function applyCloudDownload(
     transfer: CloudMirrorTransfer,
     maxFileBytes: number,
 ): Promise<CloudMirrorWriteResult> {
+    // Check binding and advertised limits before asking the transfer port for
+    // bytes; no account mismatch or obviously oversized item should download.
     requireBoundCloudAccount(manifest, accountFingerprint);
     const advertisedSize = candidate.item.size;
     const expectedMd5 = candidate.item.md5;
@@ -44,6 +49,9 @@ export async function applyCloudDownload(
     const existingHash = existing === null ? null : hashBytes(existing);
     const incomingHash = hashBytes(bytes);
     const record = manifest.records[candidate.vaultPath];
+    // Re-read after download: planning happened earlier, and the user may have
+    // edited the file while bytes were in flight. An unowned collision is only
+    // adoptable when its bytes already equal the verified download.
     if (existingHash !== null && (record
         ? existingHash !== record.contentHash
         : existingHash !== incomingHash)) {

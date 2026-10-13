@@ -5,6 +5,9 @@ import { bindVerifiedCloudPaths, CloudMirrorPlan, planCloudMirror } from './clou
 import { CloudMirrorVault } from './cloudMirrorWrite';
 import { cloudPlanningRecords, requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
 
+// Keep inventory binding and vault inspection separate from network transport.
+// Only planned in-scope destinations are read; canonical-path or account
+// failures therefore stop before any vault access.
 export async function planVerifiedCloudInventory(
     inventory: CloudInventoryPass,
     canonicalPathsById: Readonly<Record<string, string>>,
@@ -20,6 +23,8 @@ export async function planVerifiedCloudInventory(
     const records = cloudPlanningRecords(manifest);
     const initial = planCloudMirror(files, syncFolder, records, {}, pathFilters, fileExtensions);
     const localHashes: Record<string, string | null> = {};
+    // The first plan selects checksum changes/re-baselines; hash those local
+    // destinations, then re-plan so edits are protected before a download starts.
     for (const candidate of initial.toDownload) {
         const bytes = await vault.read(candidate.vaultPath);
         localHashes[candidate.vaultPath] = bytes === null ? null : hashBytes(bytes);

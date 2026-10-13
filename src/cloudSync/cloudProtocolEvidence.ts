@@ -55,6 +55,9 @@ export interface CloudInventoryObservation {
     requests: CloudRequestEvidence[];
 }
 
+// These reports intentionally retain aggregate shape and redacted request
+// metadata only. Never add filenames, paths, remote IDs, bodies, or credentials
+// here: a protocol observation should be useful without becoming account data.
 export function formatCloudAuthIdentityObservation(observation: CloudAuthIdentityObservation): string {
     const lines = [
         '# Supernote Cloud Protocol Observation',

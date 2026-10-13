@@ -16,6 +16,9 @@ import {
     CLOUD_VERIFICATION_LOGIN_PROFILE,
 } from './cloudPolicy';
 
+// Authentication is kept transport-agnostic so the same protocol decisions can
+// be exercised with synthetic responses. Callers own credential consent and
+// code collection; this module never prompts or persists secrets itself.
 export interface CloudCredentials {
     email: string;
     password: string;
@@ -57,6 +60,9 @@ export async function authenticateCloudPassword(
     credentials: CloudCredentials,
     options: CloudAuthenticationOptions = {},
 ): Promise<CloudAuthenticatedSession> {
+    // Bootstrap before both password and verification flows: the production
+    // observation showed the CSRF cookie can be refreshed during the OTP retry,
+    // so the transport must own that mutable cookie/session state.
     await transport.bootstrapCsrf();
 
     const nonceResponse = parseCloudObject(await transport.post(CLOUD_ROUTES.loginNonce, {
@@ -77,6 +83,9 @@ export async function authenticateCloudPassword(
     let emailVerificationUsed = false;
     let token: string;
     if (loginResponse.success === false && loginResponse.errorCode === 'E1760') {
+        // Sending this request may deliver an email code. Keep code acquisition
+        // behind the caller-provided callback so unattended protocol paths
+        // cannot silently initiate an OTP challenge.
         if (!options.getVerificationCode) throw new CloudVerificationRequiredError();
         token = await completeEmailVerification(
             transport,
@@ -115,6 +124,8 @@ export async function verifyCloudAuthIdentityGate(
     credentials: CloudCredentials,
     getVerificationCode?: (sessionNumber: number) => Promise<string>,
 ): Promise<{ token: string; accountId: string; emailVerificationUsed: boolean }> {
+    // Independent fresh sessions catch cookie/CSRF state accidentally carrying
+    // the first success; only the first token is retained after identities agree.
     const first = await authenticateCloudPassword(createTransport(), credentials, {
         getVerificationCode: getVerificationCode ? () => getVerificationCode(1) : undefined,
     });
@@ -137,6 +148,8 @@ async function completeEmailVerification(
     timestamp: number,
     getVerificationCode: () => Promise<string>,
 ): Promise<string> {
+    // The signing key is derived from the pre-auth token's trailing index; do
+    // not log or return that token, the code, or the signed request fields.
     const preAuthResponse = parseCloudObject(await transport.post(CLOUD_ROUTES.verificationPreAuth, {
         account: email,
     }));

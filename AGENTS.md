@@ -118,6 +118,30 @@ Already fixed rather than argued with:
 
 ## File & folder conventions
 
+### Source comments
+
+- Write comments to preserve the reasoning a future maintainer cannot recover
+  from the code alone: the invariant being protected, why the nearby design
+  choice exists, and the consequence of changing it.
+- Put a short file-level comment on modules whose role or dependency boundary is
+  not obvious. Put longer rationale immediately before the function, type, or
+  constant it governs; use an inline comment only for a local exception or
+  non-obvious branch.
+- When a behavior is based on an observed fixture, production probe, profiler,
+  or upstream contract, state what was observed and what it does and does not
+  establish. Keep dated or revocable evidence tied to its observation rather
+  than presenting it as a timeless guarantee.
+- Explain important rejected alternatives and their concrete failure mode when
+  that prevents a tempting regression. Include the trade-off when a deliberate
+  safety or performance choice makes another path slower or less capable.
+- Prefer precise domain terms, concrete call sites, and links or issue numbers
+  that let the reader verify the claim. Avoid restating the next line of code,
+  generic narration, speculative claims stated as fact, and comments that will
+  merely repeat the implementation after it changes.
+- Keep comments proportional: routine code should remain uncommented; detailed
+  comments are for behavior whose correctness depends on context, evidence, or
+  an invariant that is easy to accidentally break.
+
 - Source lives in `src/`, one concern per file:
   - `main.ts` — plugin entry point, the note-viewing `FileView` (PDF
     rendering, zoom, text layer, find-in-note), PDF/image export.

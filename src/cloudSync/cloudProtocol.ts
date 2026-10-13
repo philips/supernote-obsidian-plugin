@@ -1,5 +1,7 @@
 import JSONBig from 'json-bigint';
 
+// Cloud IDs arrive as int64 JSON numbers. Parsing through native JSON would
+// round values above Number.MAX_SAFE_INTEGER before validation can see them.
 const losslessJson = JSONBig({
     alwaysParseAsBig: true,
     useNativeBigInt: true,
@@ -73,6 +75,8 @@ export function requireSafeInteger(response: CloudJsonObject, field: string): nu
 
 export function requireCanonicalDecimalId(response: CloudJsonObject, field: string): string {
     const value = response[field];
+    // Keep identifiers opaque strings; converting them to number (or doing
+    // arithmetic on them) can merge distinct remote objects through rounding.
     if (typeof value === 'bigint' && value >= BigInt(0)) return value.toString(10);
     if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
         throw new CloudProtocolError(`Supernote Cloud response has an invalid ${field} field`);

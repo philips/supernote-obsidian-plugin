@@ -2,6 +2,8 @@ import { matchesAnyPathPattern, matchesFileExtension, FileExtensionAllowlist } f
 import { CloudInventoryItem, CloudInventoryPass } from './cloudInventory';
 import { MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
 
+// A Cloud listing's parent-derived path is intentionally insufficient here;
+// this value must come from the separately verified path-query boundary.
 export interface VerifiedCloudFile {
     item: CloudInventoryItem;
     canonicalPath: string;
@@ -11,6 +13,8 @@ export function bindVerifiedCloudPaths(
     inventory: CloudInventoryPass,
     canonicalPathsById: Readonly<Record<string, string>>,
 ): VerifiedCloudFile[] {
+    // Bind by opaque ID, not filename: duplicate names are valid in different
+    // directories, while a missing query result must stop planning altogether.
     const seen = new Set<string>();
     return inventory.items.filter((item) => !item.isFolder).map((item) => {
         if (seen.has(item.id)) throw new Error('Cloud inventory contains duplicate file IDs');
@@ -46,6 +50,8 @@ export function planCloudMirror(
     pathFilters: readonly string[],
     fileExtensions: FileExtensionAllowlist,
 ): CloudMirrorPlan {
+    // This is planning only. Absence from this inventory is not a delete signal;
+    // deletion requires the separate complete, stable two-pass gate.
     const plan: CloudMirrorPlan = { toDownload: [], unchanged: [], excluded: [], protected: [], missingChecksum: [] };
     const destinations = new Set<string>();
     const root = syncFolder.replace(/^\/+|\/+$/g, '');
@@ -72,12 +78,16 @@ export function planCloudMirror(
             continue;
         }
         const candidate = { ...file, vaultPath };
+        // Only a valid Cloud checksum can support the no-download fast path.
+        // Missing metadata is reported separately instead of guessed from size/date.
         if (!file.item.md5 || !/^[a-f\d]{32}$/i.test(file.item.md5)) {
             plan.missingChecksum.push(candidate);
             continue;
         }
         const record = manifest[vaultPath];
         const localHash = localHashes[vaultPath] ?? null;
+        // Protect edits before considering remote equality: an unchanged server
+        // checksum does not make a locally modified mirror safe to adopt.
         if (localHash !== null && record && localHash !== record.contentHash) {
             plan.protected.push(candidate);
         } else if (record?.cloudMd5 && file.item.md5 === record.cloudMd5 && localHash !== null) {
