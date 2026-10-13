@@ -8,6 +8,7 @@ import { CloudControlPlaneTransport, CloudProtocolError } from '../src/cloudSync
 const SESSION_VERSION = 1;
 const SESSION_DIRECTORY = 'obsidian-supernote-companion';
 const SESSION_FILENAME = 'cloud-protocol-session.json';
+const PENDING_SESSION_FILENAME = 'cloud-protocol-pending-token.json';
 
 export interface CloudProtocolSession {
     token: string;
@@ -134,4 +135,26 @@ function isCanonicalDecimal(value: string): boolean {
 
 function isNodeError(error: unknown): error is Error & { code: string } {
     return error instanceof Error && 'code' in error && typeof error.code === 'string';
+}
+
+// A candidate token may arrive before account identity can be queried. Keep it
+// separate from the reusable cache so a failed identity check never promotes
+// an unbound token, but an interrupted probe does not lose the only token.
+export async function savePendingCloudProtocolToken(
+    origin: string,
+    token: string,
+    environment: CloudProtocolEnvironment = processEnvironment,
+): Promise<string> {
+    if (!token) throw new CloudProtocolError('Cloud protocol token cannot be cached');
+    const path = resolve(dirname(getCloudProtocolSessionPath(environment)), PENDING_SESSION_FILENAME);
+    try {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, `${JSON.stringify({ version: SESSION_VERSION, origin, token })}\n`, {
+            encoding: 'utf8', mode: 0o600,
+        });
+        await chmod(path, 0o600);
+    } catch {
+        throw new CloudProtocolError('Cloud protocol pending token could not be written');
+    }
+    return path;
 }

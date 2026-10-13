@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     authenticateCloudPassword,
     CloudVerificationCodeRejectedError,
@@ -174,6 +174,49 @@ describe('Cloud password authentication', () => {
             CLOUD_ROUTES.queryToken,
             CLOUD_ROUTES.accountIdentity,
         ]);
+    });
+
+    it('saves the verified token before checking account identity', async () => {
+        const posts = verificationPosts();
+        posts.at(-1)!.response = { status: 401, body: '' };
+        const onSessionToken = vi.fn(async () => {});
+        await expect(authenticateCloudPassword(new FakeTransport(posts), credentials, {
+            getVerificationCode: async () => '654321', onSessionToken,
+        })).rejects.toThrow('HTTP 401');
+        expect(onSessionToken).toHaveBeenCalledExactlyOnceWith('verified-session-token');
+    });
+
+    it('retains an OTP-login token if the token query has no top-level token', async () => {
+        const posts = verificationPosts();
+        posts[4].response = { status: 200, body: '{"success":true,"token":"otp-session-token"}' };
+        posts[5].response = { status: 200, body: '{"success":true,"data":null}' };
+        posts[6].accessToken = 'otp-session-token';
+        const onSessionToken = vi.fn(async () => {});
+        await expect(authenticateCloudPassword(new FakeTransport(posts), credentials, {
+            getVerificationCode: async () => '654321', onSessionToken,
+        })).resolves.toMatchObject({ token: 'otp-session-token' });
+        expect(onSessionToken).toHaveBeenCalledExactlyOnceWith('otp-session-token');
+    });
+
+    it('saves a session token nested in the final token-query data', async () => {
+        const posts = verificationPosts();
+        posts[5].response = { status: 200, body: '{"success":true,"data":{"token":"nested-session-token"}}' };
+        posts[6].accessToken = 'nested-session-token';
+        const onSessionToken = vi.fn(async () => {});
+        await expect(authenticateCloudPassword(new FakeTransport(posts), credentials, {
+            getVerificationCode: async () => '654321', onSessionToken,
+        })).resolves.toMatchObject({ token: 'nested-session-token' });
+        expect(onSessionToken).toHaveBeenCalledExactlyOnceWith('nested-session-token');
+    });
+
+    it('reports only field types when neither verification response contains a token', async () => {
+        const posts = verificationPosts();
+        posts[5].response = { status: 200, body: '{"success":true,"data":{"sensitive":"secret-value"}}' };
+        const onSessionToken = vi.fn(async () => {});
+        await expect(authenticateCloudPassword(new FakeTransport(posts), credentials, {
+            getVerificationCode: async () => '654321', onSessionToken,
+        })).rejects.toThrow('fields: success:boolean, data:object');
+        expect(onSessionToken).not.toHaveBeenCalled();
     });
 
     it('fails closed on malformed pre-auth tokens and rejected codes', async () => {

@@ -32,6 +32,7 @@ export interface CloudAuthenticatedSession {
 
 export interface CloudAuthenticationOptions {
     getVerificationCode?: () => Promise<string>;
+    onSessionToken?: (token: string) => Promise<void>;
 }
 
 export class CloudVerificationRequiredError extends CloudProtocolError {
@@ -92,12 +93,15 @@ export async function authenticateCloudPassword(
             credentials.email,
             timestamp,
             options.getVerificationCode,
+            options.onSessionToken,
         );
         emailVerificationUsed = true;
     } else {
         requireCloudSuccess(loginResponse);
         token = requireNonEmptyString(loginResponse, 'token');
     }
+
+    if (options.onSessionToken && !emailVerificationUsed) await options.onSessionToken(token);
 
     return {
         token,
@@ -147,6 +151,7 @@ async function completeEmailVerification(
     email: string,
     timestamp: number,
     getVerificationCode: () => Promise<string>,
+    onSessionToken?: (token: string) => Promise<void>,
 ): Promise<string> {
     // The signing key is derived from the pre-auth token's trailing index; do
     // not log or return that token, the code, or the signed request fields.
@@ -182,9 +187,26 @@ async function completeEmailVerification(
     }
     requireCloudSuccess(verificationResponse);
 
+    const verificationToken = typeof verificationResponse.token === 'string' && verificationResponse.token.length > 0
+        ? verificationResponse.token : null;
+    if (verificationToken) await onSessionToken?.(verificationToken);
+
     const tokenResponse = parseCloudObject(await transport.post(CLOUD_ROUTES.queryToken, {}));
     requireCloudSuccess(tokenResponse);
-    return requireNonEmptyString(tokenResponse, 'token');
+    const data = tokenResponse.data;
+    const nestedToken = data && typeof data === 'object' && !Array.isArray(data) && 'token' in data
+        ? data.token : null;
+    const queriedToken = typeof tokenResponse.token === 'string' && tokenResponse.token.length > 0
+        ? tokenResponse.token : typeof nestedToken === 'string' && nestedToken.length > 0 ? nestedToken : null;
+    if (queriedToken) {
+        await onSessionToken?.(queriedToken);
+        return queriedToken;
+    }
+    if (verificationToken) return verificationToken;
+    const shape = Object.entries(tokenResponse)
+        .map(([field, value]) => `${field}:${value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value}`)
+        .join(', ');
+    throw new CloudProtocolError(`Supernote Cloud token query returned no token (fields: ${shape})`);
 }
 
 function extractVerificationSigningKey(token: string): string {

@@ -11,6 +11,7 @@ import {
     getCloudProtocolSessionPath,
     loadCloudProtocolSession,
     saveCloudProtocolSession,
+    savePendingCloudProtocolToken,
     validateCloudProtocolSession,
 } from './cloudProtocolSession';
 import { promptForSecret } from './secretPrompt';
@@ -66,7 +67,13 @@ if (reusableSession) {
     const authenticated = await authenticateCloudPassword(
         createTransport('fresh-login'),
         { email, password },
-        { getVerificationCode: async () => promptForSecret('Email verification code: ') },
+        {
+            getVerificationCode: async () => promptForSecret('Email verification code: '),
+            onSessionToken: async (candidate) => {
+                await savePendingCloudProtocolToken(CLOUD_PRODUCTION_ORIGIN, candidate);
+                process.stdout.write('Candidate session token saved to a private recovery file.\n');
+            },
+        },
     );
     sessionSource = 'fresh-login';
     token = authenticated.token;

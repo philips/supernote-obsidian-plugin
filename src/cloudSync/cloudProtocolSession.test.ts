@@ -6,6 +6,7 @@ import {
     clearCloudProtocolSession,
     loadCloudProtocolSession,
     saveCloudProtocolSession,
+    savePendingCloudProtocolToken,
     validateCloudProtocolSession,
 } from '../../scripts/cloudProtocolSession';
 import { CloudControlPlaneTransport } from './cloudProtocol';
@@ -49,6 +50,16 @@ describe('Cloud protocol session cache', () => {
         expect(await readFile(path, 'utf8')).toContain('cached-token');
 
         await clearCloudProtocolSession(environment);
+        await expect(loadCloudProtocolSession('https://cloud.supernote.com', environment)).resolves.toBeNull();
+    });
+
+    it('keeps a candidate token separate from the validated session cache', async () => {
+        const directory = await mkdtemp(resolve(tmpdir(), 'cloud-protocol-pending-test-'));
+        temporaryDirectories.push(directory);
+        const environment = { SUPERNOTE_CLOUD_SESSION_FILE: resolve(directory, 'session.json') };
+        const path = await savePendingCloudProtocolToken('https://cloud.supernote.com', 'candidate-token', environment);
+        expect(path).not.toBe(environment.SUPERNOTE_CLOUD_SESSION_FILE);
+        expect(await readFile(path, 'utf8')).toContain('candidate-token');
         await expect(loadCloudProtocolSession('https://cloud.supernote.com', environment)).resolves.toBeNull();
     });
 
