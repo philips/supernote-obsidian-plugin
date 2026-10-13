@@ -99,8 +99,8 @@ contract terms:
 | Finding                     | Evidence                                                                                                                                                               | Specification disposition                                                                                                                                       |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Password derivation         | Three hosted-Cloud clients and one Private Cloud client independently use `SHA256(MD5(plaintext password) + randomCode)`.                                              | Use this derivation for the first login attempt. Do not implement the alternative derivation unless later evidence requires it.                                 |
-| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch is specified below as compatible behavior and must still pass a permitted production-account protocol test before release.                           |
-| CSRF/session state          | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403.                | Treat cookie and CSRF state as part of one sign-in session. Confirm whether every plugin request needs the header before release.                               |
+| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch passed an authorized hosted-service test in two fresh sessions on October 12, 2026; this remains dated compatible behavior. |
+| CSRF/session state          | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403.                | The October 12, 2026 test observed one CSRF refresh and one OTP retry after HTTP 403 in both fresh sessions. |
 | Identifier precision        | Compatible clients represent file and directory IDs as strings, and published examples include values above JavaScript's safe-integer limit.                           | Store and transmit identifiers as canonical decimal strings; never round-trip them through JavaScript `number`.                                                 |
 | Pagination origin           | Hosted and Private Cloud clients begin with `pageNo: 1`; compatible models expose `pages`, `pageNum`, and page-size fields.                                            | Use 1 as the first page. Maximum size and cross-page consistency remain unknown.                                                                                |
 | Download transfer           | Three hosted-Cloud clients request `type: 0`, then perform an unauthenticated HTTP `GET` of the returned URL.                                                          | `GET` without `x-access-token` is the compatibility baseline. Validate the current production host and redirect chain; future unrecognized hosts fail per file. |
@@ -242,9 +242,9 @@ and then performs this sequence:
 | Expired/rejected code | Compatible behavior | The compatible client treats `E1756`, `E0101`, and `E1760` as reasons to restart the code flow. These meanings are not vendor-documented and must not be generalized to unrelated operations. |
 | Token completion      | Compatible behavior | After OTP login succeeds, call `POST /api/user/query/token` in the same cookie/CSRF session and require a non-empty `token`.                                                                  |
 
-This sequence must pass a permitted hosted-Cloud test before the plugin presents
-email-code verification as supported. Until then, the UI uses the unavailable
-message defined in Section 8.2.
+This sequence passed a permitted hosted-Cloud test on October 12, 2026 in two
+fresh sessions. Rejected, expired, or otherwise unclassified codes must still
+use the specification's fail-closed behavior.
 
 ### 6.5 Token/session check
 
@@ -726,10 +726,10 @@ rules, and removal review are defined in
 The following gates block the initial Cloud release because they are required
 for its sign-in, inventory, filtering, account-safety, or download contract:
 
-1. **Password sign-in:** establish the production-accepted CSRF and cookie
-   requirements, `loginMethod`, password derivation, and required
-   client-identification fields. A usable Cloud release requires at least one
-   verified sign-in path.
+1. **Password sign-in:** resolved for the tested account on October 12, 2026.
+  The observed request used the nonce route, compatible password derivation,
+  retained cookies, CSRF state, and the recorded client fields. This remains
+  dated compatible behavior, not a vendor guarantee.
 2. **Inventory response shape:** confirm that 1-based requests with the Section
    11.1 page size are accepted and identify the actual list, total, and page
    fields needed to execute the bounded consistency policy. Failure to resolve
@@ -743,18 +743,16 @@ for its sign-in, inventory, filtering, account-safety, or download contract:
    whether an unauthenticated `GET` succeeds without forwarding Cloud
    credentials. Failure to resolve this gate blocks downloads, but no knowledge
    of future hosts is required.
-5. **Account identity field:** confirm that `/api/user/query` returns a usable
-   canonical decimal `userId`. Repeated-session stability is useful protocol
-   evidence but is not a separate release gate because Section 11.1 defines the
-   accepted product assumption and mismatch behavior.
+5. **Account identity field:** resolved for the tested account on October 12,
+  2026. `/api/user/query` returned a usable canonical decimal `userId` in two
+  fresh sessions, with matching identities.
 
 The following gate is optional for the initial release:
 
-6. **Email-code sign-in:** confirm that login `E1760` and the compatible
-   sequence in Sections 6.3 through 6.5 remain accepted by production. Verify
-   successful completion, rejected or expired codes, resend/restart behavior,
-   and final token retrieval. Failure to resolve this gate keeps only the OTP
-   branch unavailable and uses the Section 8.2 unavailable message.
+6. **Email-code sign-in:** the successful `E1760` continuation, final token
+  retrieval, and account identity were observed in two fresh sessions on
+  October 12, 2026. Rejected/expired-code and resend/restart production cases
+  remain untested and must retain fail-closed handling.
 
 A successful test resolves only the observed production behavior needed by the
 implemented capability. It is not evidence that the service can never change.

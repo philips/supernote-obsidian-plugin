@@ -1,0 +1,30 @@
+export const CLOUD_PRODUCTION_ORIGIN = 'https://cloud.supernote.com';
+
+export const CLOUD_CONTROL_PLANE_TIMEOUT_MS = 20_000;
+export const CLOUD_AUTH_IDENTITY_REQUEST_LIMIT = 20;
+
+export const CLOUD_ROUTES = {
+    csrf: '/api/csrf',
+    loginNonce: '/api/official/user/query/random/code',
+    passwordLogin: '/api/official/user/account/login/new',
+    verificationPreAuth: '/api/user/validcode/pre-auth',
+    verificationSend: '/api/user/mail/validcode/send',
+    verificationLogin: '/api/official/user/sms/login',
+    queryToken: '/api/user/query/token',
+    accountIdentity: '/api/user/query',
+} as const;
+
+// Candidate request shape from compatible hosted-Cloud clients. The protocol
+// harness records whether production accepts these exact names and value types.
+export const CLOUD_PASSWORD_LOGIN_PROFILE = {
+    countryCode: 1,
+    browser: 'Chrome107',
+    equipment: '1',
+    loginMethod: '1',
+    language: 'en',
+} as const;
+
+export const CLOUD_VERIFICATION_LOGIN_PROFILE = {
+    browser: 'Chrome107',
+    equipment: '4',
+} as const;
