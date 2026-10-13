@@ -230,10 +230,23 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 },
             },
             {
+                name: 'Sync history',
+                render: (setting) => {
+                    setting
+                        .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
+                        .addButton((btn) => {
+                            btn.setButtonText('Forget sync history').onClick(async () => {
+                                await this.plugin.clearActiveSyncHistory();
+                                new Notice('Sync history cleared');
+                            });
+                        });
+                },
+            },
+            {
                 name: 'Sync engine',
                 render: (setting) => {
                     setting
-                        .setDesc('Choose which sync engine is used by manual sync commands.')
+                        .setDesc('Choose which sync engine is used for manual and scheduled sync.')
                         .addDropdown((dropdown) => {
                             dropdown
                                 .addOptions(SYNC_ENGINE_LABELS)
@@ -262,19 +275,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                             return 'Invalid IP format: must be xxx.xxx.xxx.xxx';
                         }
                     },
-                },
-            },
-            {
-                name: 'Direct IP sync history',
-                render: (setting) => {
-                    setting
-                        .setDesc('Forgets which device files have already been synced. The next sync re-checks every matching file while preserving local-edit conflict protection.')
-                        .addButton((btn) => {
-                            btn.setButtonText('Forget direct IP history').onClick(async () => {
-                                await this.plugin.clearActiveSyncHistory();
-                                new Notice('Direct IP sync history cleared');
-                            });
-                        });
                 },
             },
         ];
@@ -416,8 +416,19 @@ export class SupernoteSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
+            .setName('Sync history')
+            .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
+            .addButton(btn => btn
+                .setButtonText('Forget sync history')
+                .onClick(async () => {
+                    await this.plugin.clearActiveSyncHistory();
+                    new Notice('Sync history cleared');
+                })
+            );
+
+        new Setting(containerEl)
             .setName('Sync engine')
-            .setDesc('Choose which sync engine is used by manual sync commands.')
+            .setDesc('Choose which sync engine is used for manual and scheduled sync.')
             .addDropdown(dropdown => dropdown
                 .addOptions(SYNC_ENGINE_LABELS)
                 .setValue(this.plugin.getActiveSyncEngineId())
@@ -454,16 +465,5 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 alert = btn;
                 return btn;
             });
-
-        new Setting(containerEl)
-            .setName('Direct IP sync history')
-            .setDesc('Forgets which device files have already been synced. The next sync re-checks every matching file while preserving local-edit conflict protection.')
-            .addButton(btn => btn
-                .setButtonText('Forget direct IP history')
-                .onClick(async () => {
-                    await this.plugin.clearActiveSyncHistory();
-                    new Notice('Direct IP sync history cleared');
-                })
-            );
     }
 }

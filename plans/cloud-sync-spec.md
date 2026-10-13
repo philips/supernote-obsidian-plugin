@@ -266,11 +266,11 @@ message defined in Section 8.2.
 | Product use      | Product requirement | On first successful Cloud setup, retain the returned stable `userId` as the account binding for that mirror. |
 
 **Product assumption:** the canonical `userId` is stable and unique for as long
-as its account exists. The plugin uses it to prevent cross-account mirror
-reuse. The raw ID remains in secure device-local storage; the shared vault
-manifest stores only a versioned SHA-256 account fingerprint derived from the
-canonical decimal ID. A fingerprint mismatch blocks the mirror until the user
-explicitly resets it.
+as its account exists. The plugin uses it to prevent cross-account mirror reuse.
+The raw ID remains in secure device-local storage; the shared vault manifest
+stores only a versioned SHA-256 account fingerprint derived from the canonical
+decimal ID. A fingerprint mismatch blocks the mirror until the user explicitly
+resets it.
 
 **Compatible behavior:** hosted and Private Cloud clients expose `userId` as a
 decimal string in JWT claims or as an int64-shaped profile field. The plugin
@@ -353,11 +353,11 @@ per-file failure rather than a general release blocker.
 
 ### 6.11 Logout
 
-| Item             | Classification      | Specification                                                                                                                                                                |
-| ---------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Method and route | Documented fact     | `POST /api/user/logout`                                                                                                                                                      |
-| Authentication   | Documented fact     | Requires `x-access-token`.                                                                                                                                                   |
-| Success JSON     | Documented fact     | Common response envelope.                                                                                                                                                    |
+| Item             | Classification      | Specification                                                                                                                                                                  |
+| ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Method and route | Documented fact     | `POST /api/user/logout`                                                                                                                                                        |
+| Authentication   | Documented fact     | Requires `x-access-token`.                                                                                                                                                     |
+| Success JSON     | Documented fact     | Common response envelope.                                                                                                                                                      |
 | Product behavior | Product requirement | Local sign-out clears the device-local session token even when remote logout fails or cannot be reached. It does not delete mirrored vault files or their shared sync history. |
 
 ## 7. Data Acceptance Rules
@@ -479,16 +479,15 @@ that cannot complete sign-in.
 - A session token is device-local and is never added to synced plugin settings.
 - The raw account ID is stored securely with the token only to protect the
   shared mirror from cross-account reconciliation. Synced mirror metadata
-  contains only the versioned account
-  fingerprint defined in Section 11.1.
+  contains only the versioned account fingerprint defined in Section 11.1.
 - The password and verification code are used only for the active sign-in
   attempt and are never persisted.
 - A verified authentication failure clears the local token and changes Cloud
   status to **Sign in required**.
 - A transport failure or an unknown service error does not clear a token solely
   because its meaning is unknown.
-- Signing out removes the local token, retains shared sync history,
-  and prevents future Cloud runs until a user signs in.
+- Signing out removes the local token, retains shared sync history, and prevents
+  future Cloud runs until a user signs in.
 - Signing in as a different account is blocked while the Cloud mirror is bound
   to another account. The user must explicitly reset the existing Cloud mirror.
 
@@ -514,16 +513,16 @@ that cannot complete sign-in.
   root.
 - A remote file whose published checksum still matches the recorded Cloud
   checksum is reported as unchanged and is not downloaded again.
-- If an entry was last observed through IP and has no comparable Cloud
-  checksum, Cloud obtains enough source evidence to compare its bytes with the
-  last successfully mirrored bytes. Identical bytes re-baseline the entry to
-  Cloud metadata without rewriting the vault file.
+- If an entry was last observed through IP and has no comparable Cloud checksum,
+  Cloud obtains enough source evidence to compare its bytes with the last
+  successfully mirrored bytes. Identical bytes re-baseline the entry to Cloud
+  metadata without rewriting the vault file.
 - A changed remote file replaces its local mirror copy only when the local copy
   still matches the last successfully mirrored content.
 - A locally changed mirror copy is protected; it is not silently overwritten.
 - A remote rename or move preserves the local file only when its shared manifest
-  entry and unchanged local content are established. Otherwise it is reported
-  as protected rather than duplicated or removed silently.
+  entry and unchanged local content are established. Otherwise it is reported as
+  protected rather than duplicated or removed silently.
 - A current path filter can exclude a remote file from the run. It does not
   delete the previously mirrored local copy.
 - A current file-extension filter behaves the same way.
@@ -612,9 +611,9 @@ updates.
 The plugin assumes a canonical `userId` remains stable and unique while its
 account exists. The raw decimal ID is stored only in secure device-local state.
 The shared manifest stores a versioned SHA-256 fingerprint derived from a domain
-prefix and that canonical ID. Every Cloud run compares the authenticated
-account fingerprint with the manifest binding. A mismatch never reassigns the
-mirror; it requires an explicit reset.
+prefix and that canonical ID. Every Cloud run compares the authenticated account
+fingerprint with the manifest binding. A mismatch never reassigns the mirror; it
+requires an explicit reset.
 
 The plugin does not require a guarantee that an ID can never be reused after an
 account has ceased to exist. An inaccessible or deleted bound account leaves the

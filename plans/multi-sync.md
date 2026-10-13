@@ -626,9 +626,9 @@ buttons. Setup-only actions such as Cloud sign-in/sign-out, connection tests,
 and editing masks are allowed while Cloud is inactive. They never change
 `activeSyncEngine`; the user must select Cloud explicitly.
 
-The shared destination remains editable. Once sync manages files, changing
-it invokes one coordinator-owned, confirmed root-move workflow rather than
-merely saving a new string:
+The shared destination remains editable. Once sync manages files, changing it
+invokes one coordinator-owned, confirmed root-move workflow rather than merely
+saving a new string:
 
 1. Require that no sync is running, the source root exists, and the destination
    does not exist.
@@ -721,8 +721,8 @@ rewrite.
 - Move plugin-level validation/result formatting from `runSync()` into the
   wrapper or coordinator so both manual and scheduled triggers share one path.
 - Map `DeviceSyncResult` to the common result with `removed: 0`.
-- The coordinator's shared history action clears shared manifest entries; the
-  IP engine has no separate history to clear.
+- The coordinator's shared history action clears shared manifest entries; the IP
+  engine has no separate history to clear.
 
 Automatic scheduling is new for the IP engine, but it does not alter the sync
 algorithm. Only the trigger and scheduled-error presentation change.
@@ -744,8 +744,8 @@ types. Suggested files:
   download bytes.
 - `src/cloudSync/cloudTypes.ts` - independently defined response and domain
   types.
-- `src/sync/syncManifest.ts` - shared versioned manifest, serialized writes,
-  and transaction/recovery behavior used by both engines.
+- `src/sync/syncManifest.ts` - shared versioned manifest, serialized writes, and
+  transaction/recovery behavior used by both engines.
 - `src/cloudSync/cloudSyncEngine.ts` - recursive inventory, filtering, planning,
   download, safe cleanup, and normalized results.
 - `src/cloudSync/cloudSyncEngine.test.ts` and focused client/manifest tests.
@@ -770,8 +770,8 @@ types. Suggested files:
 
 1. Verify authentication and Cloud destination readiness.
 2. Open the shared manifest and verify that its optional Cloud account binding
-  and destination root match the authenticated account and current
-  configuration.
+   and destination root match the authenticated account and current
+   configuration.
 3. Recursively inventory the Cloud account from its root. Track whether the
    entire scan completed successfully.
 4. Retain the complete remote-ID inventory, then normalize each full Cloud path
@@ -779,8 +779,8 @@ types. Suggested files:
 5. Plan deterministic vault paths below the shared `syncFolder`, including
    stable disambiguation for case-insensitive collisions.
 6. For each in-scope file, compare remote identity/checksum metadata with the
-  shared manifest and verify that the local file still matches the last
-  written hash.
+   shared manifest and verify that the local file still matches the last written
+   hash.
 7. Skip unchanged files, protect locally edited files, and download new or
    changed files.
 8. When an existing remote ID moves, rename its locally unchanged managed file
@@ -828,28 +828,28 @@ interface SharedSyncManifestEntry {
   lastSyncedAt: string;
   source:
     | {
-        engineId: "ip-device";
-        sourcePath: string;
-        deviceDate: string;
-        deviceSize: number;
-      }
+      engineId: "ip-device";
+      sourcePath: string;
+      deviceDate: string;
+      deviceSize: number;
+    }
     | {
-        engineId: "supernote-cloud";
-        sourcePath: string;
-        remoteId: string;
-        remoteChecksum: string;
-        remoteUpdatedAt: number;
-      };
+      engineId: "supernote-cloud";
+      sourcePath: string;
+      remoteId: string;
+      remoteChecksum: string;
+      remoteUpdatedAt: number;
+    };
 }
 ```
 
 The source snapshot is an optimization, not ownership. If the active engine
 cannot compare its inventory with an entry's current snapshot, it downloads or
-otherwise obtains enough evidence to compare source bytes with `contentHash`.
-An identical file replaces the source snapshot without rewriting the vault
-file. A different source file follows the active engine's normal local-edit
-guard before overwrite. Thus the first run after switching engines may perform
-more downloads but needs no ownership migration.
+otherwise obtains enough evidence to compare source bytes with `contentHash`. An
+identical file replaces the source snapshot without rewriting the vault file. A
+different source file follows the active engine's normal local-edit guard before
+overwrite. Thus the first run after switching engines may perform more downloads
+but needs no ownership migration.
 
 Each manifest or pending-operation checkpoint writes a sibling temporary file,
 validates the complete JSON, and atomically replaces its primary file where the
@@ -878,8 +878,7 @@ uses an independently implemented revision-aware transaction:
 - Preserve latest fields that this run did not change and preserve this run's
   fields when the latest manifest still matches the baseline.
 - If both sides changed the same managed entry incompatibly, stop with a
-  protected conflict instead of choosing a winner or performing further
-  cleanup.
+  protected conflict instead of choosing a winner or performing further cleanup.
 
 This is reconciliation, not a distributed lock. Two offline devices can act
 before either sees the other's changes. Local-content hashes, pending-operation
@@ -892,11 +891,11 @@ destination/account header, vault files, durable logs, authentication, and
 last-run display state. The next run may re-adopt byte-identical files and
 protects non-identical files. Because history establishes which files are
 sync-managed, Cloud performs no deletion of pre-existing local files until they
-have been adopted into the new manifest.
-`Reset Cloud mirror` is the separate destructive workflow for changing the
-logical account/device pairing: it resolves pending operations, trashes
-unchanged managed files, preserves/reports edited files, clears the shared
-manifest and Cloud account binding, and clears Cloud last-run state.
+have been adopted into the new manifest. `Reset Cloud mirror` is the separate
+destructive workflow for changing the logical account/device pairing: it
+resolves pending operations, trashes unchanged managed files, preserves/reports
+edited files, clears the shared manifest and Cloud account binding, and clears
+Cloud last-run state.
 
 All Cloud-controlled paths must be normalized and proven to remain descendants
 of `syncFolder`. Reject absolute paths, empty/`.`/`..` segments, embedded
@@ -961,8 +960,8 @@ logs prove insufficient.
 - Identical incoming and existing bytes may be adopted safely after history is
   cleared. Non-identical unowned files are protected.
 - IP never propagates source deletions.
-- Cloud is authoritative while active. After a complete, stable inventory it
-  may move any unchanged, managed, in-scope file absent from Cloud to Obsidian
+- Cloud is authoritative while active. After a complete, stable inventory it may
+  move any unchanged, managed, in-scope file absent from Cloud to Obsidian
   Trash, including a file last observed through IP.
 - Excluded paths are never interpreted as deleted paths.
 - Switching engines preserves the shared manifest. A source snapshot from the
@@ -991,8 +990,8 @@ logs prove insufficient.
    before implementing dependent behavior.
 7. Implement `cloudAuth`, the read-only client, and device-local token storage.
 8. Migrate `noteSyncState` into the shared versioned manifest, then implement
-  the one-way `CloudSyncEngine`, including path masks, local-edit protection,
-  complete-scan deletion gating, Trash, and per-file fault isolation.
+   the one-way `CloudSyncEngine`, including path masks, local-edit protection,
+   complete-scan deletion gating, Trash, and per-file fault isolation.
 9. Add the shared destination-root rename for both engines, including its one
    pending-move record and three-state startup recovery.
 10. Add Cloud settings/status/login UI. Setup never changes the active engine;
