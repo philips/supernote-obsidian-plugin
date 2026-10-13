@@ -98,6 +98,13 @@
   redirect count, so production redirect behavior remains unknown. The remote
   ID, checksum value, signed URL, and contents were not committed or included in
   the report.
+- Added an offline, non-deleting Cloud mirror runner that connects verified
+  inventory planning, guarded byte writes, and per-file durable manifest
+  commits. Synthetic tests cover first write, unchanged second run, local edit
+  protection, checksum failure, account mismatch, and fatal manifest write
+  failure. An Obsidian binary vault adapter has synthetic tests for nested
+  folders, exact bytes, and folder collisions. This runner is not registered
+  as a plugin sync engine and has not run in the Marie test vault.
 
 ## Next
 
@@ -129,6 +136,11 @@
 - After the protocol gates pass, implement the shared manifest integration and
   one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
   format conversions remain separate work.
+- To run the mirror through the plugin in the Marie test vault, add a
+  product-side Cloud transport and account session UI, establish an explicit
+  shared-manifest account binding, then register the Cloud engine with the sync
+  coordinator. Never import the harness-only temporary token into the vault or
+  enable remote deletion as part of this integration.
 
 The disposable fixture download was validated, but no plugin Cloud sync engine,
 shared manifest integration, general download host allowlist, or Cloud
