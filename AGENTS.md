@@ -12,6 +12,22 @@
   Obsidian's stable identifier for installs, settings storage, and the community
   plugin listing.
 
+## Autonomous blocks of work
+
+- Treat an agreed block of work (such as a sprint) as an end-to-end task: plan
+  the in-scope changes, implement them, and run the required checks without
+  stopping for routine choices that the repository conventions already settle.
+- At the start of the block, identify decisions, credentials, destructive
+  actions, external access, and permissions that could block later steps. Ask
+  all necessary clarifying questions or request approval together before the
+  user leaves; state which work can proceed while awaiting answers. Do not treat
+  silence or an away notification as approval or expand the agreed scope.
+- If a new question or permission requirement arises and the user is away,
+  continue other authorized, independent work in the block, including tests,
+  documentation, and non-destructive validation. Do not perform the blocked
+  action or repeatedly prompt for an answer. When no useful in-scope work
+  remains, report the blocker and stop until the user returns.
+
 ## Environment & tooling
 
 - Package manager: npm. Bundler: esbuild (`esbuild.config.mjs`).

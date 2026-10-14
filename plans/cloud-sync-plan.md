@@ -46,8 +46,8 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   inventories and an unchanged local hash; filtered and unmanaged paths remain.
 - On October 14, 2026, validated guarded deletion in the Marie vault using a
   unique synthetic destination and a filter that matched no Cloud files. One
-  unchanged fixture moved to Obsidian system Trash; a locally edited fixture
-  and an unmanaged fixture stayed intact. The synthetic destination was then
+  unchanged fixture moved to Obsidian system Trash; a locally edited fixture and
+  an unmanaged fixture stayed intact. The synthetic destination was then
   removed, leaving the system Trash item. No login/OTP or Cloud mutation was
   performed. The local debugger attached to a Marie-targeted Obsidian launch.
 
@@ -84,9 +84,9 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - Candidates are managed, currently in-scope paths missing from verified Cloud
   inventory. A second complete inventory follows the policy delay; differing
   fingerprints or failed verification suppress all cleanup.
-- An unchanged local hash is required immediately before Obsidian Trash.
-  Locally edited, unmanaged, filtered, and still-present files are retained.
-  Manifest commit failure after Trash stops the run rather than continuing.
+- An unchanged local hash is required immediately before Obsidian Trash. Locally
+  edited, unmanaged, filtered, and still-present files are retained. Manifest
+  commit failure after Trash stops the run rather than continuing.
 - Focused tests cover the safety gates and the Obsidian Trash adapter; the
   controlled-vault check above confirmed both Trash and local-edit protection.
 
@@ -96,12 +96,12 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   its parent directory. If it is empty, move it to Obsidian Trash; continue
   upward while each parent is empty, stopping before the configured sync root.
 - Never remove a folder that contains any other file or folder, including
-  unmanaged files, locally edited copies, filtered-out files, or metadata.
-  Do not prune on an incomplete or changed inventory, failed Trash action, or
+  unmanaged files, locally edited copies, filtered-out files, or metadata. Do
+  not prune on an incomplete or changed inventory, failed Trash action, or
   failed manifest commit. Do not sweep unrelated pre-existing empty folders.
 - Add focused tests for a single empty parent, nested empty ancestors, a
-  nonempty parent, the sync-root boundary, and skipped or failed deletions.
-  Then run `npm test`, `npm run build`, `npm run lint`, and `git diff --check`.
+  nonempty parent, the sync-root boundary, and skipped or failed deletions. Then
+  run `npm test`, `npm run build`, `npm run lint`, and `git diff --check`.
   Validate with replaceable synthetic fixtures only before relying on the
   behavior in the vault.
 
@@ -115,7 +115,7 @@ The sprint gates were run on October 14, 2026:
 4. `npm run lint`.
 5. `git diff --check`.
 6. Controlled Marie-vault validation of remote deletion, using only replaceable
-  synthetic fixtures. The vault's Trash option was `system`.
+   synthetic fixtures. The vault's Trash option was `system`.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

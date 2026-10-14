@@ -5,8 +5,8 @@ remote-deletion cleanup are implemented. Focused tests and a synthetic
 Marie-vault Trash check passed. See [`cloud-sync-plan.md`](cloud-sync-plan.md)
 for the result and safety gates.
 
-**Next:** Prune empty local mirror folders left behind by successful Cloud
-file deletions, subject to the sync-root and nonempty-folder safeguards below.
+**Next:** Prune empty local mirror folders left behind by successful Cloud file
+deletions, subject to the sync-root and nonempty-folder safeguards below.
 
 ## Completed Sprint
 
@@ -28,13 +28,13 @@ file deletions, subject to the sync-root and nonempty-folder safeguards below.
 
 ## Recommended Next Sprint
 
-1. After a guarded Cloud file deletion and successful manifest commit, move
-   its empty parent folder to Obsidian Trash. Repeat upward only while each
-   folder is empty; never remove the configured sync root.
+1. After a guarded Cloud file deletion and successful manifest commit, move its
+   empty parent folder to Obsidian Trash. Repeat upward only while each folder
+   is empty; never remove the configured sync root.
 2. Leave folders with any remaining contents untouched, including unmanaged,
-   locally edited, filtered-out, or metadata files and subfolders. Do not
-   prune after failed or suppressed deletion, and do not sweep unrelated
-   pre-existing empty folders.
+   locally edited, filtered-out, or metadata files and subfolders. Do not prune
+   after failed or suppressed deletion, and do not sweep unrelated pre-existing
+   empty folders.
 3. Test empty and nested parents, nonempty parents, sync-root protection, and
    failed or skipped deletions. Run `npm test`, `npm run build`, `npm run lint`,
    and `git diff --check`; validate with replaceable synthetic fixtures only.
