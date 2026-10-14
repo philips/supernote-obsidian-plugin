@@ -138,12 +138,13 @@
 - The initial interactive import failed because the renderer's native `fetch`
   was invoked with the transport instance as `this` (`Illegal invocation`);
   binding it exposed a subsequent renderer-level `TypeError: Failed to fetch`
-  during CSRF bootstrap. The importer was then switched to Obsidian's `requestUrl`
-  through a local adapter. On October 13, 2026, the prompt reported successful
-  account validation and SecretStorage readback. Synthetic build and test checks
-  pass. The live success establishes this account's import path works in the
-  current Obsidian runtime, but does not characterize redirect behavior, cookie
-  behavior across redirect hops, or portability to other Obsidian platforms.
+  during CSRF bootstrap. The importer was then switched to Obsidian's
+  `requestUrl` through a local adapter. On October 13, 2026, the prompt reported
+  successful account validation and SecretStorage readback. Synthetic build and
+  test checks pass. The live success establishes this account's import path
+  works in the current Obsidian runtime, but does not characterize redirect
+  behavior, cookie behavior across redirect hops, or portability to other
+  Obsidian platforms.
 - In the next implementation phase, retain `requestUrl` for interactive Cloud
   API calls and review its implicit redirect behavior and response-header/cookie
   semantics against the existing CSRF session requirements. Do not claim
@@ -184,8 +185,8 @@
   product-side Cloud mirror transport integration, establish an explicit
   shared-manifest account binding, then register the Cloud engine with the sync
   coordinator. The guarded one-time import and device-local SecretStorage store
-  are implemented and live import succeeded. Keep the harness cache; never put
-  a token in vault files or enable remote deletion for this test.
+  are implemented and live import succeeded. Keep the harness cache; never put a
+  token in vault files or enable remote deletion for this test.
 
 The disposable fixture download was validated. The paste-based Cloud import UI
 and device-local session store are implemented, but no plugin Cloud sync engine,
