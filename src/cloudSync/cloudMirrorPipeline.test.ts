@@ -36,6 +36,7 @@ describe('Cloud inventory to shared-manifest planning', () => {
             read: vi.fn(async (path: string) => files.get(path) ?? null),
             write: vi.fn(async () => {}),
             trash: vi.fn(async (path: string) => { files.delete(path); }),
+            trashEmptyFolder: vi.fn(async () => false),
         };
         const inventory = { directories: [], items: [item('1', 'Kept.note')] };
         const canonicalPathsById = { '1': '/Note/Kept.note' };
@@ -47,14 +48,146 @@ describe('Cloud inventory to shared-manifest planning', () => {
             pathFilters: [], fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
             verifyDeletionInventory,
         });
-        expect(result).toMatchObject({ removed: 1, protected: ['Mirror/Note/Edited.note'] });
+        expect(result).toMatchObject({ removed: 1, removedFolders: 0, protected: ['Mirror/Note/Edited.note'] });
         expect(vault.trash).toHaveBeenCalledExactlyOnceWith('Mirror/Note/Missing.note');
+        expect(vault.trashEmptyFolder).not.toHaveBeenCalled();
         expect(files.has('Mirror/Note/Unmanaged.note')).toBe(true);
         expect(files.has('Mirror/Note/Out.txt')).toBe(true);
         expect(files.has('Mirror/Note/Kept.note')).toBe(true);
         expect((await loadMirrorManifest(storage, {})).manifest.records).toHaveProperty('Mirror/Note/Edited.note');
         expect((await loadMirrorManifest(storage, {})).manifest.records).not.toHaveProperty('Mirror/Note/Missing.note');
         expect(verifyDeletionInventory).toHaveBeenCalledOnce();
+    });
+
+    it('prunes nested empty ancestors after commit but never the root or an occupied sibling', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+            records: { 'Mirror/Note/Nested/Missing.note': { contentHash: hashBytes(bytes),
+                source: { engineId: 'supernote-cloud', md5 } } } });
+        const folders = new Set(['Mirror', 'Mirror/Note', 'Mirror/Note/Nested', 'Mirror/Unrelated']);
+        const files = new Map([['Mirror/Note/Nested/Missing.note', bytes]]);
+        const trashEmptyFolder = vi.fn(async (path: string) => {
+            expect((await loadMirrorManifest(storage, {})).manifest.records).not.toHaveProperty('Mirror/Note/Nested/Missing.note');
+            if (!folders.has(path) || [...files.keys(), ...folders].some((entry) => entry.startsWith(`${path}/`))) return false;
+            folders.delete(path);
+            return true;
+        });
+        const vault = {
+            read: vi.fn(async (path: string) => files.get(path) ?? null), write: vi.fn(async () => {}),
+            trash: vi.fn(async (path: string) => { files.delete(path); }), trashEmptyFolder,
+            listFolders: vi.fn(async () => ['Mirror/Note', 'Mirror/Note/Nested']),
+        };
+        const inventory = { directories: [], items: [] };
+        const result = await runVerifiedCloudMirror({
+            inventory, canonicalPathsById: {}, syncFolder: 'Mirror', legacyManifest: {},
+            accountFingerprint: 'v1:synthetic-account', vault, storage,
+            transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => ({ inventory, canonicalPathsById: {} }),
+        });
+        expect(result.removed).toBe(1);
+        expect(result.removedFolders).toBe(2);
+        expect(trashEmptyFolder.mock.calls.map(([path]) => path)).toEqual(['Mirror/Note/Nested', 'Mirror/Note']);
+        expect(folders).toEqual(new Set(['Mirror', 'Mirror/Unrelated']));
+    });
+
+    it.each(['absent', 'folder-empty', 'extension-excluded', 'path-excluded', 'included'].flatMap((state) =>
+        [null, '.md', '.jpg', '.png', '.pdf'].map((localExtension) => ({ state, localExtension }))))('preserves a local $localExtension file with $state remote contents', async ({ state, localExtension }) => {
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: {} });
+        const folders = new Set(['Mirror', 'Mirror/Note', 'Mirror/Note/MM', 'Mirror/Note/Converted',
+            'Mirror/Other', 'Mirror/.supernote-sync']);
+        const localFiles = new Set(['Mirror/Note/Converted/fixture.md',
+            ...(localExtension ? [`Mirror/Note/MM/fixture${localExtension}`] : [])]);
+        const trashEmptyFolder = vi.fn(async (path: string) => {
+            if (!folders.has(path) || [...folders, ...localFiles].some((child) => child.startsWith(`${path}/`))) return false;
+            folders.delete(path);
+            return true;
+        });
+        const folder: CloudInventoryItem = { ...item('1', 'MM'), isFolder: true, size: null, md5: null };
+        const remote = state === 'absent' ? [] : state === 'folder-empty' ? [folder]
+            : [folder, item('2', state === 'extension-excluded' ? 'Remote.txt' : 'Remote.note')];
+        const inventory = { directories: [], items: remote };
+        const canonicalPathsById: Record<string, string> = remote.length
+            ? { '1': '/Note/MM', ...(remote.length > 1 ? { '2': `/Note/MM/${remote[1].fileName}` } : {}) } : {};
+        const vault = { read: vi.fn(async () => null), write: vi.fn(async () => {}),
+            trash: vi.fn(), listFolders: vi.fn(async () => [...folders].filter((path) => path !== 'Mirror')),
+            trashEmptyFolder };
+        const result = await runVerifiedCloudMirror({ inventory, canonicalPathsById, syncFolder: 'Mirror',
+            legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', vault, storage,
+            transfer: { download: vi.fn(async () => new Uint8Array([1, 2, 3])), md5: vi.fn(async () => md5) },
+            pathFilters: state === 'path-excluded' ? ['/Note/Elsewhere/**'] : [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => ({ inventory, canonicalPathsById }),
+        });
+        expect(result.failed).toEqual([]);
+        expect(result.removedFolders).toBe(state !== 'included' && localExtension === null ? 2 : 1);
+        expect(folders.has('Mirror/Note/MM')).toBe(state === 'included' || localExtension !== null);
+        if (localExtension) expect(localFiles.has(`Mirror/Note/MM/fixture${localExtension}`)).toBe(true);
+        expect(folders.has('Mirror/Note')).toBe(true);
+        expect(folders.has('Mirror/Note/Converted')).toBe(true);
+        expect(localFiles.has('Mirror/Note/Converted/fixture.md')).toBe(true);
+        expect(folders.has('Mirror')).toBe(true);
+        expect(folders.has('Mirror/.supernote-sync')).toBe(true);
+        expect(vault.trash).not.toHaveBeenCalled();
+        expect(trashEmptyFolder).not.toHaveBeenCalledWith('Mirror');
+    });
+
+    it.each(['changed', 'incomplete'])('does not sweep empty folders with a %s second inventory', async (state) => {
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: {} });
+        const trashEmptyFolder = vi.fn();
+        const result = await runVerifiedCloudMirror({
+            inventory: { directories: [], items: [] }, canonicalPathsById: {}, syncFolder: 'Mirror',
+            legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', storage,
+            vault: { read: vi.fn(), write: vi.fn(), trash: vi.fn(),
+                listFolders: vi.fn(async () => ['Mirror/Note/MM']), trashEmptyFolder },
+            transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => {
+                if (state === 'incomplete') throw new Error('Incomplete inventory');
+                return { inventory: { directories: [], items: [item('1', 'Remote.note')] },
+                    canonicalPathsById: { '1': '/Note/MM/Remote.note' } };
+            },
+        });
+        expect(result.warningCategories).toEqual([expect.stringContaining('deletion skipped')]);
+        expect(result.removedFolders).toBe(0);
+        expect(trashEmptyFolder).not.toHaveBeenCalled();
+    });
+
+    it('does not count a failed folder Trash move', async () => {
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: {} });
+        const inventory = { directories: [], items: [] };
+        const result = await runVerifiedCloudMirror({
+            inventory, canonicalPathsById: {}, syncFolder: 'Mirror', legacyManifest: {},
+            accountFingerprint: 'v1:synthetic-account', storage,
+            vault: { read: vi.fn(), write: vi.fn(), trash: vi.fn(),
+                listFolders: vi.fn(async () => ['Mirror/Note']),
+                trashEmptyFolder: vi.fn(async () => { throw new Error('Trash unavailable'); }) },
+            transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => ({ inventory, canonicalPathsById: {} }),
+        });
+        expect(result.removedFolders).toBe(0);
+        expect(result.warningCategories).toEqual(['Cloud mirror folder cleanup failed']);
     });
 
     it.each(['changed', 'incomplete'])('suppresses cleanup when the second inventory is %s', async (state) => {
@@ -67,7 +200,8 @@ describe('Cloud inventory to shared-manifest planning', () => {
         await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
             records: { 'Mirror/Note/Missing.note': { contentHash: hashBytes(bytes),
                 source: { engineId: 'supernote-cloud', md5 } } } });
-        const vault = { read: vi.fn(async () => bytes), write: vi.fn(async () => {}), trash: vi.fn() };
+        const vault = { read: vi.fn(async () => bytes), write: vi.fn(async () => {}),
+            trash: vi.fn(), trashEmptyFolder: vi.fn() };
         const result = await runVerifiedCloudMirror({
             inventory: { directories: [], items: [] }, canonicalPathsById: {}, syncFolder: 'Mirror',
             legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', vault, storage,
@@ -82,6 +216,7 @@ describe('Cloud inventory to shared-manifest planning', () => {
         expect(result.removed).toBe(0);
         expect(result.warningCategories).toEqual([expect.stringContaining('deletion skipped')]);
         expect(vault.trash).not.toHaveBeenCalled();
+        expect(vault.trashEmptyFolder).not.toHaveBeenCalled();
         expect(vault.read).not.toHaveBeenCalled();
         expect((await loadMirrorManifest(storage, {})).manifest.records).toHaveProperty('Mirror/Note/Missing.note');
     });
@@ -103,15 +238,47 @@ describe('Cloud inventory to shared-manifest planning', () => {
             ])) });
         failWrite = true;
         const trash = vi.fn(async () => {});
+        const trashEmptyFolder = vi.fn();
         await expect(runVerifiedCloudMirror({
             inventory: { directories: [], items: [] }, canonicalPathsById: {}, syncFolder: 'Mirror',
             legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', storage,
-            vault: { read: vi.fn(async () => bytes), write: vi.fn(async () => {}), trash },
+            vault: { read: vi.fn(async () => bytes), write: vi.fn(async () => {}), trash, trashEmptyFolder },
             transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
             fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
             verifyDeletionInventory: async () => ({ inventory: { directories: [], items: [] }, canonicalPathsById: {} }),
         })).rejects.toThrow('Manifest unavailable');
         expect(trash).toHaveBeenCalledOnce();
+        expect(trashEmptyFolder).not.toHaveBeenCalled();
+    });
+
+    it('does not prune when file Trash fails or the local file was edited', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+            records: Object.fromEntries(['Failed.note', 'Edited.note'].map((name) => [
+                `Mirror/Note/${name}`, { contentHash: hashBytes(bytes), source: { engineId: 'supernote-cloud' as const, md5 } },
+            ])) });
+        const trash = vi.fn(async () => { throw new Error('Trash unavailable'); });
+        const trashEmptyFolder = vi.fn();
+        const inventory = { directories: [], items: [] };
+        const result = await runVerifiedCloudMirror({
+            inventory, canonicalPathsById: {}, syncFolder: 'Mirror', legacyManifest: {},
+            accountFingerprint: 'v1:synthetic-account', storage,
+            vault: { read: vi.fn(async (path: string) => path.endsWith('Edited.note')
+                ? new Uint8Array([3, 2, 1]) : bytes), write: vi.fn(async () => {}), trash, trashEmptyFolder },
+            transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => ({ inventory, canonicalPathsById: {} }),
+        });
+        expect(result).toMatchObject({ removed: 0, protected: ['Mirror/Note/Edited.note'],
+            failed: ['Mirror/Note/Failed.note'] });
+        expect(trash).toHaveBeenCalledExactlyOnceWith('Mirror/Note/Failed.note');
+        expect(trashEmptyFolder).not.toHaveBeenCalled();
+        expect(Object.keys((await loadMirrorManifest(storage, {})).manifest.records)).toHaveLength(2);
     });
 
     it('writes once, persists history, skips unchanged bytes, and protects a later local edit', async () => {

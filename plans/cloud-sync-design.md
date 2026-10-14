@@ -1,7 +1,7 @@
 # Cloud Sync External Design
 
 **Status:** Draft behavior and acceptance specification; some specified
-capabilities remain unimplemented. **Scope date:** October 12-13, 2026.
+capabilities remain unimplemented. **Scope date:** October 12-14, 2026.
 
 This document specifies the externally observable contract for the proposed
 Cloud engine in `obsidian-supernote-companion`. It is a behavior-and-protocol
@@ -27,6 +27,8 @@ The Cloud engine supports exactly these user-facing capabilities:
   removing it.
 - Move an unchanged local mirror copy to Obsidian Trash after its Cloud source
   is confirmed absent by a complete inventory.
+- Move empty local mirror folders to Obsidian Trash when no in-scope Cloud files
+  remain beneath them, without touching any local folder that has contents.
 - Sign out and forget only the local session token.
 
 Exactly one sync engine is active in the plugin. When Cloud is inactive, Cloud
@@ -568,6 +570,30 @@ compatible error-code evidence.
   malformed result, or unknown path-normalization condition suppresses all
   remote-deletion cleanup for that run.
 
+### 9.3.1 Empty local folder outcomes
+
+- After an unchanged managed file is moved to Trash and its removal is recorded,
+  empty local parents may be moved to Obsidian Trash, up to but not including
+  the configured sync root.
+- A later run also checks already-empty local folders beneath the sync root,
+  even when no managed file is deleted in that run. Folder cleanup requires two
+  complete, identical verified Cloud inventories, just like file deletion.
+- An empty local folder is eligible when its Cloud subtree contains no files
+  matching the current path and extension allowlists. The remote folder may be
+  absent, empty, or contain only excluded files; excluded local files are never
+  removed by this rule.
+- A folder with any local file or subfolder is never moved to Trash, regardless
+  of filename, extension, origin, or filter status. Folders with in-scope Cloud
+  files, the sync root, and the mirror metadata folder remain in place.
+- A failed folder Trash action is reported as a warning; it does not undo a
+  previously committed file deletion or count as a successful folder move.
+
+On October 14, 2026, the user reported completing controlled-vault checks of
+folder and file Trash placement, sync-root and nonempty-folder protection,
+filter and metadata safeguards, and the separate completion counts. This is
+user-reported product validation, not evidence of a general Cloud protocol
+guarantee or an independently recorded test run.
+
 ### 9.4 Completion feedback
 
 Every Cloud mirror run provides Obsidian notifications at these lifecycle
@@ -582,7 +608,9 @@ points:
   - Downloaded files.
   - Unchanged files.
   - Excluded files.
-  - Local copies moved to Obsidian Trash.
+  - Local files moved to Obsidian Trash.
+  - Empty local folders moved to Obsidian Trash, separately from files and only
+    when at least one folder was successfully moved.
   - Protected files and per-file failures.
 
 Files that are unchanged or excluded do not produce a download-start notice. No

@@ -1,9 +1,9 @@
 import { hashBytes, SyncManifest } from '../deviceSync';
-import { FileExtensionAllowlist } from '../syncFilters';
+import { FileExtensionAllowlist, matchesAnyPathPattern, matchesFileExtension } from '../syncFilters';
 import { cloudInventoryFingerprint, CloudInventoryPass } from './cloudInventory';
 import { bindVerifiedCloudPaths, CloudMirrorPlan, missingManagedCloudPaths, planCloudMirror } from './cloudMirrorPlan';
 import { applyCloudDownload, CloudMirrorTransfer, CloudMirrorVault } from './cloudMirrorWrite';
-import { cloudPlanningRecords, requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
+import { cloudPlanningRecords, MIRROR_METADATA_DIRECTORY, requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
 import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from './sharedMirrorManifestStore';
 
 // Keep inventory binding and vault inspection separate from network transport.
@@ -52,7 +52,8 @@ export interface CloudMirrorRunOptions {
 }
 
 export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Promise<{
-    synced: number; unchanged: number; excluded: number; removed: number; protected: string[]; failed: string[];
+    synced: number; unchanged: number; excluded: number; removed: number; removedFolders: number;
+    protected: string[]; failed: string[];
     failureCategories: string[]; warningCategories: string[];
 }> {
     let loaded = await loadMirrorManifest(options.storage, options.legacyManifest);
@@ -61,7 +62,7 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         options.syncFolder, loaded.manifest, options.accountFingerprint, options.vault,
         options.pathFilters, options.fileExtensions);
     const result = {
-        synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length, removed: 0,
+        synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length, removed: 0, removedFolders: 0,
         protected: plan.protected.map((candidate) => candidate.vaultPath),
         failed: plan.missingChecksum.map((candidate) => candidate.vaultPath),
         failureCategories: plan.missingChecksum.map(() => 'Missing Cloud checksum'),
@@ -96,7 +97,15 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
     const files = bindVerifiedCloudPaths(options.inventory, options.canonicalPathsById);
     const candidates = missingManagedCloudPaths(files, options.syncFolder,
         cloudPlanningRecords(loaded.manifest), options.pathFilters, options.fileExtensions);
-    if (candidates.length > 0) {
+    const root = options.syncFolder.replace(/^\/+|\/+$/g, '');
+    const folders = options.vault.listFolders && options.vault.trashEmptyFolder
+        ? await options.vault.listFolders(root) : [];
+    const inScope = files.filter((file) => !file.item.isFolder
+        && matchesAnyPathPattern([file.canonicalPath], options.pathFilters)
+        && matchesFileExtension(file.canonicalPath.split('/').at(-1)!, options.fileExtensions))
+        .map((file) => `${root}${file.canonicalPath}`);
+    const trashedFolders = new Set<string>();
+    if (candidates.length > 0 || folders.length > 0) {
         if (!options.verifyDeletionInventory || !options.vault.trash) {
             throw new Error('Cloud deletion verification or Trash is unavailable');
         }
@@ -112,6 +121,7 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
             return result;
         }
         for (const path of candidates) {
+            let trashed = false;
             try {
                 const bytes = await options.vault.read(path);
                 if (bytes && hashBytes(bytes) !== loaded.manifest.records[path].contentHash) {
@@ -121,6 +131,7 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
                 if (bytes) {
                     await options.vault.trash(path);
                     result.removed++;
+                    trashed = true;
                 }
             } catch {
                 result.failed.push(path);
@@ -130,6 +141,39 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
             const records = { ...loaded.manifest.records };
             delete records[path];
             loaded = await saveMirrorManifest(options.storage, loaded, { ...loaded.manifest, records });
+            if (trashed && options.vault.trashEmptyFolder) {
+                let parent = path.slice(0, path.lastIndexOf('/'));
+                while (parent.startsWith(`${root}/`)
+                    && parent.slice(root.length + 1).split('/').every((segment) => segment && segment !== '.' && segment !== '..')
+                    && !inScope.some((file) => file.startsWith(`${parent}/`))) {
+                    try {
+                        if (!await options.vault.trashEmptyFolder(parent)) break;
+                        trashedFolders.add(parent);
+                        result.removedFolders++;
+                    } catch {
+                        result.warningCategories.push('Cloud mirror folder cleanup failed');
+                        break;
+                    }
+                    parent = parent.slice(0, parent.lastIndexOf('/'));
+                }
+            }
+        }
+        if (result.failed.length === 0 && options.vault.trashEmptyFolder) {
+            for (const folder of folders.sort((left, right) => right.length - left.length)) {
+                if (trashedFolders.has(folder) || !folder.startsWith(`${root}/`)
+                    || folder.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+                    || folder === `${root}/${MIRROR_METADATA_DIRECTORY}`
+                    || folder.startsWith(`${root}/${MIRROR_METADATA_DIRECTORY}/`)
+                    || inScope.some((path) => path.startsWith(`${folder}/`))) continue;
+                try {
+                    if (await options.vault.trashEmptyFolder(folder)) {
+                        trashedFolders.add(folder);
+                        result.removedFolders++;
+                    }
+                } catch {
+                    result.warningCategories.push('Cloud mirror folder cleanup failed');
+                }
+            }
         }
     }
     return result;

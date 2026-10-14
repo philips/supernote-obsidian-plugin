@@ -1,4 +1,4 @@
-import { App, TFile } from 'obsidian';
+import { App, TFile, TFolder } from 'obsidian';
 import { CloudMirrorVault } from './cloudMirrorWrite';
 
 export class ObsidianCloudMirrorVault implements CloudMirrorVault {
@@ -34,5 +34,29 @@ export class ObsidianCloudMirrorVault implements CloudMirrorVault {
         const entry = this.app.vault.getAbstractFileByPath(path);
         if (!(entry instanceof TFile)) throw new Error('Cloud mirror Trash target is not a file');
         await this.app.fileManager.trashFile(entry);
+    }
+
+    async trashEmptyFolder(path: string): Promise<boolean> {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        if (!(entry instanceof TFolder)) return false;
+        if (entry.children.length > 0) return false;
+        await this.app.fileManager.trashFile(entry);
+        return true;
+    }
+
+    async listFolders(root: string): Promise<string[]> {
+        const entry = this.app.vault.getAbstractFileByPath(root);
+        if (!(entry instanceof TFolder)) return [];
+        const folders: string[] = [];
+        const visit = (folder: TFolder) => {
+            for (const child of folder.children) {
+                if (child instanceof TFolder) {
+                    folders.push(child.path);
+                    visit(child);
+                }
+            }
+        };
+        visit(entry);
+        return folders;
     }
 }

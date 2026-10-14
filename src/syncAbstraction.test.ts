@@ -48,7 +48,7 @@ function stateStore(activeSyncEngine: 'ip-device' | 'supernote-cloud' = 'ip-devi
 describe('Cloud completion summary', () => {
     it('includes every secret-free count even when no files change', () => {
         expect(formatSyncSummary(result('supernote-cloud'))).toBe(
-            'Supernote sync: 1 downloaded, 0 unchanged, 0 out of scope, 0 moved to Trash, 0 skipped (locally edited), 0 failed',
+            'Supernote sync: 1 downloaded, 0 unchanged, 0 out of scope, 0 files moved to Trash, 0 skipped (locally edited), 0 failed',
         );
         expect(formatSyncSummary({ engineId: 'supernote-cloud', synced: 2, unchanged: 3,
             excluded: 4, removed: 1, issues: [
@@ -56,7 +56,16 @@ describe('Cloud completion summary', () => {
                 { kind: 'failure', message: 'Transfer failed' },
                 { kind: 'warning', message: 'Deletion skipped' },
             ] })).toBe(
-            'Supernote sync: 2 downloaded, 3 unchanged, 4 out of scope, 1 moved to Trash, 1 skipped (locally edited), 1 failed, 1 warning',
+            'Supernote sync: 2 downloaded, 3 unchanged, 4 out of scope, 1 file moved to Trash, 1 skipped (locally edited), 1 failed, 1 warning',
+        );
+    });
+
+    it('shows successful empty-folder moves separately from file moves', () => {
+        expect(formatSyncSummary({ ...result('supernote-cloud'), synced: 0, removedFolders: 1 })).toBe(
+            'Supernote sync: 0 downloaded, 0 unchanged, 0 out of scope, 0 files moved to Trash, 1 empty folder moved to Trash, 0 skipped (locally edited), 0 failed',
+        );
+        expect(formatSyncSummary({ ...result('supernote-cloud'), removed: 1, removedFolders: 2 })).toContain(
+            '1 file moved to Trash, 2 empty folders moved to Trash',
         );
     });
 });

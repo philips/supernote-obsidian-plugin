@@ -17,6 +17,12 @@
 - Treat an agreed block of work (such as a sprint) as an end-to-end task: plan
   the in-scope changes, implement them, and run the required checks without
   stopping for routine choices that the repository conventions already settle.
+- When the user says "Prepare for next <feature> sprint," treat it as a handoff:
+  update `<feature>-design.md` with design changes learned during this sprint;
+  update `<feature>-plan.md` to mark completed work and incorporate sprint
+  changes; then update `<feature>-next-steps.md` to contain only the steps
+  remaining after the handoff (not a recap of completed work) and the
+  recommended scope for next sprint.
 - At the start of the block, identify decisions, credentials, destructive
   actions, external access, and permissions that could block later steps. Ask
   all necessary clarifying questions or request approval together before the

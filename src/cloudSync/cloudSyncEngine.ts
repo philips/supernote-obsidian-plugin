@@ -91,7 +91,7 @@ export class CloudSyncEngine implements SyncEngine {
         });
         return {
             engineId: this.id, synced: result.synced, unchanged: result.unchanged,
-            excluded: result.excluded, removed: result.removed,
+            excluded: result.excluded, removed: result.removed, removedFolders: result.removedFolders,
             issues: [
                 ...result.protected.map(() => ({ kind: 'protected' as const, message: 'Vault copy was edited locally' })),
                 ...result.failureCategories.map((category) => ({ kind: 'failure' as const, message: category })),

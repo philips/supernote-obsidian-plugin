@@ -1,7 +1,9 @@
 # Cloud Sync Implementation Plan
 
-**Status:** Manual Cloud mirroring, lifecycle notifications, and guarded
-remote-deletion cleanup are implemented. Updated October 14, 2026.
+**Status:** Manual Cloud mirroring, lifecycle notifications, guarded
+remote-deletion cleanup, and empty mirror folder cleanup are implemented;
+controlled folder cleanup validation is complete. Automatic Cloud sync remains
+unimplemented. Updated October 14, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -44,6 +46,12 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   downloads, unchanged and excluded files, Trash moves, local edits, and
   failures. Remote-deletion cleanup requires two matching complete, verified
   inventories and an unchanged local hash; filtered and unmanaged paths remain.
+- The Cloud completion notice counts successful empty-folder Trash moves
+  separately from file Trash moves, displaying the folder count when nonzero.
+- On October 14, 2026, a user-triggered Cloud sync removed an already-empty
+  local mirror folder as expected. That observation confirms the folder
+  disappeared; the subsequent controlled checks below addressed Trash placement
+  and folder-safety scenarios.
 - On October 14, 2026, validated guarded deletion in the Marie vault using a
   unique synthetic destination and a filter that matched no Cloud files. One
   unchanged fixture moved to Obsidian system Trash; a locally edited fixture and
@@ -90,20 +98,46 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - Focused tests cover the safety gates and the Obsidian Trash adapter; the
   controlled-vault check above confirmed both Trash and local-edit protection.
 
-## Next Sprint: Empty Mirror Folder Cleanup
+### Sprint 3: Empty Mirror Folder Cleanup
 
-- After a successful, guarded Cloud file deletion and manifest commit, inspect
-  its parent directory. If it is empty, move it to Obsidian Trash; continue
-  upward while each parent is empty, stopping before the configured sync root.
-- Never remove a folder that contains any other file or folder, including
-  unmanaged files, locally edited copies, filtered-out files, or metadata. Do
-  not prune on an incomplete or changed inventory, failed Trash action, or
-  failed manifest commit. Do not sweep unrelated pre-existing empty folders.
-- Add focused tests for a single empty parent, nested empty ancestors, a
-  nonempty parent, the sync-root boundary, and skipped or failed deletions. Then
-  run `npm test`, `npm run build`, `npm run lint`, and `git diff --check`.
-  Validate with replaceable synthetic fixtures only before relying on the
-  behavior in the vault.
+- After each successful file Trash and manifest commit, the adapter moves only
+  empty ancestors to Obsidian Trash, stopping at a nonempty folder or before the
+  configured sync root. An inventory-verified pass also removes already-empty
+  local folders when the Cloud subtree has no in-scope files, whether that
+  remote folder exists or not.
+- Both cleanup paths require matching complete inventories. A failed or
+  suppressed file deletion does not trigger its parent cleanup; the separate
+  scan can still consider other already-empty folders when the inventory is
+  verified and there are no per-file failures. Local files of any type, local
+  subfolders, in-scope Cloud files, the sync root, and mirror metadata prevent
+  removal. Folder Trash failures warn without undoing a committed file deletion.
+- Synthetic tests cover nested and single empty parents, occupied parents
+  containing Markdown, JPEG, PNG, or PDF files, root protection, excluded and
+  in-scope remote files, edited files, changed/incomplete inventories, failed
+  file Trash, and failed manifest commits. The final notice reports successful
+  folder moves separately from file moves without double-counting.
+
+### Sprint 4: Controlled Folder Cleanup Validation
+
+- On October 14, 2026, the user reported completing the four controlled-vault
+  handoff checks: scoped synthetic fixtures without new login/OTP or Cloud
+  mutations; file and empty-parent Trash placement after manifest commit with
+  the root retained; already-empty folder cleanup with absent or out-of-scope
+  Cloud contents while preserving occupied, in-scope, and metadata folders; and
+  separate completion-notice counts without double-counting.
+- These checks are user-reported outcomes, not a new automated test run or an
+  independently captured Obsidian diagnostic. No additional code change was
+  reported as necessary during validation.
+
+## Next Implementation Sprint: Active-Engine Automatic Sync
+
+- The shared sync state has an interval setting but no scheduler currently
+  dispatches scheduled runs. Cloud explicitly rejects scheduled triggers.
+- Implement scheduled runs through the shared coordinator for the active engine
+  only, preserving readiness checks and overlap suppression. Keep Cloud network,
+  account, inventory, and local-deletion safeguards identical to manual runs. Do
+  not enable a live scheduled Cloud run without a controlled validation scope
+  and required access approvals.
 
 ## Validation Gates
 
@@ -116,6 +150,12 @@ The sprint gates were run on October 14, 2026:
 5. `git diff --check`.
 6. Controlled Marie-vault validation of remote deletion, using only replaceable
    synthetic fixtures. The vault's Trash option was `system`.
+
+For Sprint 3, focused synthetic tests, `npm test` (423 passing),
+`npm run build`, `npm run lint` (0 errors, 1 unrelated warning), and
+`git diff --check` passed. Sprint 4's controlled-vault checks were subsequently
+reported complete by the user; no new automated gates were run for that
+validation-only sprint.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

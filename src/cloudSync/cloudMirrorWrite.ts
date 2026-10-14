@@ -9,6 +9,8 @@ export interface CloudMirrorVault {
     read(path: string): Promise<Uint8Array | null>;
     write(path: string, bytes: Uint8Array): Promise<void>;
     trash?(path: string): Promise<void>;
+    trashEmptyFolder?(path: string): Promise<boolean>;
+    listFolders?(root: string): Promise<string[]>;
 }
 
 export interface CloudMirrorTransfer {

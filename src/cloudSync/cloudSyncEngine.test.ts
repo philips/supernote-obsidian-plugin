@@ -57,7 +57,7 @@ beforeEach(() => {
     vi.mocked(downloadCloudBytes).mockResolvedValue(new Uint8Array([1, 2, 3]));
     vi.mocked(runVerifiedCloudMirror).mockImplementation(async (options) => {
         await options.transfer.download(candidate);
-        return { synced: 1, unchanged: 0, excluded: 0, removed: 0, protected: [], failed: [],
+        return { synced: 1, unchanged: 0, excluded: 0, removed: 0, removedFolders: 2, protected: [], failed: [],
             failureCategories: [], warningCategories: [] };
     });
 });
@@ -81,7 +81,7 @@ describe('manual Cloud engine', () => {
     it('binds the validated account and downloads the descriptor bytes', async () => {
         const engine = new CloudSyncEngine(app, settings);
         await expect(engine.run({ kind: 'manual', commandId: 'sync-now' })).resolves.toMatchObject({
-            engineId: 'supernote-cloud', synced: 1, removed: 0,
+            engineId: 'supernote-cloud', synced: 1, removed: 0, removedFolders: 2,
         });
         expect(saveMirrorManifest).toHaveBeenCalledWith(expect.anything(), expect.anything(),
             expect.objectContaining({ cloudAccountFingerprint: fingerprint }));
@@ -96,7 +96,7 @@ describe('manual Cloud engine', () => {
     });
 
     it('does not announce downloads when every file is unchanged or excluded', async () => {
-        vi.mocked(runVerifiedCloudMirror).mockResolvedValue({ synced: 0, unchanged: 1, excluded: 1, removed: 0,
+        vi.mocked(runVerifiedCloudMirror).mockResolvedValue({ synced: 0, unchanged: 1, excluded: 1, removed: 0, removedFolders: 0,
             protected: [], failed: [], failureCategories: [], warningCategories: [] });
         await new CloudSyncEngine(app, settings).run({ kind: 'manual', commandId: 'sync-now' });
         expect(notice.mock.calls).toEqual([['Supernote cloud mirror started']]);
