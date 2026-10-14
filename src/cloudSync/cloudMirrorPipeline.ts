@@ -1,7 +1,7 @@
 import { hashBytes, SyncManifest } from '../deviceSync';
 import { FileExtensionAllowlist } from '../syncFilters';
-import { CloudInventoryPass } from './cloudInventory';
-import { bindVerifiedCloudPaths, CloudMirrorPlan, planCloudMirror } from './cloudMirrorPlan';
+import { cloudInventoryFingerprint, CloudInventoryPass } from './cloudInventory';
+import { bindVerifiedCloudPaths, CloudMirrorPlan, missingManagedCloudPaths, planCloudMirror } from './cloudMirrorPlan';
 import { applyCloudDownload, CloudMirrorTransfer, CloudMirrorVault } from './cloudMirrorWrite';
 import { cloudPlanningRecords, requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
 import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from './sharedMirrorManifestStore';
@@ -45,11 +45,15 @@ export interface CloudMirrorRunOptions {
     pathFilters: readonly string[];
     fileExtensions: FileExtensionAllowlist;
     maxFileBytes: number;
+    verifyDeletionInventory?: () => Promise<{
+        inventory: CloudInventoryPass;
+        canonicalPathsById: Readonly<Record<string, string>>;
+    }>;
 }
 
 export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Promise<{
-    synced: number; unchanged: number; excluded: number; protected: string[]; failed: string[];
-    failureCategories: string[];
+    synced: number; unchanged: number; excluded: number; removed: number; protected: string[]; failed: string[];
+    failureCategories: string[]; warningCategories: string[];
 }> {
     let loaded = await loadMirrorManifest(options.storage, options.legacyManifest);
     requireBoundCloudAccount(loaded.manifest, options.accountFingerprint);
@@ -57,10 +61,11 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         options.syncFolder, loaded.manifest, options.accountFingerprint, options.vault,
         options.pathFilters, options.fileExtensions);
     const result = {
-        synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length,
+        synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length, removed: 0,
         protected: plan.protected.map((candidate) => candidate.vaultPath),
         failed: plan.missingChecksum.map((candidate) => candidate.vaultPath),
         failureCategories: plan.missingChecksum.map(() => 'Missing Cloud checksum'),
+        warningCategories: [] as string[],
     };
     for (const candidate of plan.toDownload) {
         let write: Awaited<ReturnType<typeof applyCloudDownload>>;
@@ -86,6 +91,46 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         loaded = await saveMirrorManifest(options.storage, loaded, write.manifest);
         if (write.outcome === 'written') result.synced++;
         else result.unchanged++;
+    }
+
+    const files = bindVerifiedCloudPaths(options.inventory, options.canonicalPathsById);
+    const candidates = missingManagedCloudPaths(files, options.syncFolder,
+        cloudPlanningRecords(loaded.manifest), options.pathFilters, options.fileExtensions);
+    if (candidates.length > 0) {
+        if (!options.verifyDeletionInventory || !options.vault.trash) {
+            throw new Error('Cloud deletion verification or Trash is unavailable');
+        }
+        try {
+            const second = await options.verifyDeletionInventory();
+            if (cloudInventoryFingerprint(options.inventory, options.canonicalPathsById)
+                !== cloudInventoryFingerprint(second.inventory, second.canonicalPathsById)) {
+                result.warningCategories.push('Cloud inventory changed; deletion skipped');
+                return result;
+            }
+        } catch {
+            result.warningCategories.push('Cloud deletion inventory incomplete; deletion skipped');
+            return result;
+        }
+        for (const path of candidates) {
+            try {
+                const bytes = await options.vault.read(path);
+                if (bytes && hashBytes(bytes) !== loaded.manifest.records[path].contentHash) {
+                    result.protected.push(path);
+                    continue;
+                }
+                if (bytes) {
+                    await options.vault.trash(path);
+                    result.removed++;
+                }
+            } catch {
+                result.failed.push(path);
+                result.failureCategories.push('Cloud mirror Trash or vault operation failed');
+                continue;
+            }
+            const records = { ...loaded.manifest.records };
+            delete records[path];
+            loaded = await saveMirrorManifest(options.storage, loaded, { ...loaded.manifest, records });
+        }
     }
     return result;
 }

@@ -6,6 +6,7 @@ export const CLOUD_LIST_PAGE_SIZE = 100;
 export const CLOUD_MAX_PAGES_PER_DIRECTORY = 1_000;
 export const CLOUD_MAX_INVENTORY_ITEMS = 100_000;
 export const CLOUD_MAX_DIRECTORY_DEPTH = 128;
+export const CLOUD_DELETION_STABILITY_DELAY_MS = 1_000;
 // Product safety ceilings from the Cloud sync specification, not claims about
 // the service's undocumented limits. Select one for the active platform.
 export const CLOUD_MAX_DESKTOP_FILE_BYTES = 256 * 1024 * 1024;

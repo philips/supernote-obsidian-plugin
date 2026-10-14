@@ -29,4 +29,10 @@ export class ObsidianCloudMirrorVault implements CloudMirrorVault {
             throw new Error('Cloud mirror destination is not a file');
         }
     }
+
+    async trash(path: string): Promise<void> {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        if (!(entry instanceof TFile)) throw new Error('Cloud mirror Trash target is not a file');
+        await this.app.fileManager.trashFile(entry);
+    }
 }

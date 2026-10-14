@@ -42,6 +42,24 @@ export interface CloudMirrorPlan {
     missingChecksum: CloudMirrorCandidate[];
 }
 
+export function missingManagedCloudPaths(
+    files: VerifiedCloudFile[],
+    syncFolder: string,
+    records: Readonly<Record<string, CloudMirrorRecord>>,
+    pathFilters: readonly string[],
+    fileExtensions: FileExtensionAllowlist,
+): string[] {
+    const root = syncFolder.replace(/^\/+|\/+$/g, '');
+    const present = new Set(files.map((file) => `${root}${file.canonicalPath}`));
+    return Object.keys(records).filter((path) => {
+        if (!path.startsWith(`${root}/`) || present.has(path)) return false;
+        const relative = path.slice(root.length);
+        return !relative.startsWith(`/${MIRROR_METADATA_DIRECTORY}/`)
+            && matchesAnyPathPattern([relative], pathFilters)
+            && matchesFileExtension(relative.split('/').at(-1)!, fileExtensions);
+    });
+}
+
 export function planCloudMirror(
     files: VerifiedCloudFile[],
     syncFolder: string,

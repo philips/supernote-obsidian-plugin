@@ -14,6 +14,106 @@ function item(id: string, fileName: string): CloudInventoryItem {
 }
 
 describe('Cloud inventory to shared-manifest planning', () => {
+    it('trashes only unchanged managed files missing from two identical verified inventories', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const files = new Map([['Mirror/Note/Missing.note', bytes],
+            ['Mirror/Note/Edited.note', new Uint8Array([3, 2, 1])],
+            ['Mirror/Note/Out.txt', bytes], ['Mirror/Note/Kept.note', bytes],
+            ['Mirror/Note/Unmanaged.note', bytes]]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, {
+            version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: Object.fromEntries(
+                ['Missing.note', 'Edited.note', 'Out.txt', 'Kept.note'].map((name) => [
+                    `Mirror/Note/${name}`, { contentHash: hashBytes(bytes), source: { engineId: 'ip-device' as const,
+                        deviceUri: '/synthetic', deviceDate: '2026-01-01', deviceSize: 3 } },
+                ])),
+        });
+        const vault = {
+            read: vi.fn(async (path: string) => files.get(path) ?? null),
+            write: vi.fn(async () => {}),
+            trash: vi.fn(async (path: string) => { files.delete(path); }),
+        };
+        const inventory = { directories: [], items: [item('1', 'Kept.note')] };
+        const canonicalPathsById = { '1': '/Note/Kept.note' };
+        const verifyDeletionInventory = vi.fn(async () => ({ inventory, canonicalPathsById }));
+        const result = await runVerifiedCloudMirror({
+            inventory, canonicalPathsById, syncFolder: 'Mirror', legacyManifest: {},
+            accountFingerprint: 'v1:synthetic-account', vault, storage,
+            transfer: { download: vi.fn(async () => bytes), md5: vi.fn(async () => md5) },
+            pathFilters: [], fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory,
+        });
+        expect(result).toMatchObject({ removed: 1, protected: ['Mirror/Note/Edited.note'] });
+        expect(vault.trash).toHaveBeenCalledExactlyOnceWith('Mirror/Note/Missing.note');
+        expect(files.has('Mirror/Note/Unmanaged.note')).toBe(true);
+        expect(files.has('Mirror/Note/Out.txt')).toBe(true);
+        expect(files.has('Mirror/Note/Kept.note')).toBe(true);
+        expect((await loadMirrorManifest(storage, {})).manifest.records).toHaveProperty('Mirror/Note/Edited.note');
+        expect((await loadMirrorManifest(storage, {})).manifest.records).not.toHaveProperty('Mirror/Note/Missing.note');
+        expect(verifyDeletionInventory).toHaveBeenCalledOnce();
+    });
+
+    it.each(['changed', 'incomplete'])('suppresses cleanup when the second inventory is %s', async (state) => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+            records: { 'Mirror/Note/Missing.note': { contentHash: hashBytes(bytes),
+                source: { engineId: 'supernote-cloud', md5 } } } });
+        const vault = { read: vi.fn(async () => bytes), write: vi.fn(async () => {}), trash: vi.fn() };
+        const result = await runVerifiedCloudMirror({
+            inventory: { directories: [], items: [] }, canonicalPathsById: {}, syncFolder: 'Mirror',
+            legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', vault, storage,
+            transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => {
+                if (state === 'incomplete') throw new Error('Incomplete pagination');
+                return { inventory: { directories: [], items: [item('2', 'New.note')] },
+                    canonicalPathsById: { '2': '/Note/New.note' } };
+            },
+        });
+        expect(result.removed).toBe(0);
+        expect(result.warningCategories).toEqual([expect.stringContaining('deletion skipped')]);
+        expect(vault.trash).not.toHaveBeenCalled();
+        expect(vault.read).not.toHaveBeenCalled();
+        expect((await loadMirrorManifest(storage, {})).manifest.records).toHaveProperty('Mirror/Note/Missing.note');
+    });
+
+    it('stops deleting after Trash when the manifest commit fails', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        let failWrite = false;
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => {
+                if (failWrite) throw new Error('Manifest unavailable');
+                slots.set(slot, value);
+            },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+            records: Object.fromEntries(['First.note', 'Second.note'].map((name) => [
+                `Mirror/Note/${name}`, { contentHash: hashBytes(bytes), source: { engineId: 'supernote-cloud' as const, md5 } },
+            ])) });
+        failWrite = true;
+        const trash = vi.fn(async () => {});
+        await expect(runVerifiedCloudMirror({
+            inventory: { directories: [], items: [] }, canonicalPathsById: {}, syncFolder: 'Mirror',
+            legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', storage,
+            vault: { read: vi.fn(async () => bytes), write: vi.fn(async () => {}), trash },
+            transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => ({ inventory: { directories: [], items: [] }, canonicalPathsById: {} }),
+        })).rejects.toThrow('Manifest unavailable');
+        expect(trash).toHaveBeenCalledOnce();
+    });
+
     it('writes once, persists history, skips unchanged bytes, and protects a later local edit', async () => {
         const bytes = new Uint8Array([0, 255, 1]);
         const files = new Map<string, Uint8Array>();

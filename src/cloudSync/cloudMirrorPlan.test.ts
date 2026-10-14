@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_FILE_EXTENSION_ALLOWLIST } from '../syncFilters';
 import { CloudInventoryItem } from './cloudInventory';
-import { bindVerifiedCloudPaths, planCloudMirror, VerifiedCloudFile } from './cloudMirrorPlan';
+import { bindVerifiedCloudPaths, missingManagedCloudPaths, planCloudMirror, VerifiedCloudFile } from './cloudMirrorPlan';
 
 function file(path: string, id: string, md5: string | null = '0123456789abcdef0123456789abcdef'): VerifiedCloudFile {
     const fileName = path.split('/').at(-1)!;
@@ -65,6 +65,17 @@ describe('Cloud mirror planning boundary', () => {
         expect(result.toDownload.map(({ item }) => item.id)).toEqual(['1']);
         expect(result.excluded.map(({ item }) => item.id)).toEqual(['2', '3']);
         expect(result).not.toHaveProperty('toDelete');
+    });
+
+    it('only selects absent, managed, currently in-scope destinations', () => {
+        const records = Object.fromEntries(['Kept.note', 'Missing.note', 'Out.txt', 'Elsewhere.note']
+            .map((name) => [`Mirror/Note/${name}`, { contentHash: 'ours' }]));
+        records['Other/Note/Missing.note'] = { contentHash: 'ours' };
+        expect(missingManagedCloudPaths([file('/Note/Kept.note', '1')], 'Mirror', records,
+            ['/Note/*.note'], DEFAULT_FILE_EXTENSION_ALLOWLIST)).toEqual([
+            'Mirror/Note/Missing.note', 'Mirror/Note/Elsewhere.note',
+        ]);
+        expect(missingManagedCloudPaths([], 'Mirror', {}, [], DEFAULT_FILE_EXTENSION_ALLOWLIST)).toEqual([]);
     });
 
     it('downloads to re-baseline IP-origin records and blocks files without checksums', () => {

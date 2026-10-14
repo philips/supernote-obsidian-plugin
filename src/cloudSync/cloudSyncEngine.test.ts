@@ -10,7 +10,9 @@ import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestSt
 import { CloudSyncEngine } from './cloudSyncEngine';
 
 const post = vi.hoisted(() => vi.fn());
-vi.mock('obsidian', () => ({ Platform: { isDesktop: true }, requestUrl: vi.fn(), TFile: class TFile {} }));
+const notice = vi.hoisted(() => vi.fn());
+vi.mock('obsidian', () => ({ Platform: { isDesktop: true }, Notice: notice,
+    requestUrl: vi.fn(), TFile: class TFile {} }));
 vi.mock('../../scripts/cloudProtocolSession', () => ({ validateCloudProtocolSession: vi.fn() }));
 vi.mock('../../scripts/cloudProtocolTransport', () => ({
     CloudRequestBudget: class CloudRequestBudget {},
@@ -55,7 +57,8 @@ beforeEach(() => {
     vi.mocked(downloadCloudBytes).mockResolvedValue(new Uint8Array([1, 2, 3]));
     vi.mocked(runVerifiedCloudMirror).mockImplementation(async (options) => {
         await options.transfer.download(candidate);
-        return { synced: 1, unchanged: 0, excluded: 0, protected: [], failed: [], failureCategories: [] };
+        return { synced: 1, unchanged: 0, excluded: 0, removed: 0, protected: [], failed: [],
+            failureCategories: [], warningCategories: [] };
     });
 });
 
@@ -72,6 +75,7 @@ describe('manual Cloud engine', () => {
         await expect(engine.run({ kind: 'manual', commandId: 'sync-now' })).rejects.toThrow('Account mismatch');
         expect(collectCloudInventory).not.toHaveBeenCalled();
         expect(loadMirrorManifest).not.toHaveBeenCalled();
+        expect(notice).not.toHaveBeenCalled();
     });
 
     it('binds the validated account and downloads the descriptor bytes', async () => {
@@ -84,7 +88,19 @@ describe('manual Cloud engine', () => {
         expect(queryCloudPath).toHaveBeenCalledWith(expect.anything(), 'synthetic-token', '123');
         expect(downloadCloudBytes).toHaveBeenCalledWith(expect.anything(), item.md5,
             expect.any(Number));
+        expect(notice.mock.calls).toEqual([
+            ['Supernote cloud mirror started'],
+            ['Supernote Cloud downloading: Mirror/Note/Test.note'],
+        ]);
         expect(setSecret).not.toHaveBeenCalled();
+    });
+
+    it('does not announce downloads when every file is unchanged or excluded', async () => {
+        vi.mocked(runVerifiedCloudMirror).mockResolvedValue({ synced: 0, unchanged: 1, excluded: 1, removed: 0,
+            protected: [], failed: [], failureCategories: [], warningCategories: [] });
+        await new CloudSyncEngine(app, settings).run({ kind: 'manual', commandId: 'sync-now' });
+        expect(notice.mock.calls).toEqual([['Supernote cloud mirror started']]);
+        expect(downloadCloudBytes).not.toHaveBeenCalled();
     });
 
 });

@@ -1,4 +1,4 @@
-import { App, Platform } from 'obsidian';
+import { App, Notice, Platform } from 'obsidian';
 import { md5 } from '@noble/hashes/legacy.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { validateCloudProtocolSession } from '../../scripts/cloudProtocolSession';
@@ -11,7 +11,7 @@ import { collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
 import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { CloudMirrorTransfer } from './cloudMirrorWrite';
-import { CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_ROUTES } from './cloudPolicy';
+import { CLOUD_DELETION_STABILITY_DELAY_MS, CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_ROUTES } from './cloudPolicy';
 import { CloudSessionStorage } from './cloudSessionStorage';
 import { ObsidianCloudMirrorVault } from './obsidianCloudMirrorVault';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';
@@ -57,18 +57,23 @@ export class CloudSyncEngine implements SyncEngine {
             });
         }
         requireBoundCloudAccount(loaded.manifest, fingerprint);
+        new Notice('Supernote cloud mirror started');
 
-        const inventory = await collectCloudInventory(transport, session.token);
-        const queriedPaths = new Map();
-        for (const item of inventory.items) {
-            queriedPaths.set(item.id, await queryCloudPath(transport, session.token, item.id));
-        }
-        const canonicalPathsById = Object.fromEntries(verifyCloudInventoryPaths(inventory, queriedPaths));
+        const collectVerifiedInventory = async () => {
+            const inventory = await collectCloudInventory(transport, session.token);
+            const queriedPaths = new Map();
+            for (const item of inventory.items) {
+                queriedPaths.set(item.id, await queryCloudPath(transport, session.token, item.id));
+            }
+            return { inventory, canonicalPathsById: Object.fromEntries(verifyCloudInventoryPaths(inventory, queriedPaths)) };
+        };
+        const { inventory, canonicalPathsById } = await collectVerifiedInventory();
         const transfer: CloudMirrorTransfer = {
             md5: async (bytes) => bytesToHex(md5(bytes)),
             download: async (candidate: CloudMirrorCandidate) => {
                 const descriptor = await transport.post(CLOUD_ROUTES.downloadDescriptor,
                     { id: candidate.item.id, type: '0' }, { accessToken: session.token });
+                new Notice(`Supernote Cloud downloading: ${candidate.vaultPath}`);
                 return downloadCloudBytes(descriptor, candidate.item.md5!, CLOUD_MAX_DESKTOP_FILE_BYTES);
             },
         };
@@ -79,13 +84,18 @@ export class CloudSyncEngine implements SyncEngine {
             pathFilters: parsePathFilters(this.settings.syncPathFiltersRaw),
             fileExtensions: parseFileExtensionAllowlist(this.settings.syncFileExtensionsRaw),
             maxFileBytes: CLOUD_MAX_DESKTOP_FILE_BYTES,
+            verifyDeletionInventory: async () => {
+                await new Promise((resolve) => window.setTimeout(resolve, CLOUD_DELETION_STABILITY_DELAY_MS));
+                return collectVerifiedInventory();
+            },
         });
         return {
             engineId: this.id, synced: result.synced, unchanged: result.unchanged,
-            excluded: result.excluded, removed: 0,
+            excluded: result.excluded, removed: result.removed,
             issues: [
                 ...result.protected.map(() => ({ kind: 'protected' as const, message: 'Vault copy was edited locally' })),
                 ...result.failureCategories.map((category) => ({ kind: 'failure' as const, message: category })),
+                ...result.warningCategories.map((category) => ({ kind: 'warning' as const, message: category })),
             ],
         };
     }

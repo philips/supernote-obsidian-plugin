@@ -18,7 +18,9 @@ function fakeVault() {
             entries.set(file.path, new Uint8Array(buffer));
         }),
     };
-    return { entries, vault, adapter: new ObsidianCloudMirrorVault({ vault } as unknown as App) };
+    const fileManager = { trashFile: vi.fn(async (file: TFile) => { entries.delete(file.path); }) };
+    return { entries, vault, fileManager,
+        adapter: new ObsidianCloudMirrorVault({ vault, fileManager } as unknown as App) };
 }
 
 describe('Obsidian Cloud mirror vault', () => {
@@ -46,5 +48,17 @@ describe('Obsidian Cloud mirror vault', () => {
             .rejects.toThrow('not a file');
         expect(vault.modifyBinary).not.toHaveBeenCalled();
         expect(vault.createBinary).not.toHaveBeenCalled();
+    });
+
+    it('moves only a real file through Obsidian file manager Trash', async () => {
+        const { entries, fileManager, adapter } = fakeVault();
+        entries.set('Mirror/Note/fixture.note', new Uint8Array([1]));
+        entries.set('Mirror/Note/folder', null);
+        await adapter.trash('Mirror/Note/fixture.note');
+        expect(fileManager.trashFile).toHaveBeenCalledWith(expect.objectContaining({ path: 'Mirror/Note/fixture.note' }));
+        expect(entries.has('Mirror/Note/fixture.note')).toBe(false);
+        await expect(adapter.trash('Mirror/Note/folder')).rejects.toThrow('not a file');
+        await expect(adapter.trash('Mirror/Note/unknown.note')).rejects.toThrow('not a file');
+        expect(fileManager.trashFile).toHaveBeenCalledOnce();
     });
 });

@@ -16,7 +16,7 @@ import './webcomponent/SupernoteViewerElement';
 import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { IpSyncEngine } from './syncEngine';
-import { SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
+import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
 import { CloudSyncEngine } from './cloudSync/cloudSyncEngine';
@@ -1515,14 +1515,7 @@ export default class SupernotePlugin extends Plugin {
 	private showSyncResult(result: SyncRunResult): void {
 		const protectedCount = result.issues.filter((issue) => issue.kind === 'protected').length;
 		const failureCount = result.issues.filter((issue) => issue.kind === 'failure').length;
-		const warningCount = result.issues.filter((issue) => issue.kind === 'warning').length;
-		const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
-		if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
-		if (result.removed > 0) parts.push(`${result.removed} removed`);
-		if (protectedCount > 0) parts.push(`${protectedCount} skipped (locally edited)`);
-		if (failureCount > 0) parts.push(`${failureCount} failed`);
-		if (warningCount > 0) parts.push(`${warningCount} warnings`);
-		new Notice(`Supernote sync: ${parts.join(', ')}`);
+		new Notice(formatSyncSummary(result));
 
 		if (protectedCount > 0 && result.engineId === 'ip-device') {
 			console.warn('Supernote sync protected these items:', result.issues.filter((issue) => issue.kind === 'protected'));

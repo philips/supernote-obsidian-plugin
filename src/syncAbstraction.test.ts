@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+    formatSyncSummary,
     SingleEngineSyncCoordinator,
     SyncEngine,
     SyncExecutionState,
@@ -43,6 +44,22 @@ function stateStore(activeSyncEngine: 'ip-device' | 'supernote-cloud' = 'ip-devi
     };
     return { store, current: () => state };
 }
+
+describe('Cloud completion summary', () => {
+    it('includes every secret-free count even when no files change', () => {
+        expect(formatSyncSummary(result('supernote-cloud'))).toBe(
+            'Supernote sync: 1 downloaded, 0 unchanged, 0 out of scope, 0 moved to Trash, 0 skipped (locally edited), 0 failed',
+        );
+        expect(formatSyncSummary({ engineId: 'supernote-cloud', synced: 2, unchanged: 3,
+            excluded: 4, removed: 1, issues: [
+                { kind: 'protected', message: 'Local edit' },
+                { kind: 'failure', message: 'Transfer failed' },
+                { kind: 'warning', message: 'Deletion skipped' },
+            ] })).toBe(
+            'Supernote sync: 2 downloaded, 3 unchanged, 4 out of scope, 1 moved to Trash, 1 skipped (locally edited), 1 failed, 1 warning',
+        );
+    });
+});
 
 describe('SingleEngineSyncCoordinator', () => {
     it('runs only the selected engine and persists selection changes', async () => {

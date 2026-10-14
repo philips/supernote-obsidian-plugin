@@ -1,8 +1,7 @@
 # Cloud Sync Implementation Plan
 
-**Status:** Manual, non-deleting Cloud mirroring is implemented. Lifecycle
-notifications and guarded remote-deletion cleanup remain. Updated October 14,
-2026.
+**Status:** Manual Cloud mirroring, lifecycle notifications, and guarded
+remote-deletion cleanup are implemented. Updated October 14, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -32,8 +31,8 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - Implemented guarded byte transfer and vault writes: credential-free Obsidian
   `requestUrl` GET, size and MD5 verification, local-edit checks immediately
   before writes, and no rewrite for identical bytes.
-- Implemented a desktop-only manual Cloud mirror engine. Cloud automatic sync,
-  history reset, and remote-deletion cleanup remain disabled/unimplemented.
+- Implemented a desktop-only manual Cloud mirror engine. Cloud automatic sync
+  and history reset remain disabled/unimplemented.
 - Implemented opt-in, redacted protocol-harness modes for account-bound
   inventory and descriptor checks. The harness remains separate from product
   sync and requires explicit consent for login/OTP and other approved probes.
@@ -41,6 +40,16 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   13, 2026. A later run mirrored matching nested note files. Narrowing filters
   did not remove prior copies. No login/OTP, remote deletion, or harness-cache
   cleanup was performed as part of those mirror checks.
+- Implemented start and per-download notices, with completion counts for Cloud
+  downloads, unchanged and excluded files, Trash moves, local edits, and
+  failures. Remote-deletion cleanup requires two matching complete, verified
+  inventories and an unchanged local hash; filtered and unmanaged paths remain.
+- On October 14, 2026, validated guarded deletion in the Marie vault using a
+  unique synthetic destination and a filter that matched no Cloud files. One
+  unchanged fixture moved to Obsidian system Trash; a locally edited fixture
+  and an unmanaged fixture stayed intact. The synthetic destination was then
+  removed, leaving the system Trash item. No login/OTP or Cloud mutation was
+  performed. The local debugger attached to a Marie-targeted Obsidian launch.
 
 ### Implementation Decisions
 
@@ -59,47 +68,54 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   bodies, or identifying account/file data in logs, fixtures, or reports. Retain
   the harness cache unless separately authorized for cleanup.
 
-## Remaining Work
+## Completed Sprint Checks
 
 ### Sprint 1: Lifecycle Notifications
 
-- Notify when a run starts, only after readiness checks pass.
-- Notify immediately before each actual new/changed file download, using only a
-  safe display name or vault-relative mirror path.
-- Keep the existing completion summary and ensure it includes the secret-free
-  counts required by the external spec.
-- Do not issue download-start notices for unchanged or filtered-out files.
-- Add focused tests for start, per-download, and completion notices, including
-  readiness failure and unchanged/excluded files.
+- Start notices follow account readiness and binding; download notices precede
+  actual byte transfer and omit unchanged or excluded files. The existing
+  completion notice now includes every secret-free Cloud count.
+- Focused engine tests cover the start and download notices, rejected account,
+  and unchanged/excluded files. The coordinator's readiness gate prevents
+  unready runs from entering the engine.
 
 ### Sprint 2: Remote-Deletion Cleanup
 
-- Identify deletion candidates only from previously managed paths that remain in
-  the current filter scope and are absent from a complete Cloud inventory.
-- When candidates exist, collect a second complete inventory after the policy
-  delay and require an identical inventory fingerprint before cleanup.
-- Recheck the local hash immediately before action. Move unchanged managed
-  copies to Obsidian Trash; retain and report locally edited copies.
-- Never remove unmanaged files or treat current path/extension exclusions as
-  remote deletions. Any incomplete or inconsistent inventory suppresses all
-  cleanup for that run.
-- Add focused tests for incomplete/changed inventories, local edits, unmanaged
-  files, filtered paths, and in-scope missing files.
-- Validate only in the controlled test vault after the guarded code and tests
-  pass. Confirm both the Obsidian Trash result and preservation of a locally
-  edited file.
+- Candidates are managed, currently in-scope paths missing from verified Cloud
+  inventory. A second complete inventory follows the policy delay; differing
+  fingerprints or failed verification suppress all cleanup.
+- An unchanged local hash is required immediately before Obsidian Trash.
+  Locally edited, unmanaged, filtered, and still-present files are retained.
+  Manifest commit failure after Trash stops the run rather than continuing.
+- Focused tests cover the safety gates and the Obsidian Trash adapter; the
+  controlled-vault check above confirmed both Trash and local-edit protection.
+
+## Next Sprint: Empty Mirror Folder Cleanup
+
+- After a successful, guarded Cloud file deletion and manifest commit, inspect
+  its parent directory. If it is empty, move it to Obsidian Trash; continue
+  upward while each parent is empty, stopping before the configured sync root.
+- Never remove a folder that contains any other file or folder, including
+  unmanaged files, locally edited copies, filtered-out files, or metadata.
+  Do not prune on an incomplete or changed inventory, failed Trash action, or
+  failed manifest commit. Do not sweep unrelated pre-existing empty folders.
+- Add focused tests for a single empty parent, nested empty ancestors, a
+  nonempty parent, the sync-root boundary, and skipped or failed deletions.
+  Then run `npm test`, `npm run build`, `npm run lint`, and `git diff --check`.
+  Validate with replaceable synthetic fixtures only before relying on the
+  behavior in the vault.
 
 ## Validation Gates
 
-After the two work slices are implemented, run:
+The sprint gates were run on October 14, 2026:
 
 1. Focused Cloud lifecycle and deletion tests during development.
 2. `npm test`.
 3. `npm run build`.
 4. `npm run lint`.
 5. `git diff --check`.
-6. Controlled test-vault validation of remote deletion, using replaceable test
-   fixtures only.
+6. Controlled Marie-vault validation of remote deletion, using only replaceable
+  synthetic fixtures. The vault's Trash option was `system`.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

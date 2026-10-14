@@ -1,3 +1,5 @@
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import {
     CloudControlPlaneTransport,
     CloudJsonObject,
@@ -53,6 +55,21 @@ export interface CloudInventoryDirectory {
 export interface CloudInventoryPass {
     directories: CloudInventoryDirectory[];
     items: CloudInventoryItem[];
+}
+
+export function cloudInventoryFingerprint(
+    inventory: CloudInventoryPass,
+    canonicalPathsById: Readonly<Record<string, string>>,
+): string {
+    if (Object.keys(canonicalPathsById).length !== inventory.items.length) {
+        throw new CloudProtocolError('Cloud inventory fingerprint requires all verified paths');
+    }
+    const entries = inventory.items.map((item) => {
+        const path = canonicalPathsById[item.id];
+        if (!path) throw new CloudProtocolError('Cloud inventory fingerprint is missing a verified path');
+        return [item.id, item.directoryId, path, item.isFolder, item.md5] as const;
+    }).sort((left, right) => left[0].localeCompare(right[0]));
+    return bytesToHex(sha256(utf8ToBytes(JSON.stringify(entries))));
 }
 
 export interface CloudPathResult {

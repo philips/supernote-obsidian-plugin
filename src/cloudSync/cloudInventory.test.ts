@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CloudControlPlaneTransport, CloudJsonObject, CloudRawResponse } from './cloudProtocol';
 import {
+    cloudInventoryFingerprint,
     collectCloudInventory,
     listCloudDirectory,
     parseCloudDirectoryPage,
@@ -53,6 +54,22 @@ function directoryResponse(pageNumber: number, ids: string[]): CloudRawResponse 
 }
 
 describe('Cloud inventory pagination', () => {
+    it('fingerprints verified folder paths and file checksums regardless of listing order', () => {
+        const folder = { id: '1', directoryId: '0', fileName: 'Note', isFolder: true,
+            size: null, md5: null, depth: 1, parentPath: '/', parentDerivedPath: '/Note' };
+        const file = { id: '2', directoryId: '1', fileName: 'Sample.note', isFolder: false,
+            size: '3', md5: 'a'.repeat(32), depth: 2, parentPath: '/Note', parentDerivedPath: '/Note/Sample.note' };
+        const paths = { '1': '/Note', '2': '/Note/Sample.note' };
+        const first = cloudInventoryFingerprint({ directories: [], items: [folder, file] }, paths);
+        expect(cloudInventoryFingerprint({ directories: [], items: [file, folder] }, paths)).toBe(first);
+        expect(cloudInventoryFingerprint({ directories: [], items: [folder, { ...file, md5: 'b'.repeat(32) }] }, paths))
+            .not.toBe(first);
+        expect(cloudInventoryFingerprint({ directories: [], items: [folder, file] }, { ...paths, '1': '/Document' }))
+            .not.toBe(first);
+        expect(() => cloudInventoryFingerprint({ directories: [], items: [folder, file] }, { '1': '/Note' }))
+            .toThrow('verified paths');
+    });
+
     it('verifies queried hierarchy while reconciling standard root category casing', () => {
         const items = [
             { id: '10', directoryId: '0', fileName: 'Note', isFolder: true, depth: 1, parentPath: '/', parentDerivedPath: '/Note', size: null, md5: null },

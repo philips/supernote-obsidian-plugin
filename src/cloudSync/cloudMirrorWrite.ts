@@ -8,6 +8,7 @@ import { requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorMa
 export interface CloudMirrorVault {
     read(path: string): Promise<Uint8Array | null>;
     write(path: string, bytes: Uint8Array): Promise<void>;
+    trash?(path: string): Promise<void>;
 }
 
 export interface CloudMirrorTransfer {

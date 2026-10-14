@@ -24,6 +24,20 @@ export interface SyncRunResult {
     issues: SyncIssue[];
 }
 
+export function formatSyncSummary(result: SyncRunResult): string {
+    const protectedCount = result.issues.filter((issue) => issue.kind === 'protected').length;
+    const failureCount = result.issues.filter((issue) => issue.kind === 'failure').length;
+    const warningCount = result.issues.filter((issue) => issue.kind === 'warning').length;
+    const cloud = result.engineId === 'supernote-cloud';
+    const parts = [`${result.synced} ${cloud ? 'downloaded' : 'synced'}`, `${result.unchanged} unchanged`];
+    if (cloud || result.excluded > 0) parts.push(`${result.excluded} out of scope`);
+    if (cloud || result.removed > 0) parts.push(`${result.removed} ${cloud ? 'moved to Trash' : 'removed'}`);
+    if (cloud || protectedCount > 0) parts.push(`${protectedCount} skipped (locally edited)`);
+    if (cloud || failureCount > 0) parts.push(`${failureCount} failed`);
+    if (warningCount > 0) parts.push(`${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'}`);
+    return `Supernote sync: ${parts.join(', ')}`;
+}
+
 export interface SyncEngine {
     readonly id: SyncEngineId;
     readonly name: string;
