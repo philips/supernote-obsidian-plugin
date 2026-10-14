@@ -39,8 +39,6 @@ export interface SyncExecutionState {
     lastAutomaticAttemptAt: Partial<Record<SyncEngineId, string>>;
     lastRunAt: Partial<Record<SyncEngineId, string>>;
     lastRunOutcome: Partial<Record<SyncEngineId, 'succeeded' | 'attention' | 'failed'>>;
-    cloudSessionToken: string | null;
-    cloudAccountId: string | null;
 }
 
 export const DEFAULT_SYNC_EXECUTION_STATE: SyncExecutionState = {
@@ -50,8 +48,6 @@ export const DEFAULT_SYNC_EXECUTION_STATE: SyncExecutionState = {
     lastAutomaticAttemptAt: {},
     lastRunAt: {},
     lastRunOutcome: {},
-    cloudSessionToken: null,
-    cloudAccountId: null,
 };
 
 export interface SyncExecutionStateStore {

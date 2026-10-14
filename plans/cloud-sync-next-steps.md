@@ -103,11 +103,55 @@
   commits. Synthetic tests cover first write, unchanged second run, local edit
   protection, checksum failure, account mismatch, and fatal manifest write
   failure. An Obsidian binary vault adapter has synthetic tests for nested
-  folders, exact bytes, and folder collisions. This runner is not registered
-  as a plugin sync engine and has not run in the Marie test vault.
+  folders, exact bytes, and folder collisions. This runner is not registered as
+  a plugin sync engine and has not run in the Marie test vault.
+- With approval, raised the minimum Obsidian version to 1.11.5 for encrypted
+  SecretStorage and added a device-local Cloud token/account store. Execution
+  state no longer carries Cloud session fields and scrubs legacy plaintext
+  fields if encountered. Marie's active window reports Obsidian 1.14.4 even
+  though the executable metadata reports 1.10.6. The import command now opens a
+  generic paste prompt for an access token or cached session JSON; it reads no
+  cache file from Obsidian. It verifies the canonical account identity before
+  saving to SecretStorage, with a readback check and no login or OTP. Synthetic
+  tests pass. On October 13, 2026, the live import completed and the prompt
+  reported "Cloud access token validated and stored securely," confirming the
+  account identity validation and SecretStorage token/account readback through
+  the Obsidian requestUrl adapter. No login or OTP was initiated. The harness
+  cache has not been removed.
+- On October 13, 2026, an earlier running-Marie diagnostic attempt passed the
+  vault, SecretStorage availability, bound-cache, and local account guards, but
+  Cloud identity validation failed before any SecretStorage save. DevTools later
+  identified the original renderer `fetch` receiver error; after that was fixed,
+  renderer `fetch` still failed during CSRF bootstrap. The temporary diagnostic
+  commands and marker writer were removed. A subsequent import using Obsidian's
+  `requestUrl` adapter succeeded, as recorded above.
+- On October 13, 2026, the read-only production inventory harness completed with
+  the cached session and with login disabled. Two inventories matched: 113
+  directories and 117 items (5 files, 112 folders), with a second page observed.
+  All 234 path queries returned a stable verified hierarchy, including the
+  tested encoding and duplicate-name cases. Neither the 5,000-request harness
+  limit nor the 256-query limit was reached. The raw observation report was
+  suppressed and deleted; no names, paths, IDs, or credentials were retained.
 
 ## Next
 
+- The initial interactive import failed because the renderer's native `fetch`
+  was invoked with the transport instance as `this` (`Illegal invocation`);
+  binding it exposed a subsequent renderer-level `TypeError: Failed to fetch`
+  during CSRF bootstrap. The importer was then switched to Obsidian's `requestUrl`
+  through a local adapter. On October 13, 2026, the prompt reported successful
+  account validation and SecretStorage readback. Synthetic build and test checks
+  pass. The live success establishes this account's import path works in the
+  current Obsidian runtime, but does not characterize redirect behavior, cookie
+  behavior across redirect hops, or portability to other Obsidian platforms.
+- In the next implementation phase, retain `requestUrl` for interactive Cloud
+  API calls and review its implicit redirect behavior and response-header/cookie
+  semantics against the existing CSRF session requirements. Do not claim
+  redirect-hop validation: `requestUrl` exposes no redirect control. Keep
+  credentials scoped to the fixed Cloud API origin in constructed requests, and
+  keep Cloud file-download redirects on their separate credential-free,
+  explicitly reviewed-host path. Add only bounded, token-free diagnostics if
+  needed; never record URLs, headers, cookies, response bodies, tokens, or IDs.
 - If the cached session is rejected or expires, do not initiate a new login or
   OTP request without explicit user authorization and the account owner present
   to receive a possible email code. The harness only reads the consent variables
@@ -137,11 +181,13 @@
   one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
   format conversions remain separate work.
 - To run the mirror through the plugin in the Marie test vault, add a
-  product-side Cloud transport and account session UI, establish an explicit
+  product-side Cloud mirror transport integration, establish an explicit
   shared-manifest account binding, then register the Cloud engine with the sync
-  coordinator. Never import the harness-only temporary token into the vault or
-  enable remote deletion as part of this integration.
+  coordinator. The guarded one-time import and device-local SecretStorage store
+  are implemented and live import succeeded. Keep the harness cache; never put
+  a token in vault files or enable remote deletion for this test.
 
-The disposable fixture download was validated, but no plugin Cloud sync engine,
-shared manifest integration, general download host allowlist, or Cloud
-authentication UI has been completed.
+The disposable fixture download was validated. The paste-based Cloud import UI
+and device-local session store are implemented, but no plugin Cloud sync engine,
+shared manifest integration, or general download host allowlist has been
+completed.

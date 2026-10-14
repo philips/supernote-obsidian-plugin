@@ -41,6 +41,23 @@ npm test                              # vitest run
 ./scripts/obsidian-headless start     # launch it; screenshot/click/key/stop subcommands too
 ```
 
+### Obsidian-assisted checks
+
+- `npm run dev` keeps esbuild watching the source and rebuilds `main.js` after
+  edits. Keep its terminal open and check for `[watch] build finished`; build
+  errors appear there and leave the previous bundle in place.
+- When the Obsidian Hot Reload plugin is installed and enabled, it can reload a
+  changed plugin bundle without toggling that plugin manually. Hot Reload only
+  watches plugin folders marked with `.git` or `.hotreload`; confirm the folder
+  is eligible if a successful watcher build does not appear in the running app.
+- A configured Obsidian Local REST API MCP server in VS Code can list registered
+  Obsidian commands and invoke them, which is useful for narrow in-app checks.
+  An `OK` response confirms dispatch, not completion of an asynchronous command;
+  verify a user-visible result or explicit non-secret postcondition as well.
+- Use synthetic credentials and a test vault for automated checks. Never expose
+  tokens, account identifiers, filenames, paths, or response bodies in command
+  output or diagnostic markers.
+
 ## Linting
 
 - ESLint 9 flat config (`eslint.config.mts`) with `eslint-plugin-obsidianmd`'s

@@ -64,7 +64,7 @@ export class NodeCloudProtocolTransport implements CloudControlPlaneTransport {
             throw new CloudProtocolError('Cloud protocol origin must be credential-free HTTPS');
         }
         this.origin = origin.origin;
-        this.fetchImplementation = options.fetchImplementation ?? fetch;
+        this.fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
     }
 
     async bootstrapCsrf(): Promise<void> {
@@ -131,21 +131,19 @@ export class NodeCloudProtocolTransport implements CloudControlPlaneTransport {
                 method: request.method,
                 headers,
                 body: request.body ? JSON.stringify(request.body) : undefined,
-                redirect: 'manual',
                 signal: controller.signal,
             });
         } catch (error) {
-            const message = error instanceof Error && error.name === 'AbortError'
-                ? 'Supernote Cloud request timed out'
-                : 'Supernote Cloud request failed';
-            throw new CloudProtocolError(message);
+            if (controller.signal.aborted || error instanceof Error && error.name === 'AbortError') {
+                throw new CloudProtocolError('Supernote Cloud request timed out');
+            }
+            const phase = route === CLOUD_ROUTES.accountIdentity ? 'account identity' : 'CSRF or other request';
+            const category = error instanceof TypeError ? 'fetch rejected (TypeError)' : 'fetch rejected (other)';
+            throw new CloudProtocolError(`Supernote Cloud request failed (${phase}: ${category})`);
         } finally {
             clearTimeout(timeout);
         }
 
-        if (response.status >= 300 && response.status < 400) {
-            throw new CloudProtocolError('Supernote Cloud control-plane redirect was rejected');
-        }
         await this.storeResponseCookies(response, url.href);
         await this.updateCsrfState(response);
         return response;

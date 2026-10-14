@@ -36,8 +36,6 @@ function stateStore(activeSyncEngine: 'ip-device' | 'supernote-cloud' = 'ip-devi
         lastAutomaticAttemptAt: {},
         lastRunAt: {},
         lastRunOutcome: {},
-        cloudSessionToken: null,
-        cloudAccountId: null,
     };
     const store: SyncExecutionStateStore = {
         load: () => state,

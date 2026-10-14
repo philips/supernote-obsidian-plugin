@@ -16,19 +16,35 @@ export class ObsidianSyncExecutionStateStore implements SyncExecutionStateStore 
     constructor(private readonly app: App) {}
 
     load(): SyncExecutionState {
-        const stored = this.app.loadLocalStorage(STORAGE_KEY) as Partial<SyncExecutionState> | null;
+        const stored = this.app.loadLocalStorage(STORAGE_KEY) as (Partial<SyncExecutionState> & {
+            cloudSessionToken?: unknown;
+            cloudAccountId?: unknown;
+        }) | null;
         if (stored?.version !== 1 || !isSyncEngineId(stored.activeSyncEngine)) {
             return { ...DEFAULT_SYNC_EXECUTION_STATE };
         }
-        return {
+        const state: SyncExecutionState = {
             ...DEFAULT_SYNC_EXECUTION_STATE,
-            ...stored,
-            version: 1,
             activeSyncEngine: stored.activeSyncEngine,
+            autoSyncMinutes: stored.autoSyncMinutes ?? 0,
+            lastAutomaticAttemptAt: stored.lastAutomaticAttemptAt ?? {},
+            lastRunAt: stored.lastRunAt ?? {},
+            lastRunOutcome: stored.lastRunOutcome ?? {},
         };
+        if (Object.hasOwn(stored, 'cloudSessionToken') || Object.hasOwn(stored, 'cloudAccountId')) {
+            this.save(state);
+        }
+        return state;
     }
 
     save(state: SyncExecutionState): void {
-        this.app.saveLocalStorage(STORAGE_KEY, state);
+        this.app.saveLocalStorage(STORAGE_KEY, {
+            version: 1,
+            activeSyncEngine: state.activeSyncEngine,
+            autoSyncMinutes: state.autoSyncMinutes,
+            lastAutomaticAttemptAt: state.lastAutomaticAttemptAt,
+            lastRunAt: state.lastRunAt,
+            lastRunOutcome: state.lastRunOutcome,
+        });
     }
 }

@@ -18,6 +18,7 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { IpSyncEngine } from './syncEngine';
 import { SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
+import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
@@ -1488,6 +1489,12 @@ export default class SupernotePlugin extends Plugin {
 			id: 'sync-now',
 			name: 'Sync supernote now',
 			callback: () => { void this.runSync('sync-now'); },
+		});
+
+		this.addCommand({
+			id: 'import-harness-cloud-session',
+			name: 'Import cloud access token',
+			callback: () => new CloudSessionImportModal(this.app).open(),
 		});
 	}
 

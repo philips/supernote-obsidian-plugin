@@ -480,6 +480,15 @@ compatible error-code evidence.
 
 ### 8.3 Session lifecycle
 
+- The minimum supported Obsidian version is now 1.11.5 (raised from 1.8.7 with
+  approval on October 13, 2026). SecretStorage became available to plugins in
+  1.11.4, and desktop 1.11.5 added OS-backed encryption at rest. This avoids
+  storing Cloud tokens in plugin settings or vault files, at the cost of
+  dropping support for older Obsidian installations. The Marie desktop
+  executable reports 1.10.6, but the downloaded runtime package on October 13 is
+  `obsidian-1.14.4.asar`; confirm the active runtime has SecretStorage before
+  attempting an import rather than treating the installer version as the running
+  application version.
 - A session token is device-local and is never added to synced plugin settings.
 - The raw account ID is stored securely with the token only to protect the
   shared mirror from cross-account reconciliation. Synced mirror metadata

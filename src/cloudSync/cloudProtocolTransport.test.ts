@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { authenticateCloudPassword } from './cloudAuth';
 import { formatCloudAuthIdentityObservation, formatCloudInventoryObservation } from './cloudProtocolEvidence';
 import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
@@ -125,6 +125,41 @@ describe('Node Cloud protocol transport', () => {
         });
 
         await expect(transport.bootstrapCsrf()).rejects.toThrow('request limit exceeded');
+    });
+
+    it('binds the default fetch implementation to the global object', async () => {
+        const originalFetch = globalThis.fetch;
+        const fetchMock = vi.fn(function (this: typeof globalThis) {
+            expect(this).toBe(globalThis);
+            return Promise.resolve(new Response('', {
+                status: 200,
+                headers: { 'X-XSRF-TOKEN': 'synthetic-csrf' },
+            }));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        try {
+            const transport = new NodeCloudProtocolTransport({
+                session: 'synthetic',
+                budget: new CloudRequestBudget(1),
+                origin: 'https://cloud.test',
+            });
+            await transport.bootstrapCsrf();
+            expect(fetchMock).toHaveBeenCalledOnce();
+        } finally {
+            vi.stubGlobal('fetch', originalFetch);
+        }
+    });
+
+    it('classifies a rejected identity fetch without exposing its error text', async () => {
+        const transport = new NodeCloudProtocolTransport({
+            session: 'synthetic',
+            budget: new CloudRequestBudget(1),
+            origin: 'https://cloud.test',
+            fetchImplementation: async () => { throw new TypeError('token-secret account-secret'); },
+        });
+
+        await expect(transport.post('/api/user/query', {}, { accessToken: 'token-secret' }))
+            .rejects.toThrow('Supernote Cloud request failed (account identity: fetch rejected (TypeError))');
     });
 
     it('rejects insecure or credential-bearing origins before any request', () => {
