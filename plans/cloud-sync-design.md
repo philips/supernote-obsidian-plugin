@@ -1,4 +1,4 @@
-# Cloud Sync External Specification
+# Cloud Sync External Design
 
 **Status:** Draft behavior and acceptance specification; some specified
 capabilities remain unimplemented. **Scope date:** October 12-13, 2026.
@@ -609,7 +609,11 @@ signed download URLs, or remote error payloads that contain secrets.
 | Attempt to use a different Cloud account with a bound mirror | Product requirement                      | Block mirroring until the user explicitly resets the shared mirror.                                                                                                      |
 | Concurrent manual or automatic trigger                       | Product requirement                      | Skip the new trigger and leave the active run unchanged.                                                                                                                 |
 
-## 11. Release Gates and Residual Unknowns
+## 11. Policy and Residual Unknowns
+
+Implementation sequencing and current development status are tracked in the
+[`cloud-sync-plan.md`](cloud-sync-plan.md). This section defines product policy
+for behavior under unresolved service guarantees.
 
 ### 11.1 Design assumptions to address unknowns
 
@@ -687,10 +691,6 @@ safety defaults, not statements of service limits:
 | Maximum desktop file size                      | `256 MiB`   | Bounds memory and disk use on desktop systems.         |
 | Maximum mobile file size                       | `128 MiB`   | Uses a lower ceiling for constrained mobile devices.   |
 
-Each value in this table must have one authoritative declaration in a dedicated
-Cloud policy/constants module. Request, inventory, transfer, and test code must
-reference that declaration rather than repeat numeric literals.
-
 The one automatic retry applies only to read-only operations after a network
 failure, HTTP `408`, HTTP `429`, or HTTP `5xx`. A valid `Retry-After` value is
 honored up to the configured maximum; otherwise the base delay is used.
@@ -733,56 +733,7 @@ The following questions no longer block implementation planning:
 These decisions define what to do when evidence is incomplete. They do not
 convert compatible behavior into a documented service guarantee.
 
-### 11.3 Remaining development validation gates
-
-The assumptions in Section 11.1 eliminate the need for service-wide guarantees
-about snapshots, lifetime identifier reuse, future download hosts, exhaustive
-error codes, or undocumented operational ceilings. The following gates still
-require the authorized local harness because the dependent capability cannot
-function without knowing the current production behavior. Record the tested
-date, request shape, response category, and secret-free result before enabling
-that capability. The harness's setup, execution order, pass criteria, evidence
-rules, and retention review are defined in
-[`cloud-protocol-harness.md`](cloud-protocol-harness.md).
-
-The following gates block the initial Cloud release because they are required
-for its sign-in, inventory, filtering, account-safety, or download contract:
-
-1. **Password sign-in:** resolved for the tested account on October 12, 2026.
-   The observed request used the nonce route, compatible password derivation,
-   retained cookies, CSRF state, and the recorded client fields. This remains
-   dated compatible behavior, not a vendor guarantee.
-2. **Inventory response shape:** resolved for the October 13 tested account:
-   1-based requests with page size 100 reached a real second page, and two
-   complete inventories matched. The hosted `pages`/`size` envelope and the
-   exact six-folder root exception are recorded above; unexpected shapes still
-   fail closed.
-3. **Canonical paths:** passed for the October 13 tested account and fixtures.
-   Two passes verified root-category case reconciliation, relative
-   trailing-slash paths, and parent/child name and ID-path hierarchy, including
-   nested files. A later two-pass run verified duplicate names across parents
-   with literal `%`, `+`, and non-ASCII characters. Unrecognized or colliding
-   forms still fail closed; this result alone does not authorize path-based
-   deletion without the remaining independent safety gates.
-4. **Current download transfer:** verify an Obsidian `requestUrl` GET of the
-   descriptor URL without Cloud authentication headers, including byte count and
-   MD5 before a vault write. Redirects are handled by Obsidian, not by a product
-   host allowlist or a per-hop validation gate.
-5. **Account identity field:** resolved for the tested account on October 12;
-   `/api/user/query` returned a usable canonical decimal `userId` in two fresh
-   sessions, with matching identities.
-
-The following gate is optional for the initial release:
-
-6. **Email-code sign-in:** the successful `E1760` continuation, final token
-   retrieval, and account identity were observed in two fresh sessions on
-   October 12, 2026. Rejected/expired-code and resend/restart production cases
-   remain untested and must retain fail-closed handling.
-
-A successful test resolves only the observed production behavior needed by the
-implemented capability. It is not evidence that the service can never change.
-
-### 11.4 Residual runtime uncertainty
+### 11.3 Residual runtime uncertainty
 
 Production behavior may later move outside the observations used during
 development. That possibility is runtime uncertainty, not a release blocker. The

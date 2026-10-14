@@ -1,4 +1,4 @@
-# Multi-Sync Plan
+# Multi-Sync Design
 
 ## Purpose
 
@@ -13,7 +13,7 @@ This document records the companion's current local-network sync system and
 proposes an abstraction layer for selecting and operating one in-project engine
 at a time. The planned Cloud engine's external protocol, evidence boundaries,
 and user-observable behavior are defined by
-[cloud-sync-spec.md](cloud-sync-spec.md).
+[cloud-sync-design.md](cloud-sync-design.md).
 
 This is a planning document. It does not yet add the Cloud engine, change the
 current IP sync format, or enable automatic synchronization.
@@ -309,7 +309,7 @@ engine in an abstraction.
 ## Planned Cloud Sync Engine
 
 The planned Cloud engine will be implemented in this repository from the
-external contract in [cloud-sync-spec.md](cloud-sync-spec.md). That
+external contract in [cloud-sync-design.md](cloud-sync-design.md). That
 specification is the sole authority for public endpoint facts, request and
 response data, authentication flows, error boundaries, licensing attribution for
 public protocol sources, and user-observable Cloud behavior.
@@ -371,9 +371,9 @@ checkpoints at the end:
 
 ### Cloud specification boundary
 
-[cloud-sync-spec.md](cloud-sync-spec.md) is the authoritative external contract
-for the planned Cloud engine. This plan applies that contract to the plugin's
-single-active-engine architecture.
+[cloud-sync-design.md](cloud-sync-design.md) is the authoritative external
+contract for the planned Cloud engine. This plan applies that contract to the
+plugin's single-active-engine architecture.
 
 Required Cloud behavior:
 
@@ -396,10 +396,10 @@ Explicitly excluded:
 
 ### Specification-driven implementation
 
-Implementation must follow [cloud-sync-spec.md](cloud-sync-spec.md), including
-its separation of documented facts, product requirements, assumptions, and
-unknowns. Undocumented protocol behavior remains unavailable or non-destructive
-until independently verified and recorded in that specification.
+Implementation must follow [cloud-sync-design.md](cloud-sync-design.md),
+including its separation of documented facts, product requirements, assumptions,
+and unknowns. Undocumented protocol behavior remains unavailable or
+non-destructive until independently verified and recorded in that specification.
 
 - Define this plugin's own interfaces, names, state format, tests, and control
   flow around the approved requirements.
@@ -974,135 +974,8 @@ logs prove insufficient.
 - IP runs preserve the Cloud account fingerprint. Only `Reset Cloud mirror`
   releases that binding.
 
-### Proposed implementation sequence
+### Implementation tracking
 
-1. Extract shared path-filter parsing/glob behavior from `deviceSync.ts` without
-   changing IP behavior or tests.
-2. Add device-local `SyncExecutionState`, defaulting to `ip-device` and no
-   automatic interval.
-3. Add common result/types, `IpSyncEngine`, and `SyncCoordinator`; route the
-   current manual command through `runActive()` while preserving IP behavior.
-4. Add the generic `sync-now` command and active-engine settings UI.
-5. Add the shared scheduler and focused tests proving that only the active
-   engine runs, timers do not overlap runs, and switching preserves both states.
-6. Resolve release-blocking unknowns in [cloud-sync-spec.md](cloud-sync-spec.md)
-   through permitted public evidence or protocol tests, recording verified facts
-   before implementing dependent behavior.
-7. Implement `cloudAuth`, the read-only client, and device-local token storage.
-8. Migrate `noteSyncState` into the shared versioned manifest, then implement
-   the one-way `CloudSyncEngine`, including path masks, local-edit protection,
-   complete-scan deletion gating, Trash, and per-file fault isolation.
-9. Add the shared destination-root rename for both engines, including its one
-   pending-move record and three-state startup recovery.
-10. Add Cloud settings/status/login UI. Setup never changes the active engine;
-    the user selects Cloud explicitly after setup is complete.
-11. Confirm the public-source attribution in
-    [cloud-sync-spec.md](cloud-sync-spec.md), then run unit, integration, lint,
-    typecheck, build, and headless Obsidian UI verification.
-
-### Test plan
-
-#### Coordinator and scheduler
-
-- Only the selected engine receives manual and scheduled runs.
-- Switching is rejected while a run is active.
-- A scheduler poll during a run does not queue or overlap another run.
-- Failed automatic attempts wait a full interval before retrying.
-- Manual runs do not reset the automatic cadence.
-- Missing or invalid per-engine timestamps initialize without an immediate run.
-- Per-engine automatic-attempt and last-run status remain independent and
-  survive restart.
-- Switching engines preserves the shared manifest and does not run a sync.
-- Cloud setup never changes the active engine.
-- Legacy IP command is unavailable when Cloud is active.
-
-#### Shared filters
-
-- IP's existing encoded/form-style path cases continue to pass.
-- Cloud paths use the same `*`, `**`, and `?` semantics.
-- The same path allowlist is applied by both engines.
-- A blank path allowlist includes everything.
-- Excluded manifest entries are not deleted.
-- The shared extension allowlist defaults to `.note` and `.spd`.
-- Extension matching is case-insensitive and accepts configured entries with or
-  without a leading dot.
-- Selecting additional IP extensions preserves the existing listing trust and
-  destination-path protections.
-- Files excluded only by an extension allowlist are not treated as remotely
-  deleted.
-
-#### Cloud authentication and transport
-
-- Login success, verification-required, resend, verify, logout, and expired
-  session behavior.
-- Tokens are saved only in device-local storage and never in `data.json`.
-- A different authenticated account cannot reuse an existing account-bound
-  shared manifest.
-- Read-only client methods cannot invoke upload, replace, move, or recycle APIs.
-- Network errors are normalized without exposing credentials.
-
-#### Cloud mirror
-
-- New/changed files download; unchanged files skip.
-- Local edits prevent overwrite and remote-deletion cleanup.
-- Complete scans trash unchanged Cloud-deleted files.
-- Incomplete scans perform no destructive cleanup.
-- Path collisions remain stable across runs.
-- Generated paths cannot escape the shared root or collide with engine metadata.
-- Remote renames move unchanged managed files and protect locally edited files.
-- An included remote ID that moves outside the filter is not treated as deleted.
-- Per-file failures do not abort unrelated files.
-- Atomic per-file checkpoints recover completed writes after a later failure.
-- A checkpoint failure aborts before further manifest-changing operations.
-- Non-conflicting manifest changes that became visible during a run merge
-  without losing either device's independent updates.
-- Incompatible concurrent changes to the same managed entry stop with a
-  protected conflict and suppress further cleanup.
-- After shared history is cleared, identical existing files can be adopted and
-  non-identical files are protected; Cloud does not delete unmanifested local
-  files.
-- Switching from IP to Cloud allows stable Cloud inventory to remove unchanged
-  managed files absent from Cloud. Switching back to IP leaves source-absent
-  files untouched under IP's additive policy.
-- Changing the shared destination moves the complete root and rewrites the
-  shared manifest paths without losing local edits or sync history.
-- An interrupted destination move resolves from the old-root-only or
-  new-root-only state; both or neither roots block the affected engine.
-
-### Compatibility checklist
-
-- The default active engine remains IP, so existing installs retain their
-  current behavior until the user opts into Cloud.
-- Existing IP settings and manifest data migrate without losing command ID,
-  raw-file behavior, conflict protection, logs, timeouts, tests, or real-device
-  smoke-test coverage.
-- Scheduled sync is disabled by default.
-- Only one engine can run or be scheduled at a time.
-- Cloud is one-way and read-only with respect to the remote service.
-- Both engines use the same path allowlist and file-extension allowlist.
-- The shared extension allowlist retains `.note`/`.spd` as its default.
-- Both engines use the same destination folder.
-- Cloud credentials remain device-local.
-- The Cloud implementation follows [cloud-sync-spec.md](cloud-sync-spec.md) and
-  requires no external Cloud-sync plugin at runtime.
-
-### Review checkpoints before implementation
-
-The plan is implementable with the decisions below. Review them before coding;
-if none is changed explicitly, they are requirements rather than open choices:
-
-- Cloud-deleted, locally unchanged files go to Obsidian Trash after a complete
-  scan.
-- One shared interval applies to whichever engine is active.
-- Cloud scans from the account root and uses path masks without a Cloud
-  folder-picker in the first version.
-- IP and Cloud share one path allowlist and one configurable file-extension
-  allowlist, with extensions defaulting to `.note` and `.spd`.
-- IP and Cloud use one shared destination setting and a coordinator-owned
-  root-rename workflow after sync manages files.
-- The shared manifest has no owner-device ID; visible concurrent changes are
-  reconciled with an independent three-way merge and ambiguous conflicts fail
-  closed.
-- Active-engine selection, scheduling, Cloud session token, and Cloud account ID
-  are device-local; each engine's non-secret configuration remains in plugin
-  settings.
+Implementation sequencing, completion status, and focused verification are
+maintained in [multi-sync-plan.md](multi-sync-plan.md). This design remains the
+architecture and behavior constraint for that work.

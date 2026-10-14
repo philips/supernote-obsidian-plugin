@@ -5,12 +5,12 @@ October 12-13, 2026.
 
 This document defines an opt-in, secret-redacting local harness for resolving
 the production-protocol validation gates in Section 11.3 of the
-[Cloud Sync External Specification](cloud-sync-spec.md). The harness is a
-development and maintenance instrument, not a product feature or a general
-integration-test fixture. Retain it under `scripts/` after the Cloud engine is
-implemented: synthetic tests establish what the plugin accepts, but cannot
-detect changes to the undocumented hosted service. As with the opt-in device
-sync and browser smoke scripts, ordinary tests and releases never run it.
+[Cloud Sync External Design](cloud-sync-design.md). The harness is a development
+and maintenance instrument, not a product feature or a general integration-test
+fixture. Retain it under `scripts/` after the Cloud engine is implemented:
+synthetic tests establish what the plugin accepts, but cannot detect changes to
+the undocumented hosted service. As with the opt-in device sync and browser
+smoke scripts, ordinary tests and releases never run it.
 
 ## 1. Objectives
 
@@ -237,8 +237,8 @@ constraint.
 
 For each meaningful new production finding, review the temporary harness output
 and update the dated "Resolved Unknowns and Undocumented Behaviors" section of
-[Cloud Sync External Specification](cloud-sync-spec.md), rather than keeping
-per-run observation files. Where applicable, record:
+[Cloud Sync External Design](cloud-sync-design.md), rather than keeping per-run
+observation files. Where applicable, record:
 
 - Production base origin and test date.
 - Harness and Cloud implementation commit identifiers.
