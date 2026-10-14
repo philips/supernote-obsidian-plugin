@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { buildSyncRecord } from '../deviceSync';
-import { cloudPlanningRecords, fromIpSyncManifest, MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
+import { cloudAccountFingerprint, cloudPlanningRecords, fromIpSyncManifest, MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
 
 describe('shared mirror manifest', () => {
+    it('derives a stable versioned account fingerprint without exposing the raw ID', () => {
+        expect(cloudAccountFingerprint('123')).toMatch(/^v1:[a-f0-9]{64}$/);
+        expect(cloudAccountFingerprint('123')).toBe(cloudAccountFingerprint('123'));
+        expect(cloudAccountFingerprint('123')).not.toBe(cloudAccountFingerprint('124'));
+        expect(() => cloudAccountFingerprint('01')).toThrow('Invalid Cloud account identity');
+    });
     it('preserves IP history by destination without fabricating Cloud checksums', () => {
         const record = buildSyncRecord({ uri: '/Note/Sample.note', date: '2026-10-13', size: 4 },
             'Mirror/Note/Sample.note', 'written-hash');

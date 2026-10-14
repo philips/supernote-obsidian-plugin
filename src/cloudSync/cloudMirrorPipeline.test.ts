@@ -96,6 +96,7 @@ describe('Cloud inventory to shared-manifest planning', () => {
             pathFilters: [], fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
         });
         expect(result.failed).toEqual(['Mirror/Note/Kept.note']);
+        expect(result.failureCategories).toEqual(['Cloud download failed size or checksum validation']);
         expect(vault.write).not.toHaveBeenCalled();
         expect((await loadMirrorManifest(storage, {})).revision).toBe(1);
     });

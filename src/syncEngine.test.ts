@@ -8,6 +8,8 @@ import { buildSyncRecord, hashBytes } from './deviceSync';
 import type { DeviceNoteListing, SyncManifest, SyncedNoteRecord } from './deviceSync';
 import type { SupernotePluginSettings } from './settings';
 import { ALL_FILE_EXTENSIONS } from './syncFilters';
+import { ObsidianMirrorManifestStorage } from './cloudSync/obsidianMirrorManifestStorage';
+import { saveMirrorManifest } from './cloudSync/sharedMirrorManifestStore';
 
 vi.mock('obsidian', () => ({
     // syncEngine only uses TFile at runtime (instanceof checks in
@@ -41,6 +43,22 @@ function makeVault() {
     const entries = new Map<string, Entry>();
     const decoder = new TextDecoder();
     const vault = {
+        adapter: {
+            stat: async (path: string) => {
+                const entry = entries.get(path);
+                return entry ? { type: entry.kind === 'file' ? 'file' : 'folder' } : null;
+            },
+            read: async (path: string) => {
+                const entry = entries.get(path);
+                if (entry?.kind !== 'file') throw new Error('missing metadata');
+                return entry.text;
+            },
+            mkdir: async (path: string) => { entries.set(path, { kind: 'folder' }); },
+            write: async (path: string, text: string) => {
+                const file = Object.assign(new TFile(), { path });
+                entries.set(path, { kind: 'file', file, bytes: new TextEncoder().encode(text), text });
+            },
+        },
         getAbstractFileByPath(path: string) {
             const entry = entries.get(path);
             if (!entry) return null;
@@ -63,6 +81,11 @@ function makeVault() {
             const entry = entries.get(file.path);
             if (entry?.kind !== 'file') throw new Error(`not a file: ${file.path}`);
             return entry.bytes.slice().buffer;
+        },
+        async read(file: TFile) {
+            const entry = entries.get(file.path);
+            if (entry?.kind !== 'file') throw new Error(`not a file: ${file.path}`);
+            return entry.text;
         },
         async create(path: string, text: string) {
             const file = Object.assign(new TFile(), { path });
@@ -134,6 +157,23 @@ function manifestRecord(listing: DeviceNoteListing, vaultPath: string, lastWritt
 function vaultPathFor(name: string): string {
     return `${SYNC_FOLDER}/${name}`;
 }
+
+it('blocks an IP run before device scanning when Cloud owns a shared destination', async () => {
+    const { app } = makeVault();
+    const settings = settingsWith({});
+    await saveMirrorManifest(new ObsidianMirrorManifestStorage(app, settings.syncFolder), null, {
+        version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
+            [`${SYNC_FOLDER}/Note/Test.note`]: {
+                contentHash: 'synthetic-hash',
+                source: { engineId: 'supernote-cloud', md5: '0'.repeat(32) },
+            },
+        },
+    });
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockClear();
+    await expect(new IpSyncEngine(app, settings, vi.fn()).run({ kind: 'manual', commandId: 'sync-now' }))
+        .rejects.toThrow('Cloud-owned mirror files');
+    expect(scanDeviceSupernoteTreeWithExtensions).not.toHaveBeenCalled();
+});
 
 /** Makes fetchFromDevice hand out per-URI content and records requested URIs. */
 function mockDeviceContents(contents: Map<string, string>, failUris: string[] = []) {

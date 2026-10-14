@@ -1,5 +1,6 @@
 import { md5 } from '@noble/hashes/legacy.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import type { RequestUrlParam, RequestUrlResponse } from 'obsidian';
 import { CloudControlPlaneTransport, CloudProtocolError, CloudRawResponse, parseCloudObject, requireCloudSuccess, requireNonEmptyString } from '../src/cloudSync/cloudProtocol';
 import { CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/cloudSync/cloudPolicy';
 import { downloadCloudBytes } from '../src/cloudSync/cloudDownload';
@@ -54,7 +55,7 @@ export async function verifyCloudFixtureDownload(
     expectedSize: number,
     expectedMd5: string,
     approvedHost: string,
-    fetchImplementation: typeof fetch = fetch,
+    request: (options: RequestUrlParam) => Promise<Pick<RequestUrlResponse, 'status' | 'arrayBuffer'>>,
 ): Promise<{ sizeVerified: true; md5Verified: true }> {
     if (!/^(0|[1-9]\d*)$/.test(fileId)
         || !Number.isSafeInteger(expectedSize) || expectedSize <= 0 || expectedSize > CLOUD_MAX_DESKTOP_FILE_BYTES
@@ -67,7 +68,7 @@ export async function verifyCloudFixtureDownload(
     if (inspectCloudDescriptorHost(descriptor) !== approvedHost) {
         throw new CloudProtocolError('Cloud descriptor host differs from the reviewed host');
     }
-    const bytes = await downloadCloudBytes(descriptor, expectedMd5, new Set([approvedHost]), expectedSize, fetchImplementation);
+    const bytes = await downloadCloudBytes(descriptor, expectedMd5, expectedSize, request);
     if (bytes.length !== expectedSize
         || bytesToHex(md5(bytes)) !== expectedMd5.toLowerCase()) {
         throw new CloudProtocolError('Cloud fixture download failed size or MD5 verification');

@@ -26,9 +26,6 @@
   previous Cloud session without exposing secret values. One Cloud-linked
   candidate was tested using only CSRF bootstrap (HTTP 200) and account identity
   (HTTP 401). It was not cached; no password login or OTP request was made.
-- The settings groundwork has been organized for future sync-engine selection;
-  the Cloud engine itself, shared Cloud manifest integration, and Cloud product
-  authentication UI have not been implemented.
 - Added a pure, synthetic-tested Cloud mirror planner that accepts only
   caller-verified canonical paths, compares Cloud checksums with manifest
   snapshots, protects locally edited copies, re-queues missing copies, and
@@ -40,15 +37,15 @@
   mirror metadata. Planning and writes reject a mismatched account binding.
 - Added a fake-transfer/fake-vault byte-write boundary that checks size and MD5
   through an injected digest provider, protects local edits immediately before
-  writing, and re-baselines identical IP bytes without rewriting. No production
-  download transport, vault adapter, manifest persistence, or Cloud engine is
-  wired up yet.
+  writing, and re-baselines identical IP bytes without rewriting. Production
+  transport, vault adapter, manifest persistence, and manual Cloud engine wiring
+  followed in later steps below.
 - Added an offline two-slot shared-manifest store and Obsidian vault storage
   adapter under `.supernote-sync`. First load copies valid legacy IP history
   without deleting settings, later writes alternate slots and verify the new
   copy, and loading can recover the previous valid revision after an interrupted
   update. Invalid or colliding legacy records and fully corrupt storage fail
-  closed. The store is not yet called by the IP or Cloud engine.
+  closed. Cloud uses this store; IP history has not yet been migrated to it.
 - On October 13, 2026, a validated cached token supported two stable hosted
   inventories with a real second page and two stable path-query passes. The
   observed `pages`/`size` listing envelope omits `pageNum`/`pageSize`; the six
@@ -66,17 +63,16 @@
   only the observed root-category casing, and rejects path collisions. Listing
   parsing accepts the observed six-folder flattened root and omitted response
   `pageNum`/`pageSize` while keeping other directory checks strict; synthetic
-  tests cover these cases. The verifier is not yet connected to the offline
-  planning pipeline, which still requires a caller-supplied verified path map.
+  tests cover these cases. The manual Cloud engine now supplies its verified
+  path map to the offline planning pipeline.
 - Moved the dated production observations into Section 12, "Resolved Unknowns
   and Undocumented Behaviors," of the external specification. Release acceptance
   criteria are now Section 13; unresolved development gates remain in Section
   11.3.
-- Added an offline descriptor-to-bytes transfer boundary with synthetic tests:
-  it checks descriptor MD5 against inventory metadata, requires explicitly
-  reviewed HTTPS hosts at every redirect, limits redirects and streamed bytes,
-  and omits ambient credentials and referrers. No hosts are approved by default;
-  this is not wired to descriptor retrieval or the Cloud mirror engine.
+- Added a descriptor-to-bytes transfer boundary with synthetic tests: it checks
+  descriptor MD5 against inventory metadata, uses a credential-free Obsidian
+  `requestUrl` GET, and rejects returned bytes over the size limit. Obsidian
+  handles redirects without plugin host approval.
 - Added an opt-in, descriptor-only harness mode and a synthetic test. It
   requires an explicitly designated replaceable file ID and a bound reusable
   session, validates account identity first, requests only a `type: "0"`
@@ -94,31 +90,30 @@
   in-memory GET succeeded with the listed byte length and MD5. The harness sent
   no Cloud token, cookies, CSRF header, or referrer to the transfer host, and
   discarded the bytes without vault writes. Only the exact observed host was
-  allowed; unreviewed redirect hosts fail closed. The harness did not record a
-  redirect count, so production redirect behavior remains unknown. The remote
-  ID, checksum value, signed URL, and contents were not committed or included in
-  the report.
+  allowed by that harness. The harness did not record a redirect count, so
+  production redirect behavior remains unknown. The remote ID, checksum value,
+  signed URL, and contents were not committed or included in the report.
 - Added an offline, non-deleting Cloud mirror runner that connects verified
   inventory planning, guarded byte writes, and per-file durable manifest
   commits. Synthetic tests cover first write, unchanged second run, local edit
   protection, checksum failure, account mismatch, and fatal manifest write
   failure. An Obsidian binary vault adapter has synthetic tests for nested
-  folders, exact bytes, and folder collisions. This runner is not registered as
-  a plugin sync engine and has not run in the Marie test vault.
+  folders, exact bytes, and folder collisions. The runner is now called by the
+  manual Cloud engine and passed a fixture-scoped run in the test vault.
 - With approval, raised the minimum Obsidian version to 1.11.5 for encrypted
   SecretStorage and added a device-local Cloud token/account store. Execution
   state no longer carries Cloud session fields and scrubs legacy plaintext
-  fields if encountered. Marie's active window reports Obsidian 1.14.4 even
-  though the executable metadata reports 1.10.6. The import command now opens a
-  generic paste prompt for an access token or cached session JSON; it reads no
-  cache file from Obsidian. It verifies the canonical account identity before
-  saving to SecretStorage, with a readback check and no login or OTP. Synthetic
-  tests pass. On October 13, 2026, the live import completed and the prompt
-  reported "Cloud access token validated and stored securely," confirming the
-  account identity validation and SecretStorage token/account readback through
-  the Obsidian requestUrl adapter. No login or OTP was initiated. The harness
-  cache has not been removed.
-- On October 13, 2026, an earlier running-Marie diagnostic attempt passed the
+  fields if encountered. The active window in the tested vault reports Obsidian
+  1.14.4 even though the executable metadata reports 1.10.6. The import command
+  now opens a generic paste prompt for an access token or cached session JSON;
+  it reads no cache file from Obsidian. It verifies the canonical account
+  identity before saving to SecretStorage, with a readback check and no login or
+  OTP. Synthetic tests pass. On October 13, 2026, the live import completed and
+  the prompt reported "Cloud access token validated and stored securely,"
+  confirming the account identity validation and SecretStorage token/account
+  readback through the Obsidian requestUrl adapter. No login or OTP was
+  initiated. The harness cache has not been removed.
+- On October 13, 2026, an earlier running-vault diagnostic attempt passed the
   vault, SecretStorage availability, bound-cache, and local account guards, but
   Cloud identity validation failed before any SecretStorage save. DevTools later
   identified the original renderer `fetch` receiver error; after that was fixed,
@@ -132,63 +127,66 @@
   tested encoding and duplicate-name cases. Neither the 5,000-request harness
   limit nor the 256-query limit was reached. The raw observation report was
   suppressed and deleted; no names, paths, IDs, or credentials were retained.
+- Added a desktop-only, manual Cloud mirror engine selectable in the plugin's
+  sync settings. It checks the stored session's account identity, binds the
+  shared manifest to a versioned account fingerprint, verifies each inventory
+  path, and runs the existing non-deleting guarded mirror. The signed-download
+  adapter uses Obsidian `requestUrl` with no Cloud authentication headers and
+  leaves redirect handling to Obsidian; no per-host confirmation is required.
+  Cloud automatic sync and history reset remain disabled. IP sync refuses to run
+  over Cloud-owned shared-manifest destinations until IP history uses that same
+  manifest. Synthetic tests and the plugin build pass.
+- On October 13, 2026, the manual test-vault run scoped to
+  `/Document/TestFile.note` wrote one fixture and committed one Cloud record at
+  manifest revision 3. A second manual run left the fixture hash and manifest
+  revision unchanged. No login, OTP, remote deletion, or cache cleanup was
+  performed; this confirms the current desktop fixture, not general host or
+  redirect behavior across other environments.
 
-## Next
+## Current Status
 
-- The initial interactive import failed because the renderer's native `fetch`
-  was invoked with the transport instance as `this` (`Illegal invocation`);
-  binding it exposed a subsequent renderer-level `TypeError: Failed to fetch`
-  during CSRF bootstrap. The importer was then switched to Obsidian's
-  `requestUrl` through a local adapter. On October 13, 2026, the prompt reported
-  successful account validation and SecretStorage readback. Synthetic build and
-  test checks pass. The live success establishes this account's import path
-  works in the current Obsidian runtime, but does not characterize redirect
-  behavior, cookie behavior across redirect hops, or portability to other
-  Obsidian platforms.
-- In the next implementation phase, retain `requestUrl` for interactive Cloud
-  API calls and review its implicit redirect behavior and response-header/cookie
-  semantics against the existing CSRF session requirements. Do not claim
-  redirect-hop validation: `requestUrl` exposes no redirect control. Keep
-  credentials scoped to the fixed Cloud API origin in constructed requests, and
-  keep Cloud file-download redirects on their separate credential-free,
-  explicitly reviewed-host path. Add only bounded, token-free diagnostics if
-  needed; never record URLs, headers, cookies, response bodies, tokens, or IDs.
-- If the cached session is rejected or expires, do not initiate a new login or
-  OTP request without explicit user authorization and the account owner present
-  to receive a possible email code. The harness only reads the consent variables
-  and never clears or changes them. Login consent is used only when no reusable
-  session is available.
-- Retain the cached token throughout plugin development, until the account owner
-  is ready for an end-to-end options-panel login test and explicitly approves
-  cleanup. Completing protocol probes is not permission to remove it; service
-  expiry or revocation can still require another authorized login.
-- On future cached-token runs, first validate the token with the
-  account-identity query and require its canonical account identity to match the
-  local session. Record only redacted aggregate/path-shape evidence from
-  two-pass inventory and path probes, never filenames, paths, IDs, or contents.
-- Continue to fail closed on unrecognized or colliding path forms. The tested
-  canonical-path gate now passes, but that does not complete the independent
-  download, account-safety, Obsidian runtime, or deletion gates. Never create or
-  remove production fixtures through harness writes.
-- Retain the harness under `scripts/` as an opt-in, bounded compatibility probe
-  outside CI and releases; review redacted observations before sharing. Its
-  retention does not authorize clearing the separately cached token.
-- Keep the reviewed host narrowly scoped to the observed fixture; any new
-  descriptor or redirect host must be reviewed separately before it is added to
-  a product allowlist. Never forward Cloud credentials or cookies to a download
-  host. Synthetic redirect tests do not establish which future production
-  redirect destinations, if any, are legitimate.
-- After the protocol gates pass, implement the shared manifest integration and
-  one-way Cloud mirror. Keep sync as raw-byte mirroring; date-based import and
-  format conversions remain separate work.
-- To run the mirror through the plugin in the Marie test vault, add a
-  product-side Cloud mirror transport integration, establish an explicit
-  shared-manifest account binding, then register the Cloud engine with the sync
-  coordinator. The guarded one-time import and device-local SecretStorage store
-  are implemented and live import succeeded. Keep the harness cache; never put a
-  token in vault files or enable remote deletion for this test.
+- The manual Cloud mirror is implemented and passed a fixture-scoped test-vault
+  transfer followed by an unchanged second run on October 13, 2026. A later run
+  with the path allowlist cleared mirrored the matching note files from nested
+  folders; the existing `.note, .spd` extension allowlist still limits the file
+  types. Empty directories are not mirrored as standalone entries.
+- Narrowing the path allowlist afterward (for example, to `/Document/**`) did
+  not remove copies outside that path. Cloud should match IP behavior: filters
+  limit transfer/update work, while previously mirrored files remain in the
+  vault. Remote-deletion cleanup is separately specified but not implemented.
+- Sync currently reports a completion summary. Start-of-run and per-file
+  download-start notifications are not implemented; the external specification
+  now requires all three lifecycle notices.
+- Transfer uses an unauthenticated Obsidian `requestUrl` GET, leaving redirect
+  handling to Obsidian. Account binding, checksum/size verification, local-edit
+  protection, and non-deleting writes remain in place. No login, OTP, or
+  cached-session cleanup is authorized by this work.
 
-The disposable fixture download was validated. The paste-based Cloud import UI
-and device-local session store are implemented, but no plugin Cloud sync engine,
-shared manifest integration, or general download host allowlist has been
-completed.
+## Recommended Next Steps
+
+1. Implement Cloud sync lifecycle notifications: notify after readiness passes
+   when the run starts, immediately before each actual file download, and at
+   completion with the existing secret-free counts. Do not notify for unchanged
+   or excluded files; never include signed URLs, IDs, tokens, or raw responses.
+2. Implement remote-deletion cleanup for previously managed files absent from
+   the Cloud inventory. Require two complete inventories with identical
+   fingerprints and an unchanged local hash before moving a copy to Obsidian
+   Trash. Preserve locally edited copies and unrelated/unmanaged files. Filter
+   exclusions must remain non-destructive, matching IP behavior.
+3. Add focused tests for start/download/completion notices and remote-deletion
+   candidates, including changed or incomplete inventories, local edits,
+   unmanaged files, and current in-scope files. Then run `npm test`,
+   `npm run build`, `npm run lint`, and `git diff --check`.
+4. Validate remote-deletion behavior in the test vault only after the guarded
+   code is implemented. Keep the current fixture/file scope controlled; verify
+   both the Obsidian Trash result and that locally edited files remain
+   untouched.
+
+The `Obsidian-assisted checks` section in `AGENTS.md` now documents attaching VS
+Code's JavaScript debugger to the Electron renderer at localhost port 9222; use
+`npm run dev` for inline source maps and fully quit Obsidian before relaunch.
+
+The opt-in protocol harness remains separate from product sync. Keep its
+fixture-host check and consent requirements; do not initiate login/OTP or clear
+the harness cache without separate explicit authorization. Never place tokens,
+signed URLs, IDs, or response bodies in notes, logs, or diagnostics.

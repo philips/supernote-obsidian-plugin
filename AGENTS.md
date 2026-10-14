@@ -50,6 +50,22 @@ npm test                              # vitest run
   changed plugin bundle without toggling that plugin manually. Hot Reload only
   watches plugin folders marked with `.git` or `.hotreload`; confirm the folder
   is eligible if a successful watcher build does not appear in the running app.
+- For renderer-side debugging in VS Code, run `npm run dev` to keep the plugin
+  bundle's inline source map current, fully quit Obsidian, then launch the
+  desktop app from PowerShell with its Chromium remote-debugging port enabled:
+
+  ```powershell
+  & "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe" --remote-debugging-port=9222
+  ```
+
+  In VS Code's JavaScript Debugger, attach to `localhost:9222` (a `pwa-chrome`
+  attach configuration with `port: 9222` and `webRoot: ${workspaceFolder}` is
+  suitable). Set breakpoints in the plugin's TypeScript sources; inline source
+  maps from the dev build map them back from `main.js`. Fully quit any existing
+  Obsidian process before launch so the debugging flag is applied to the actual
+  renderer process. Keep the debugging port bound to localhost; do not expose it
+  to the network. This attaches to the Electron renderer, not Obsidian's main
+  process.
 - A configured Obsidian Local REST API MCP server in VS Code can list registered
   Obsidian commands and invoke them, which is useful for narrow in-app checks.
   An `OK` response confirms dispatch, not completion of an asynchronous command;

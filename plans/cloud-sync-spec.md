@@ -1,7 +1,7 @@
 # Cloud Sync External Specification
 
-**Status:** Draft for implementation planning only. **Scope date:** October
-12-13, 2026.
+**Status:** Draft behavior and acceptance specification; some specified
+capabilities remain unimplemented. **Scope date:** October 12-13, 2026.
 
 This document specifies the externally observable contract for the proposed
 Cloud engine in `obsidian-supernote-companion`. It is a behavior-and-protocol
@@ -96,16 +96,16 @@ The following findings were reviewed on October 12, 2026. They narrow several
 implementation unknowns, but they remain **compatible behavior**, not vendor
 contract terms:
 
-| Finding                     | Evidence                                                                                                                                                               | Specification disposition                                                                                                                                       |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Password derivation         | Three hosted-Cloud clients and one Private Cloud client independently use `SHA256(MD5(plaintext password) + randomCode)`.                                              | Use this derivation for the first login attempt. Do not implement the alternative derivation unless later evidence requires it.                                 |
-| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch passed an authorized hosted-service test in two fresh sessions on October 12, 2026; this remains dated compatible behavior.                          |
-| CSRF/session state          | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403.                | The October 12, 2026 test observed one CSRF refresh and one OTP retry after HTTP 403 in both fresh sessions.                                                    |
-| Identifier precision        | Compatible clients represent file and directory IDs as strings, and published examples include values above JavaScript's safe-integer limit.                           | Store and transmit identifiers as canonical decimal strings; never round-trip them through JavaScript `number`.                                                 |
-| Pagination origin           | Hosted and Private Cloud clients begin with `pageNo: 1`; compatible models expose `pages`, `pageNum`, and page-size fields.                                            | Use 1 as the first page. Maximum size and cross-page consistency remain unknown.                                                                                |
-| Download transfer           | Three hosted-Cloud clients request `type: 0`, then perform an unauthenticated HTTP `GET` of the returned URL.                                                          | `GET` without `x-access-token` is the compatibility baseline. Validate the current production host and redirect chain; future unrecognized hosts fail per file. |
-| Path presentation           | The compatible Private Cloud server deliberately flattens category containers such as `NOTE/Note` to `Note` for web APIs, while device APIs retain the physical path.  | Do not infer hosted-Cloud canonical paths from listing parent IDs alone. Verify path normalization before deletion cleanup.                                     |
-| Operational guarantees      | No reviewed source publishes hosted-service rate limits, retry guidance, timeout guidance, inventory snapshot guarantees, or identifier/file-size ceilings.            | Use the conservative product defaults in Section 11.1 and keep every limit centrally adjustable.                                                                |
+| Finding                     | Evidence                                                                                                                                                               | Specification disposition                                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Password derivation         | Three hosted-Cloud clients and one Private Cloud client independently use `SHA256(MD5(plaintext password) + randomCode)`.                                              | Use this derivation for the first login attempt. Do not implement the alternative derivation unless later evidence requires it.        |
+| Email identity verification | `rnbennett/supernote-cloud` implements a complete branch: login error `E1760`; pre-auth token; signed email-code request; `validCodeKey`; OTP login; then token query. | The branch passed an authorized hosted-service test in two fresh sessions on October 12, 2026; this remains dated compatible behavior. |
+| CSRF/session state          | The maintained hosted-Cloud client obtains `/api/csrf`, retains cookies, sends `X-XSRF-TOKEN`, refreshes it after OTP, and retries once after HTTP 403.                | The October 12, 2026 test observed one CSRF refresh and one OTP retry after HTTP 403 in both fresh sessions.                           |
+| Identifier precision        | Compatible clients represent file and directory IDs as strings, and published examples include values above JavaScript's safe-integer limit.                           | Store and transmit identifiers as canonical decimal strings; never round-trip them through JavaScript `number`.                        |
+| Pagination origin           | Hosted and Private Cloud clients begin with `pageNo: 1`; compatible models expose `pages`, `pageNum`, and page-size fields.                                            | Use 1 as the first page. Maximum size and cross-page consistency remain unknown.                                                       |
+| Download transfer           | Three hosted-Cloud clients request `type: 0`, then perform an unauthenticated HTTP `GET` of the returned URL.                                                          | `GET` without `x-access-token` is the compatibility baseline. Obsidian handles redirects; validate returned bytes before writing.      |
+| Path presentation           | The compatible Private Cloud server deliberately flattens category containers such as `NOTE/Note` to `Note` for web APIs, while device APIs retain the physical path.  | Do not infer hosted-Cloud canonical paths from listing parent IDs alone. Verify path normalization before deletion cleanup.            |
+| Operational guarantees      | No reviewed source publishes hosted-service rate limits, retry guidance, timeout guidance, inventory snapshot guarantees, or identifier/file-size ceilings.            | Use the conservative product defaults in Section 11.1 and keep every limit centrally adjustable.                                       |
 
 Exact implementation locations reviewed for these observations include:
 
@@ -132,16 +132,16 @@ pagination, identity stability, transfer-host policy, rate limits, or retries.
 
 ## 5. Transport Baseline
 
-| Item                                                            | Classification      | Specification                                                                                                                                                         |
-| --------------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published production server                                     | Documented fact     | `https://cloud.supernote.com` is listed as the production server by the reviewed third-party OpenAPI.                                                                 |
-| Request format                                                  | Documented fact     | Listed control-plane endpoints accept JSON request bodies and return JSON responses.                                                                                  |
-| Protected endpoint header                                       | Documented fact     | The OpenAPI declares `x-access-token` as an API-key header for protected endpoints.                                                                                   |
-| CSRF bootstrap and cookies                                      | Compatible behavior | A maintained hosted-Cloud client first requests `GET /api/csrf`, retains the response cookies, and sends the returned `X-XSRF-TOKEN` value on control-plane requests. |
-| Success envelope                                                | Documented fact     | Published responses use `success` (boolean); they may also contain `errorCode` and `errorMsg` strings.                                                                |
-| Non-200 status codes                                            | Unknown             | The reviewed OpenAPI documents `200` responses but does not enumerate HTTP error statuses.                                                                            |
-| Request timeouts, retry policy, rate limits, pagination limits  | Unknown             | No reviewed public source defines them.                                                                                                                               |
-| TLS, redirects, download-host allowlist, and certificate policy | Unknown             | The service base URL is HTTPS, but detailed download-transfer rules are not published.                                                                                |
+| Item                                                           | Classification      | Specification                                                                                                                                                         |
+| -------------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Published production server                                    | Documented fact     | `https://cloud.supernote.com` is listed as the production server by the reviewed third-party OpenAPI.                                                                 |
+| Request format                                                 | Documented fact     | Listed control-plane endpoints accept JSON request bodies and return JSON responses.                                                                                  |
+| Protected endpoint header                                      | Documented fact     | The OpenAPI declares `x-access-token` as an API-key header for protected endpoints.                                                                                   |
+| CSRF bootstrap and cookies                                     | Compatible behavior | A maintained hosted-Cloud client first requests `GET /api/csrf`, retains the response cookies, and sends the returned `X-XSRF-TOKEN` value on control-plane requests. |
+| Success envelope                                               | Documented fact     | Published responses use `success` (boolean); they may also contain `errorCode` and `errorMsg` strings.                                                                |
+| Non-200 status codes                                           | Unknown             | The reviewed OpenAPI documents `200` responses but does not enumerate HTTP error statuses.                                                                            |
+| Request timeouts, retry policy, rate limits, pagination limits | Unknown             | No reviewed public source defines them.                                                                                                                               |
+| TLS, redirects, and certificate policy                         | Unknown             | The service base URL is HTTPS, but detailed download-transfer rules are not published.                                                                                |
 
 **Product requirement:** the Cloud engine sends credentials and session tokens
 only over HTTPS. Tokens, passwords, verification codes, and full download URLs
@@ -345,12 +345,12 @@ length guarantees.
 before being treated as a successful Cloud file transfer. A mismatch is a
 per-file failure and must not overwrite or remove a locally protected copy.
 
-**Product requirement:** never forward `x-access-token`, cookies, CSRF headers,
-or other Cloud credentials to the descriptor host. Follow redirects only when
-every hop is HTTPS and passes the implementation's reviewed host policy. Until
-the current production host and redirect chain are validated, downloads remain
-unavailable. After validation, an unrecognized host or redirect is a protected
-per-file failure rather than a general release blocker.
+**Product requirement:** request the descriptor URL through Obsidian's
+`requestUrl` with no Cloud authentication headers. Obsidian handles redirects;
+the plugin does not inspect or approve each host or hop. Verify the descriptor
+checksum against inventory and the returned byte count and MD5 before writing. A
+transfer or integrity failure is per-file and must not overwrite a locally
+protected copy.
 
 ### 6.11 Logout
 
@@ -378,10 +378,13 @@ A JSON control-plane response is usable only when all of the following are true:
 An `errorCode` or `errorMsg` may be shown in a secret-free error detail if
 present. Their values and meanings are otherwise **unknown**; the product must
 not branch on undocumented numeric or string codes without a recorded public
-verification. An unknown service code is reported as **Supernote Cloud error
-<code>**; an unknown HTTP status is reported as **Supernote Cloud request failed
-(HTTP <status>)**. Unknown errors retain the local token unless that specific
-operation and signal are verified as authentication expiry.
+verification. An unknown service code is reported as
+`Supernote Cloud error
+<code>`; an unknown HTTP status is reported as
+`Supernote Cloud request failed
+(HTTP <status>)`. Unknown errors retain the
+local token unless that specific operation and signal are verified as
+authentication expiry.
 
 ### 7.2 File metadata
 
@@ -408,8 +411,9 @@ leading slash, for example `/Note/Work/Journal.note`.
 - `**` crosses directory boundaries.
 - `?` matches one character.
 - Matching is against the entire normalized path.
-- A file excluded by a current filter remains outside the current transfer and
-  deletion decision. It is not treated as remotely deleted.
+- A file excluded by a current filter remains outside the current transfer.
+  Changing or narrowing a filter does not delete a previously mirrored local
+  copy; filter exclusion is not treated as remote deletion.
 
 The tested relationship between web-listing paths and the relative, trailing-
 slash path-query result is recorded under "Resolved Unknowns and Undocumented
@@ -427,8 +431,9 @@ file-extension allowlist.
 - The default is `.note, .spd`.
 - `*` explicitly includes every supported regular file.
 - A blank value includes no files; clearing the setting must not broaden scope.
-- A file excluded by the current extension allowlist remains outside transfer
-  and deletion decisions and is not treated as remotely deleted.
+- A file excluded by the current extension allowlist remains outside transfer.
+  Changing the extension allowlist does not delete a previously mirrored local
+  copy; filter exclusion is not treated as remote deletion.
 
 ### 7.5 Local destination safety
 
@@ -484,7 +489,7 @@ compatible error-code evidence.
   approval on October 13, 2026). SecretStorage became available to plugins in
   1.11.4, and desktop 1.11.5 added OS-backed encryption at rest. This avoids
   storing Cloud tokens in plugin settings or vault files, at the cost of
-  dropping support for older Obsidian installations. The Marie desktop
+  dropping support for older Obsidian installations. The tested Windows desktop
   executable reports 1.10.6, but the downloaded runtime package on October 13 is
   `obsidian-1.14.4.asar`; confirm the active runtime has SecretStorage before
   attempting an import rather than treating the installer version as the running
@@ -536,14 +541,17 @@ compatible error-code evidence.
 - A remote rename or move preserves the local file only when its shared manifest
   entry and unchanged local content are established. Otherwise it is reported as
   protected rather than duplicated or removed silently.
-- A current path filter can exclude a remote file from the run. It does not
-  delete the previously mirrored local copy.
-- A current file-extension filter behaves the same way.
+- A current path or file-extension filter excludes a remote file from
+  download/update work. Previously mirrored local copies remain in the vault
+  when filters change, matching the IP engine's non-destructive behavior.
 - Downloaded source bytes are mirrored unchanged. The custom dictionary is not
   applied because it operates only on recognized text converted to Markdown.
 
 ### 9.3 Remote deletion outcomes
 
+- A file excluded by the current path or extension filter is not a remote
+  deletion candidate. Changing or narrowing either filter leaves existing local
+  mirror copies in place, matching the IP engine's behavior.
 - Remote absence can affect a local mirror copy only after the entire required
   remote inventory completed successfully.
 - Cloud is authoritative while it is the active engine. A managed in-scope file
@@ -562,16 +570,24 @@ compatible error-code evidence.
 
 ### 9.4 Completion feedback
 
-Every completed run reports secret-free counts for:
+Every Cloud mirror run provides Obsidian notifications at these lifecycle
+points:
 
-- Downloaded files.
-- Unchanged files.
-- Excluded files.
-- Local copies moved to Obsidian Trash.
-- Protected files and per-file failures.
+- When the run starts, after readiness checks pass.
+- Immediately before downloading each new or changed file. Identify the file by
+  its safe display name or vault-relative mirror path; never include a signed
+  URL, account ID, token, or raw response data.
+- When the run completes, with secret-free counts for:
 
-No completion message may expose credentials, session tokens, verification
-codes, full signed download URLs, or remote error payloads that contain secrets.
+  - Downloaded files.
+  - Unchanged files.
+  - Excluded files.
+  - Local copies moved to Obsidian Trash.
+  - Protected files and per-file failures.
+
+Files that are unchanged or excluded do not produce a download-start notice. No
+notification may expose credentials, session tokens, verification codes, full
+signed download URLs, or remote error payloads that contain secrets.
 
 ## 10. Error Conditions and Required User Behavior
 
@@ -634,18 +650,11 @@ mirror bound until the user explicitly resets it.
 
 #### Download hosts and redirects
 
-The local protocol harness records the HTTPS hostnames or narrowly scoped host
-patterns needed by current production download descriptors. Those reviewed
-values form the download-host allowlist. The plugin follows at most five
-redirects, requires HTTPS at every hop, rejects URL-embedded credentials and
-non-HTTPS schemes, and never forwards the Cloud token, cookies, or CSRF headers
-to a descriptor or redirect host.
-
-Redirect handling must expose every redirect target for validation. If the
-active transport cannot inspect the chain, redirects are disabled for that
-transport. A future unrecognized host or redirect is a protected per-file
-failure with an actionable error; it does not invalidate already reviewed hosts
-or block unrelated files.
+The plugin requests the descriptor URL with a credential-free Obsidian
+`requestUrl` GET. It does not supply the Cloud token, cookies, or CSRF headers
+to the download request, nor maintain a host allowlist or inspect individual
+redirect hops. Obsidian handles redirects according to its request behavior. The
+separate opt-in fixture harness retains its own explicit host review.
 
 #### Unknown errors
 
@@ -661,24 +670,22 @@ response bodies are never shown to the user.
 The first implementation uses these centrally maintained constants. They are
 safety defaults, not statements of service limits:
 
-| Policy                                         | Default      | Reasoning                                              |
-| ---------------------------------------------- | ------------ | ------------------------------------------------------ |
-| Listing page size                              | `100` items  | Limits request count without oversized responses.      |
-| Maximum pages per directory                    | `1,000`      | Bounds runaway or inconsistent pagination.             |
-| Maximum items in one account inventory         | `100,000`    | Caps memory and processing work per run.               |
-| Maximum directory depth                        | `128`        | Prevents pathological or cyclic traversal.             |
-| Control-plane request timeout                  | `20,000 ms`  | Allows normal latency without hanging a run.           |
-| Whole-file download timeout                    | `300,000 ms` | Accommodates large files and slower connections.       |
-| Maximum redirects                              | `5`          | Supports ordinary redirects while bounding abuse.      |
-| Concurrent directory-list requests             | `2`          | Improves traversal speed without bursty load.          |
-| Concurrent file downloads                      | `1`          | Limits bandwidth, memory use, and service pressure.    |
-| Idempotent retry count after the first attempt | `1`          | Recovers one transient failure without retry storms.   |
-| Base retry delay                               | `1,000 ms`   | Gives brief transient failures time to clear.          |
-| Maximum honored `Retry-After` delay            | `60,000 ms`  | Respects throttling without stalling indefinitely.     |
-| Inventory passes before deletion               | `2`          | Requires repeated evidence before destructive cleanup. |
-| Delay between deletion-confirmation passes     | `1,000 ms`   | Gives concurrent remote changes time to surface.       |
-| Maximum desktop file size                      | `256 MiB`    | Bounds memory and disk use on desktop systems.         |
-| Maximum mobile file size                       | `128 MiB`    | Uses a lower ceiling for constrained mobile devices.   |
+| Policy                                         | Default     | Reasoning                                              |
+| ---------------------------------------------- | ----------- | ------------------------------------------------------ |
+| Listing page size                              | `100` items | Limits request count without oversized responses.      |
+| Maximum pages per directory                    | `1,000`     | Bounds runaway or inconsistent pagination.             |
+| Maximum items in one account inventory         | `100,000`   | Caps memory and processing work per run.               |
+| Maximum directory depth                        | `128`       | Prevents pathological or cyclic traversal.             |
+| Control-plane request timeout                  | `20,000 ms` | Allows normal latency without hanging a run.           |
+| Concurrent directory-list requests             | `2`         | Improves traversal speed without bursty load.          |
+| Concurrent file downloads                      | `1`         | Limits bandwidth, memory use, and service pressure.    |
+| Idempotent retry count after the first attempt | `1`         | Recovers one transient failure without retry storms.   |
+| Base retry delay                               | `1,000 ms`  | Gives brief transient failures time to clear.          |
+| Maximum honored `Retry-After` delay            | `60,000 ms` | Respects throttling without stalling indefinitely.     |
+| Inventory passes before deletion               | `2`         | Requires repeated evidence before destructive cleanup. |
+| Delay between deletion-confirmation passes     | `1,000 ms`  | Gives concurrent remote changes time to surface.       |
+| Maximum desktop file size                      | `256 MiB`   | Bounds memory and disk use on desktop systems.         |
+| Maximum mobile file size                       | `128 MiB`   | Uses a lower ceiling for constrained mobile devices.   |
 
 Each value in this table must have one authoritative declaration in a dedicated
 Cloud policy/constants module. Request, inventory, transfer, and test code must
@@ -757,11 +764,10 @@ for its sign-in, inventory, filtering, account-safety, or download contract:
    with literal `%`, `+`, and non-ASCII characters. Unrecognized or colliding
    forms still fail closed; this result alone does not authorize path-based
    deletion without the remaining independent safety gates.
-4. **Current download transfer:** record the current descriptor URL scheme,
-   reviewed host or host pattern, redirect behavior, required method, and
-   whether an unauthenticated `GET` succeeds without forwarding Cloud
-   credentials. Failure to resolve this gate blocks downloads, but no knowledge
-   of future hosts is required.
+4. **Current download transfer:** verify an Obsidian `requestUrl` GET of the
+   descriptor URL without Cloud authentication headers, including byte count and
+   MD5 before a vault write. Redirects are handled by Obsidian, not by a product
+   host allowlist or a per-hop validation gate.
 5. **Account identity field:** resolved for the tested account on October 12;
    `/api/user/query` returned a usable canonical decimal `userId` in two fresh
    sessions, with matching identities.
@@ -889,12 +895,12 @@ session requested a fresh `type: "0"` descriptor for a disposable test file.
 Host review identified an HTTPS virtual-hosted S3 bucket endpoint. A second
 descriptor named the same exact reviewed host, and an unauthenticated GET
 without cookies, CSRF headers, token, or referrer returned bytes matching the
-listed size and MD5. The transfer used manual redirect handling with only that
-host allowed; the harness did not record whether same-host redirects occurred.
-Bytes were held in memory and discarded without a vault write. The signed URL,
-account ID, file ID, checksum value, and contents were not recorded. This
-verifies the tested host and fixture, not an exhaustive host policy, future
-redirects, or the plugin's mirror workflow.
+listed size and MD5. The opt-in harness used only that reviewed host and did not
+record whether same-host redirects occurred. Bytes were held in memory and
+discarded without a vault write. The signed URL, account ID, file ID, checksum
+value, and contents were not recorded. This verifies the tested host and
+fixture, not an exhaustive host policy, future redirects, or the plugin's mirror
+workflow.
 
 **Still unknown.** Other download hosts and production redirect behavior have
 not been validated. The hosted API's pagination snapshot semantics and its

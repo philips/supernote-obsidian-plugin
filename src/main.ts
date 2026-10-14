@@ -19,6 +19,7 @@ import { IpSyncEngine } from './syncEngine';
 import { SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
+import { CloudSyncEngine } from './cloudSync/cloudSyncEngine';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
@@ -1165,8 +1166,9 @@ export default class SupernotePlugin extends Plugin {
 
 		await this.loadSettings();
 		const ipSyncEngine = new IpSyncEngine(this.app, this.settings, () => this.saveSettings());
+		const cloudSyncEngine = new CloudSyncEngine(this.app, this.settings);
 		this.syncCoordinator = new SingleEngineSyncCoordinator(
-			{ 'ip-device': ipSyncEngine },
+			{ 'ip-device': ipSyncEngine, 'supernote-cloud': cloudSyncEngine },
 			new ObsidianSyncExecutionStateStore(this.app),
 		);
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
@@ -1522,11 +1524,15 @@ export default class SupernotePlugin extends Plugin {
 		if (warningCount > 0) parts.push(`${warningCount} warnings`);
 		new Notice(`Supernote sync: ${parts.join(', ')}`);
 
-		if (protectedCount > 0) {
+		if (protectedCount > 0 && result.engineId === 'ip-device') {
 			console.warn('Supernote sync protected these items:', result.issues.filter((issue) => issue.kind === 'protected'));
 		}
-		if (failureCount > 0) {
+		if (failureCount > 0 && result.engineId === 'ip-device') {
 			console.error('Supernote sync failed for these items:', result.issues.filter((issue) => issue.kind === 'failure'));
+		}
+		if (failureCount > 0 && result.engineId === 'supernote-cloud') {
+			const categories = [...new Set(result.issues.filter((issue) => issue.kind === 'failure').map((issue) => issue.message))];
+			new Notice(`Cloud mirror failures: ${categories.join('; ')}`);
 		}
 	}
 

@@ -1,4 +1,4 @@
-import { App, TFile } from 'obsidian';
+import { App } from 'obsidian';
 import { MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
 import { MirrorManifestSlot, MirrorManifestStorage } from './sharedMirrorManifestStore';
 
@@ -22,28 +22,26 @@ export class ObsidianMirrorManifestStorage implements MirrorManifestStorage {
     }
 
     async read(slot: MirrorManifestSlot): Promise<string | null> {
-        const entry = this.app.vault.getAbstractFileByPath(this.path(slot));
+        const path = this.path(slot);
+        const entry = await this.app.vault.adapter.stat(path);
         if (entry === null) return null;
-        if (!(entry instanceof TFile)) throw new Error('Mirror manifest slot is not a file');
-        return this.app.vault.read(entry);
+        if (entry.type !== 'file') throw new Error('Mirror manifest slot is not a file');
+        return this.app.vault.adapter.read(path);
     }
 
     async write(slot: MirrorManifestSlot, contents: string): Promise<void> {
-        const existing = this.app.vault.getAbstractFileByPath(this.path(slot));
-        if (existing instanceof TFile) {
-            await this.app.vault.modify(existing, contents);
-            return;
-        }
-        if (existing !== null) throw new Error('Mirror manifest slot is not a file');
+        const adapter = this.app.vault.adapter;
+        const existing = await adapter.stat(this.path(slot));
+        if (existing?.type === 'folder') throw new Error('Mirror manifest slot is not a file');
         let parent = '';
         // Create each parent explicitly so a file occupying any directory
         // segment is reported as a collision instead of being papered over.
         for (const segment of this.directory.split('/')) {
             parent = parent ? `${parent}/${segment}` : segment;
-            const folder = this.app.vault.getAbstractFileByPath(parent);
-            if (folder instanceof TFile) throw new Error('Mirror metadata directory is not a folder');
-            if (folder === null) await this.app.vault.createFolder(parent);
+            const folder = await adapter.stat(parent);
+            if (folder?.type === 'file') throw new Error('Mirror metadata directory is not a folder');
+            if (folder === null) await adapter.mkdir(parent);
         }
-        await this.app.vault.create(this.path(slot), contents);
+        await adapter.write(this.path(slot), contents);
     }
 }

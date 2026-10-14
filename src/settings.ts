@@ -35,6 +35,7 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
 
 export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
     'ip-device': 'Direct IP connection',
+    'supernote-cloud': 'Supernote Cloud (manual mirror)',
 };
 
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
@@ -455,10 +456,14 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(sectionEl)
             .setName('Sync history')
-            .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
+            .setDesc('IP sync only. Cloud account binding and mirror history cannot be cleared in this milestone.')
             .addButton(btn => btn
                 .setButtonText('Forget sync history')
                 .onClick(async () => {
+                    if (this.plugin.getActiveSyncEngineId() === 'supernote-cloud') {
+                        new Notice('Cloud mirror history cannot be cleared while account binding is active');
+                        return;
+                    }
                     await this.plugin.clearActiveSyncHistory();
                     new Notice('Sync history cleared');
                 })
@@ -466,7 +471,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(sectionEl)
             .setName('Sync engine')
-            .setDesc('Choose which sync engine is used for manual and scheduled sync.')
+            .setDesc('Choose the manual sync engine. Cloud automatic sync is not enabled yet.')
             .addDropdown(dropdown => dropdown
                 .addOptions(SYNC_ENGINE_LABELS)
                 .setValue(this.plugin.getActiveSyncEngineId())

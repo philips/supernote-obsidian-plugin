@@ -1,56 +1,38 @@
 import { describe, expect, it, vi } from 'vitest';
 import { downloadCloudBytes } from './cloudDownload';
 
+vi.mock('obsidian', () => ({ requestUrl: vi.fn() }));
+
 const md5 = '0123456789abcdef0123456789abcdef';
 const descriptor = (url: string, checksum = md5) => ({
     status: 200, body: JSON.stringify({ success: true, url, md5: checksum }),
 });
-const hosts = new Set(['download.test', 'cdn.test']);
 
 describe('Cloud descriptor transfer', () => {
-    it('rejects unreviewed hosts, credentials, and mismatched checksums before fetching', async () => {
-        const fetcher = vi.fn<typeof fetch>();
-        for (const url of ['http://download.test/file', 'https://other.test/file',
-            'https://user:secret@download.test/file', 'https://download.test:8443/file']) {
-            await expect(downloadCloudBytes(descriptor(url), md5, hosts, 16, fetcher)).rejects.toThrow();
-        }
-        await expect(downloadCloudBytes(descriptor('https://download.test/file'), md5, new Set(), 16, fetcher)).rejects.toThrow();
-        await expect(downloadCloudBytes(descriptor('https://download.test/file', 'f'.repeat(32)), md5, hosts, 16, fetcher)).rejects.toThrow();
-        expect(fetcher).not.toHaveBeenCalled();
+    it('requests the signed URL without Cloud authentication headers or redirect options', async () => {
+        const request = vi.fn().mockResolvedValue({ status: 200, arrayBuffer: new Uint8Array([0, 255, 1]).buffer });
+        const url = 'https://download.test/file?signature=private';
+        const bytes = await downloadCloudBytes(descriptor(url), md5, 3, request);
+        expect([...bytes]).toEqual([0, 255, 1]);
+        expect(request).toHaveBeenCalledExactlyOnceWith({ url, method: 'GET', throw: false });
     });
 
-    it('follows only approved redirect hops without forwarding Cloud credentials', async () => {
-        const fetcher = vi.fn<typeof fetch>()
-            .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://cdn.test/file' } }))
-            .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3])));
-        const bytes = await downloadCloudBytes(descriptor('https://download.test/file'), md5, hosts, 3, fetcher);
-        expect([...bytes]).toEqual([1, 2, 3]);
-        expect(fetcher).toHaveBeenCalledTimes(2);
-        for (const [, init] of fetcher.mock.calls) {
-            expect(init?.headers).toBeUndefined();
-            expect(init?.redirect).toBe('manual');
-            expect(init?.credentials).toBe('omit');
-            expect(init?.referrerPolicy).toBe('no-referrer');
-        }
+    it('rejects a descriptor checksum mismatch before requesting bytes', async () => {
+        const request = vi.fn();
+        await expect(downloadCloudBytes(descriptor('https://download.test/file', 'f'.repeat(32)), md5, 3, request))
+            .rejects.toThrow('checksum');
+        expect(request).not.toHaveBeenCalled();
     });
 
-    it('blocks unapproved redirect targets and oversized streamed responses', async () => {
-        const redirected = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, {
-            status: 302, headers: { location: 'https://unreviewed.test/file' },
-        }));
-        await expect(downloadCloudBytes(descriptor('https://download.test/file'), md5, hosts, 3, redirected)).rejects.toThrow();
-        expect(redirected).toHaveBeenCalledOnce();
-
-        const oversized = vi.fn<typeof fetch>().mockResolvedValue(new Response(new Uint8Array([1, 2, 3, 4])));
-        await expect(downloadCloudBytes(descriptor('https://download.test/file'), md5, hosts, 3, oversized)).rejects.toThrow('size limit');
-    });
-
-    it('bounds redirect chains at five hops', async () => {
-        const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(null, {
-            status: 302, headers: { location: '/next' },
-        }));
-        await expect(downloadCloudBytes(descriptor('https://download.test/file'), md5, hosts, 3, fetcher))
-            .rejects.toThrow('Too many Cloud download redirects');
-        expect(fetcher).toHaveBeenCalledTimes(6);
+    it('rejects failed requests, non-success status, and oversized responses', async () => {
+        const url = 'https://download.test/file';
+        await expect(downloadCloudBytes(descriptor(url), md5, 3, vi.fn().mockRejectedValue(new Error('private URL'))))
+            .rejects.toThrow('Cloud download request failed');
+        await expect(downloadCloudBytes(descriptor(url), md5, 3,
+            vi.fn().mockResolvedValue({ status: 403, arrayBuffer: new ArrayBuffer(0) })))
+            .rejects.toThrow('Cloud download request failed');
+        await expect(downloadCloudBytes(descriptor(url), md5, 3,
+            vi.fn().mockResolvedValue({ status: 200, arrayBuffer: new ArrayBuffer(4) })))
+            .rejects.toThrow('size limit');
     });
 });

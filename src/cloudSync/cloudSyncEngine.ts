@@ -1,0 +1,96 @@
+import { App, Platform } from 'obsidian';
+import { md5 } from '@noble/hashes/legacy.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+import { validateCloudProtocolSession } from '../../scripts/cloudProtocolSession';
+import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
+import { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
+import { parsePathFilters, parseFileExtensionAllowlist } from '../syncFilters';
+import { SupernotePluginSettings } from '../settings';
+import { downloadCloudBytes } from './cloudDownload';
+import { collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
+import { CloudMirrorCandidate } from './cloudMirrorPlan';
+import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
+import { CloudMirrorTransfer } from './cloudMirrorWrite';
+import { CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_ROUTES } from './cloudPolicy';
+import { CloudSessionStorage } from './cloudSessionStorage';
+import { ObsidianCloudMirrorVault } from './obsidianCloudMirrorVault';
+import { createObsidianCloudRequest } from './obsidianCloudRequest';
+import { ObsidianMirrorManifestStorage } from './obsidianMirrorManifestStorage';
+import { cloudAccountFingerprint, requireBoundCloudAccount } from './sharedMirrorManifest';
+import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
+
+export class CloudSyncEngine implements SyncEngine {
+    readonly id = 'supernote-cloud' as const;
+    readonly name = 'Supernote Cloud';
+
+    constructor(
+        private readonly app: App,
+        private readonly settings: SupernotePluginSettings,
+    ) {}
+
+    getReadiness() {
+        if (!Platform.isDesktop) return { ready: false, reason: 'Cloud mirroring currently requires Obsidian desktop' };
+        if (!this.app.secretStorage) return { ready: false, reason: 'SecretStorage is unavailable' };
+        try {
+            return new CloudSessionStorage(this.app.secretStorage).load()
+                ? { ready: true } : { ready: false, reason: 'Import a Cloud access token first' };
+        } catch {
+            return { ready: false, reason: 'Cloud session storage is invalid' };
+        }
+    }
+
+    async run(trigger: SyncTrigger): Promise<SyncRunResult> {
+        if (trigger.kind !== 'manual') throw new Error('Automatic Cloud mirror is not enabled');
+        const session = new CloudSessionStorage(this.app.secretStorage).load();
+        if (!session) throw new Error('Import a Cloud access token first');
+        const transport = new NodeCloudProtocolTransport({
+            session: 'cloud-mirror', budget: new CloudRequestBudget(5_000),
+            fetchImplementation: createObsidianCloudRequest(),
+        });
+        await validateCloudProtocolSession(transport, { ...session, source: 'environment' });
+        const fingerprint = cloudAccountFingerprint(session.accountId);
+        const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
+        let loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);
+        if (loaded.manifest.cloudAccountFingerprint === null) {
+            loaded = await saveMirrorManifest(storage, loaded, {
+                ...loaded.manifest, cloudAccountFingerprint: fingerprint,
+            });
+        }
+        requireBoundCloudAccount(loaded.manifest, fingerprint);
+
+        const inventory = await collectCloudInventory(transport, session.token);
+        const queriedPaths = new Map();
+        for (const item of inventory.items) {
+            queriedPaths.set(item.id, await queryCloudPath(transport, session.token, item.id));
+        }
+        const canonicalPathsById = Object.fromEntries(verifyCloudInventoryPaths(inventory, queriedPaths));
+        const transfer: CloudMirrorTransfer = {
+            md5: async (bytes) => bytesToHex(md5(bytes)),
+            download: async (candidate: CloudMirrorCandidate) => {
+                const descriptor = await transport.post(CLOUD_ROUTES.downloadDescriptor,
+                    { id: candidate.item.id, type: '0' }, { accessToken: session.token });
+                return downloadCloudBytes(descriptor, candidate.item.md5!, CLOUD_MAX_DESKTOP_FILE_BYTES);
+            },
+        };
+        const result = await runVerifiedCloudMirror({
+            inventory, canonicalPathsById, syncFolder: this.settings.syncFolder,
+            legacyManifest: this.settings.noteSyncState, accountFingerprint: fingerprint,
+            vault: new ObsidianCloudMirrorVault(this.app), storage, transfer,
+            pathFilters: parsePathFilters(this.settings.syncPathFiltersRaw),
+            fileExtensions: parseFileExtensionAllowlist(this.settings.syncFileExtensionsRaw),
+            maxFileBytes: CLOUD_MAX_DESKTOP_FILE_BYTES,
+        });
+        return {
+            engineId: this.id, synced: result.synced, unchanged: result.unchanged,
+            excluded: result.excluded, removed: 0,
+            issues: [
+                ...result.protected.map(() => ({ kind: 'protected' as const, message: 'Vault copy was edited locally' })),
+                ...result.failureCategories.map((category) => ({ kind: 'failure' as const, message: category })),
+            ],
+        };
+    }
+
+    async clearHistory(): Promise<void> {
+        throw new Error('Cloud history cannot be cleared while account binding is active');
+    }
+}

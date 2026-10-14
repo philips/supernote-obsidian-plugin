@@ -33,7 +33,11 @@ const transport = new NodeCloudProtocolTransport({ session: 'descriptor-probe', 
 const validated = await validateCloudProtocolSession(transport, session);
 if (fixtureTransfer) {
     const result = await verifyCloudFixtureDownload(transport, validated.token, fileId,
-        Number(fixtureSize), fixtureMd5!, 'usa-ratta-cloud.s3.us-west-1.amazonaws.com');
+        Number(fixtureSize), fixtureMd5!, 'usa-ratta-cloud.s3.us-west-1.amazonaws.com',
+        async ({ url }) => {
+            const response = await fetch(url, { method: 'GET', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
+            return { status: response.status, arrayBuffer: await response.arrayBuffer() };
+        });
     process.stdout.write(`Disposable fixture: size verified=${result.sizeVerified}; MD5 verified=${result.md5Verified}.\n`);
     process.stdout.write('No file bytes were saved or written to the vault.\n');
 } else if (hostReview) {

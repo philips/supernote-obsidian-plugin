@@ -49,6 +49,7 @@ export interface CloudMirrorRunOptions {
 
 export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Promise<{
     synced: number; unchanged: number; excluded: number; protected: string[]; failed: string[];
+    failureCategories: string[];
 }> {
     let loaded = await loadMirrorManifest(options.storage, options.legacyManifest);
     requireBoundCloudAccount(loaded.manifest, options.accountFingerprint);
@@ -59,14 +60,21 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length,
         protected: plan.protected.map((candidate) => candidate.vaultPath),
         failed: plan.missingChecksum.map((candidate) => candidate.vaultPath),
+        failureCategories: plan.missingChecksum.map(() => 'Missing Cloud checksum'),
     };
     for (const candidate of plan.toDownload) {
         let write: Awaited<ReturnType<typeof applyCloudDownload>>;
         try {
             write = await applyCloudDownload(candidate, loaded.manifest, options.accountFingerprint,
                 options.vault, options.transfer, options.maxFileBytes);
-        } catch {
+        } catch (error) {
             result.failed.push(candidate.vaultPath);
+            result.failureCategories.push(error instanceof Error && [
+                'Cloud download descriptor checksum does not match inventory',
+                'Cloud download request failed',
+                'Cloud download failed size or checksum validation',
+                'Cloud download exceeds size limit',
+            ].includes(error.message) ? error.message : 'Cloud transfer or vault write failed');
             continue;
         }
         if (write.outcome === 'protected') {

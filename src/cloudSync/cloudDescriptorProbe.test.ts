@@ -5,6 +5,8 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import { CloudControlPlaneTransport } from './cloudProtocol';
 import { CLOUD_ROUTES } from './cloudPolicy';
 
+vi.mock('obsidian', () => ({ requestUrl: vi.fn() }));
+
 describe('read-only Cloud descriptor probe', () => {
     it('checks descriptor, byte count, and MD5 without writing the fixture', async () => {
         const bytes = new Uint8Array([1, 2, 3]);
@@ -12,18 +14,19 @@ describe('read-only Cloud descriptor probe', () => {
         const post = vi.fn<CloudControlPlaneTransport['post']>().mockResolvedValue({
             status: 200, body: JSON.stringify({ success: true, url: 'https://files.example.test/signed?secret=token', md5: checksum }),
         });
-        const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(bytes));
+        const request = vi.fn().mockResolvedValue({ status: 200, arrayBuffer: bytes.buffer });
         const transport = { bootstrapCsrf: vi.fn(), post };
-        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, checksum, 'files.example.test', fetcher))
+        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, checksum, 'files.example.test', request))
             .resolves.toEqual({ sizeVerified: true, md5Verified: true });
-        expect(fetcher).toHaveBeenCalledOnce();
-        expect(fetcher.mock.calls[0][1]).toMatchObject({ credentials: 'omit', redirect: 'manual' });
-        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, '0'.repeat(32), 'files.example.test', fetcher))
+        expect(request).toHaveBeenCalledExactlyOnceWith({
+            url: 'https://files.example.test/signed?secret=token', method: 'GET', throw: false,
+        });
+        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, '0'.repeat(32), 'files.example.test', request))
             .rejects.toThrow('checksum');
-        expect(fetcher).toHaveBeenCalledOnce();
-        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, checksum, 'other.example.test', fetcher))
+        expect(request).toHaveBeenCalledOnce();
+        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, checksum, 'other.example.test', request))
             .rejects.toThrow('reviewed host');
-        expect(fetcher).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledOnce();
     });
 
     it('rejects corrupted fixture bytes after transfer', async () => {
@@ -35,8 +38,8 @@ describe('read-only Cloud descriptor probe', () => {
                 status: 200, body: JSON.stringify({ success: true, url: 'https://files.example.test/file', md5: checksum }),
             }),
         };
-        const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(new Uint8Array([3, 2, 1])));
-        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, checksum, 'files.example.test', fetcher))
+        const request = vi.fn().mockResolvedValue({ status: 200, arrayBuffer: new Uint8Array([3, 2, 1]).buffer });
+        await expect(verifyCloudFixtureDownload(transport, 'access', '123', 3, checksum, 'files.example.test', request))
             .rejects.toThrow('MD5 verification');
     });
     it('exposes only a validated HTTPS hostname for local review', () => {

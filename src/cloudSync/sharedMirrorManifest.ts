@@ -1,3 +1,5 @@
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import { SyncManifest } from '../deviceSync';
 import { CloudMirrorRecord } from './cloudMirrorPlan';
 
@@ -22,6 +24,11 @@ export interface SharedMirrorManifest {
     version: 1;
     cloudAccountFingerprint: string | null;
     records: Record<string, SharedMirrorRecord>;
+}
+
+export function cloudAccountFingerprint(accountId: string): string {
+    if (!/^(0|[1-9]\d*)$/.test(accountId)) throw new Error('Invalid Cloud account identity');
+    return `v1:${bytesToHex(sha256(utf8ToBytes(`supernote-cloud-account:v1:${accountId}`)))}`;
 }
 
 export function requireBoundCloudAccount(manifest: SharedMirrorManifest, fingerprint: string): void {

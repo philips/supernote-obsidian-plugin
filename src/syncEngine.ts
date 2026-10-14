@@ -16,6 +16,8 @@ import {
 } from './deviceSync';
 import type { SyncEngine, SyncRunResult, SyncTrigger } from './syncAbstraction';
 import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from './syncFilters';
+import { ObsidianMirrorManifestStorage } from './cloudSync/obsidianMirrorManifestStorage';
+import { loadMirrorManifest } from './cloudSync/sharedMirrorManifestStore';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
 // concurrent creator (createFolder throwing because another call already
@@ -100,6 +102,14 @@ export class IpSyncEngine implements SyncEngine {
     async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
         let result: DeviceSyncResult;
         try {
+            const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
+            if (await storage.read('primary') !== null || await storage.read('backup') !== null) {
+                const loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);
+                if (loaded.manifest.records && Object.values(loaded.manifest.records)
+                    .some((record) => record.source.engineId === 'supernote-cloud')) {
+                    throw new Error('IP sync cannot run over Cloud-owned mirror files until shared IP history is integrated');
+                }
+            }
             result = await runDeviceSync(this.app, this.settings, this.saveSettings);
         } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
