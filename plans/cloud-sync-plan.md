@@ -2,11 +2,12 @@
 
 **Status:** Manual and scheduled Cloud mirroring, guarded cleanup, interactive
 Cloud sign-in/sign-out, and session prompts are implemented and synthetically
-tested. The token-import command remains available for development, but is no
-longer the normal setup path. The user reports completing live logout/login; the
-read-only username lookup was separately validated against the existing session.
-Controlled scheduled Cloud behavior remains unvalidated. Updated October
-15, 2026.
+tested. The user reports completing live logout/login; scheduled-sync checks,
+including signed-out handling and main-window notices, are user-reported rather
+than independently captured. The read-only username lookup was separately
+validated against the existing session. The explicit Cloud mirror reset workflow
+remains unimplemented and is deferred until after shared sync reporting. Updated
+October 15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -37,7 +38,8 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   `requestUrl` GET, size and MD5 verification, local-edit checks immediately
   before writes, and no rewrite for identical bytes.
 - Implemented a desktop-only Cloud mirror engine for manual and scheduled runs.
-  Cloud history reset remains disabled/unimplemented.
+  The explicit reset workflow for clearing Cloud mirror history and account
+  binding remains unimplemented and is deferred to a later sprint.
 - Signed-in Cloud settings fetch the current `userName` through the existing
   account-identity route and display it only when the returned account ID
   matches the active session. Neither the username nor its response is stored; a
@@ -71,13 +73,17 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 ### Implementation Decisions
 
 - Keep Cloud sync desktop-only and dispatch only the active engine. Scheduled
-  runs use the same readiness and mirror safeguards as manual runs; live
-  scheduled Cloud validation requires an agreed synthetic fixture scope.
+  runs use the same readiness and mirror safeguards as manual runs. The user
+  reported scheduled-sync validation on October 15, 2026; this is distinct from
+  automated coverage and independently captured diagnostics.
 - Keep all mirror writes non-destructive until the complete-inventory,
   account-binding, canonical-path, shared-manifest, and unchanged-local-hash
   protections are in place.
 - Keep IP and Cloud on the shared manifest contract. Do not allow IP sync to
   overwrite Cloud-managed destinations until IP history is migrated.
+- Preserve the current manifest and local-edit protection rules for both engines
+  during the shared reporting sprint. A change to which files Cloud may
+  overwrite or move to Trash requires a separate design and implementation.
 - Put each operational limit in one authoritative Cloud policy/constants module;
   request, inventory, transfer, and test code should reference those
   declarations rather than repeat numeric literals. The required defaults are
@@ -156,8 +162,9 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - Due polls select only the active engine, skip overlap and unready engines, and
   record the attempt before dispatch. Cloud scheduled runs reuse the manual
   account validation, inventory, manifest, download, and guarded Trash path.
-- No live scheduled run was initiated for this sprint. A controlled synthetic
-  fixture scope and access approval are still required before live validation.
+- No live scheduled run was initiated during the implementation sprint. The user
+  later reported completing manual scheduled-sync checks, including signed-out
+  sessions and main-window notices; see Sprint 7.
 
 ### Sprint 6: Cloud Sign-In and Session UX (implemented; live sign-in user-reported)
 
@@ -179,16 +186,48 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 ## Planned Work
 
-### Next: Controlled Scheduled Sync Validation
+### Next: Shared Sync Protection Reporting and Log
 
-- After Sprint 6, agree on a controlled synthetic destination and fixture scope,
-  permissions, and whether an existing authorized Cloud session can be used
-  before enabling a live scheduled Cloud run.
-- Verify a due Cloud tick, unchanged repeat, inactive-engine gate, overlap
-  suppression, and signed-out/rejected-session notices. Confirm file/folder
-  Trash remains guarded and production data untouched.
-- Record only non-sensitive observed results. Distinguish user-reported checks
-  from independently captured diagnostics.
+- Use the existing shared `SyncRunResult`/`SyncIssue` contract to carry
+  protected items and sanitized failure categories from both engines to one
+  reporting path. Cloud currently drops protected paths when mapping its mirror
+  result; keep the detail available in memory without automatically persisting
+  it.
+- Move the append-only `Sync Log.md` writer and formatter out of the IP engine
+  into shared reporting infrastructure. Keep the existing log under the shared
+  destination root for IP compatibility, with engine-labeled entries. Preserve
+  the IP behavior of creating the log for a clean run but appending only
+  reportable events, at most once per run. Route manual and scheduled results
+  through the same summary/log path without duplicate IP entries. Keep
+  engine-specific modal and readiness handling separate.
+- Resolve the existing design conflict before persisting Cloud detail: the
+  multi-sync design proposes a Cloud log under `.supernote-sync`, while the
+  Cloud plan forbids identifying file data in logs and reports. Default to
+  secret-free counts and failure categories in the shared log; do not persist
+  Cloud paths, account data, raw errors, signed URLs, or credentials without an
+  explicit privacy decision and corresponding design update. Exclude the log and
+  mirror metadata from cleanup even when `*` allows every extension.
+- Test issue mapping, reporting for both engines and triggers, no duplicate log
+  entries, existing IP clean-run log behavior, log-write failures, and Cloud
+  redaction. Preserve the manifest, account binding, local-edit guards,
+  two-inventory deletion gate, and current behavior of protecting locally edited
+  files.
+
+### Following Sprint: Explicit Cloud Mirror Reset
+
+- Implement the separately confirmed destructive account/device-binding reset
+  after the shared reporting sprint. Retain its existing scope and safety
+  requirements in [`multi-sync-design.md`](multi-sync-design.md); do not change
+  binding or reset history as part of reporting work.
+
+### Sprint 7: User-Reported Scheduled Sync Validation
+
+- On October 15, 2026, the user reported that manual testing over the prior two
+  days provided confidence in scheduled sync, including signed-out sessions and
+  main-window notice messages.
+- Record this as user-reported validation, not an automated test run or an
+  independently captured diagnostic. The existing synthetic scheduler tests
+  remain the reproducible automated evidence.
 
 ## Validation Gates
 
@@ -210,8 +249,9 @@ validation-only sprint.
 
 For Sprint 5 on October 15, 2026, focused coordinator and Cloud-engine tests,
 `npm test` (428 passing), `npm run build`, and `npm run lint` (0 errors, 2
-pre-existing warnings) passed. Live scheduled Cloud behavior was not tested; the
-approved synthetic fixture scope and permissions remain outstanding.
+pre-existing warnings) passed. No live scheduled run was initiated during that
+sprint; the user later reported manual scheduled-sync validation as recorded in
+Sprint 7.
 
 The interval-control follow-up passed `npm test` (430 passing), `npm run build`,
 and `npm run lint` (0 errors, 2 existing warnings). It was not exercised in a
@@ -224,8 +264,8 @@ later reported completing the live logout/login flow. A read-only October 15
 profile query using the existing session confirmed the returned username matched
 the value supplied by the user; it was not retained. The username UI changes
 passed `npm test` (449 passing), `npm run build`, `npm run lint` (0 errors, 12
-warnings), and `git diff --check`. The live scheduled-sync scenarios below have
-not been independently validated.
+warnings), and `git diff --check`. Scheduled-sync outcomes are user-reported as
+recorded in Sprint 7, not independently captured.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

@@ -1,8 +1,9 @@
 # Multi-Sync Implementation Plan
 
 **Status:** Core single-active-engine coordination and manual Cloud mirroring
-are implemented. Shared automatic scheduling, IP manifest migration, and the
-destination-root move workflow remain outstanding. Updated October 14, 2026.
+are implemented. Shared automatic scheduling and Cloud cleanup are implemented;
+IP manifest migration and the destination-root move workflow remain outstanding.
+The explicit Cloud mirror reset is also outstanding. Updated October 15, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -25,28 +26,18 @@ progress and verification.
   shared-manifest-backed manual mirror, account binding, local edit protection,
   and synthetic test coverage. See [`cloud-sync-plan.md`](cloud-sync-plan.md)
   for Cloud-specific details.
+- Implemented shared scheduled dispatch for the active engine, due-attempt
+  pacing, readiness handling, and overlap suppression. User-reported live Cloud
+  checks include signed-out handling and main-window notices; see
+  [`cloud-sync-plan.md`](cloud-sync-plan.md).
+- Implemented Cloud lifecycle notices and guarded remote-deletion cleanup with
+  unchanged-local-hash protection, Obsidian Trash, and empty-folder cleanup;
+  synthetic tests and controlled-vault validation are recorded in
+  [`cloud-sync-plan.md`](cloud-sync-plan.md).
 - Kept automatic sync disabled by default. The coordinator supports scheduled
-  triggers as a type, but no shared interval poller is wired.
+  triggers through a shared interval poller.
 
 ## Outstanding
-
-### Shared scheduler
-
-- Implement one registered 60-second poll owned by the shared coordinator. It
-  reads the shared interval setting and dispatches the selected engine (IP or
-  Cloud) through the coordinator; scheduling must not be engine-specific.
-- Startup registers/resumes polling without an unconditional sync. On its first
-  poll, dispatch at most one run if the active engine's valid persisted attempt
-  timestamp shows its interval elapsed while Obsidian was closed. Initialize
-  missing/invalid per-engine timestamps without a run, do not replay multiple
-  missed intervals, and record an attempt before dispatch so a failure cannot
-  retry every poll. This catches up scheduled work without treating plugin load
-  itself as an unconditional sync trigger.
-- Do not overlap or queue runs. Manual runs must not reset automatic cadence.
-- Keep scheduled failures non-blocking and prevent automatic login/modal flows.
-- Test active-engine-only dispatch, cadence, startup catch-up and timestamp
-  initialization, failure behavior, engine switching, and polling while a run is
-  active, including dispatch to the IP engine.
 
 ### Shared manifest migration and IP compatibility
 
@@ -69,14 +60,13 @@ progress and verification.
 - Test interrupted moves and preservation of user-created and locally edited
   files. Do not replace this with per-file copying.
 
-### Cloud follow-up
+### Explicit Cloud mirror reset
 
-- Implement start and per-download lifecycle notices and retain the completion
-  summary. See [`cloud-sync-next-steps.md`](cloud-sync-next-steps.md).
-- Implement two-complete-inventory remote-deletion cleanup with unchanged-local
-  hash protection and Obsidian Trash, under the constraints in
-  [`cloud-sync-design.md`](cloud-sync-design.md).
-- Keep these separately scoped from shared scheduler and migration work.
+- Implement the confirmed destructive account/device-binding reset described in
+  [`multi-sync-design.md`](multi-sync-design.md) and tracked in
+  [`cloud-sync-next-steps.md`](cloud-sync-next-steps.md). Preserve edited files,
+  trash only unchanged managed files, and clear the Cloud binding and shared
+  manifest without disturbing unrelated content or IP settings.
 
 ## Verification
 
