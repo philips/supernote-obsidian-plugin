@@ -70,9 +70,11 @@ describe('Cloud session settings', () => {
         ['Sign in required', ['Sign in']],
         ['Cloud session storage is invalid', ['Sign out']],
         ['SecretStorage is unavailable', []],
-    ])('shows the appropriate actions for %s', (status, expectedButtons) => {
+    ])('shows the appropriate actions for %s', async (status, expectedButtons) => {
+        const cloudSessionUsername = vi.fn(async () => 'Example user');
         const tab = new SupernoteSettingTab({} as never, {
             cloudSessionStatus: () => status,
+            cloudSessionUsername,
         } as never);
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Supernote cloud');
         if (!group || !('items' in group)) throw new Error('Supernote cloud group missing');
@@ -83,6 +85,7 @@ describe('Cloud session settings', () => {
         const setting = {
             setName: vi.fn().mockReturnThis(),
             setDesc: vi.fn().mockReturnThis(),
+            descEl: { isConnected: true },
             addButton: vi.fn((configure: (button: { setButtonText: (text: string) => unknown; onClick: () => unknown }) => void) => {
                 const button = {
                     setButtonText: (text: string) => { buttons.push(text); return button; },
@@ -93,6 +96,38 @@ describe('Cloud session settings', () => {
         };
         session.render(setting as unknown as Setting);
         expect(setting.setDesc).toHaveBeenCalledWith(status);
+        await Promise.resolve();
+        if (status === 'Signed in') {
+            expect(cloudSessionUsername).toHaveBeenCalledOnce();
+            expect(setting.setDesc).toHaveBeenLastCalledWith('Signed in as Example user');
+        } else {
+            expect(cloudSessionUsername).not.toHaveBeenCalled();
+        }
         expect(buttons).toEqual(expectedButtons);
+    });
+
+    it('does not show a stale username after sign-out while the lookup is pending', async () => {
+        let resolveUsername: ((value: string) => void) | undefined;
+        const cloudSessionUsername = vi.fn(() => new Promise<string>((resolve) => { resolveUsername = resolve; }));
+        let status = 'Signed in';
+        const tab = new SupernoteSettingTab({} as never, {
+            cloudSessionStatus: () => status, cloudSessionUsername,
+        } as never);
+        const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Supernote cloud');
+        if (!group || !('items' in group)) throw new Error('Supernote cloud group missing');
+        const session = group.items[0];
+        if (!('render' in session) || !session.render) throw new Error('Cloud session renderer missing');
+        const setting = {
+            setName: vi.fn().mockReturnThis(),
+            setDesc: vi.fn().mockReturnThis(),
+            descEl: { isConnected: true },
+            addButton: vi.fn(),
+        };
+        session.render(setting as unknown as Setting);
+        status = 'Sign in required';
+        resolveUsername?.('Former user');
+        await Promise.resolve();
+        expect(setting.setDesc).toHaveBeenCalledOnce();
+        expect(setting.setDesc).toHaveBeenCalledWith('Signed in');
     });
 });

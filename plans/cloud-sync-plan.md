@@ -3,8 +3,10 @@
 **Status:** Manual and scheduled Cloud mirroring, guarded cleanup, interactive
 Cloud sign-in/sign-out, and session prompts are implemented and synthetically
 tested. The token-import command remains available for development, but is no
-longer the normal setup path. Live login/OTP and scheduled Cloud behavior have
-not been validated. Updated October 15, 2026.
+longer the normal setup path. The user reports completing live logout/login; the
+read-only username lookup was separately validated against the existing session.
+Controlled scheduled Cloud behavior remains unvalidated. Updated October
+15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -36,6 +38,12 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   before writes, and no rewrite for identical bytes.
 - Implemented a desktop-only Cloud mirror engine for manual and scheduled runs.
   Cloud history reset remains disabled/unimplemented.
+- Signed-in Cloud settings fetch the current `userName` through the existing
+  account-identity route and display it only when the returned account ID
+  matches the active session. Neither the username nor its response is stored; a
+  missing name or failed lookup leaves the status as Signed in. A read-only
+  October 15, 2026 hosted check confirmed the name matched the value supplied by
+  the user.
 - Implemented opt-in, redacted protocol-harness modes for account-bound
   inventory and descriptor checks. The harness remains separate from product
   sync and requires explicit consent for login/OTP and other approved probes.
@@ -151,9 +159,7 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - No live scheduled run was initiated for this sprint. A controlled synthetic
   fixture scope and access approval are still required before live validation.
 
-## Planned Work
-
-### Sprint 6: Cloud Sign-In and Session UX (completed synthetically)
+### Sprint 6: Cloud Sign-In and Session UX (implemented; live sign-in user-reported)
 
 - Added Cloud Engine settings with status and Sign in / Sign out controls.
   Interactive sign-in uses the verified password flow and requests an email code
@@ -167,7 +173,11 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   Account-identity HTTP 401 clears the token; unknown errors do not.
 - Added synthetic coverage for session storage, rejected/cancelled sign-in,
   binding, sign-out, 401 retention policy, manual prompt classification, and
-  scheduled attempt pacing. No live login or OTP was attempted.
+  scheduled attempt pacing. The user subsequently reported verifying the live
+  logout/login flow. A separate authorized read-only profile query verified the
+  username field; no new login or OTP was initiated for that lookup.
+
+## Planned Work
 
 ### Next: Controlled Scheduled Sync Validation
 
@@ -175,7 +185,7 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   permissions, and whether an existing authorized Cloud session can be used
   before enabling a live scheduled Cloud run.
 - Verify a due Cloud tick, unchanged repeat, inactive-engine gate, overlap
-  suppression, and signed-out/expired-session prompting. Confirm file/folder
+  suppression, and signed-out/rejected-session notices. Confirm file/folder
   Trash remains guarded and production data untouched.
 - Record only non-sensitive observed results. Distinguish user-reported checks
   from independently captured diagnostics.
@@ -208,11 +218,14 @@ and `npm run lint` (0 errors, 2 existing warnings). It was not exercised in a
 live scheduled Cloud run.
 
 Sprint 6 passed focused synthetic tests, `npm test` (439 passing),
-`npm run
-build`, `npm run lint` (0 errors; warnings include new UI sentence-case
-and settings fallback notices), and `git diff --check` on October 15, 2026. The
-UI was not visually exercised in Obsidian; the repository's headless Obsidian
-scripts target Fedora/RHEL rather than this Windows workspace.
+`npm run build`, `npm run lint` (0 errors; warnings include UI sentence-case and
+settings fallback notices), and `git diff --check` on October 15, 2026. The user
+later reported completing the live logout/login flow. A read-only October 15
+profile query using the existing session confirmed the returned username matched
+the value supplied by the user; it was not retained. The username UI changes
+passed `npm test` (449 passing), `npm run build`, `npm run lint` (0 errors, 12
+warnings), and `git diff --check`. The live scheduled-sync scenarios below have
+not been independently validated.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

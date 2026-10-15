@@ -114,13 +114,22 @@ export async function queryCloudAccountIdentity(
     transport: CloudControlPlaneTransport,
     accessToken: string,
 ): Promise<string> {
+    return (await queryCloudAccountProfile(transport, accessToken)).accountId;
+}
+
+export async function queryCloudAccountProfile(
+    transport: CloudControlPlaneTransport,
+    accessToken: string,
+): Promise<{ accountId: string; userName: string | null }> {
     const identityResponse = parseCloudObject(await transport.post(
         CLOUD_ROUTES.accountIdentity,
         {},
         { accessToken },
     ));
     requireCloudSuccess(identityResponse);
-    return requireCanonicalDecimalId(identityResponse, 'userId');
+    const accountId = requireCanonicalDecimalId(identityResponse, 'userId');
+    const userName = identityResponse.userName;
+    return { accountId, userName: typeof userName === 'string' && userName.trim() ? userName.trim() : null };
 }
 
 export async function verifyCloudAuthIdentityGate(

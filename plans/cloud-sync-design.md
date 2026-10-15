@@ -1,7 +1,7 @@
 # Cloud Sync External Design
 
 **Status:** Draft behavior and acceptance specification; some specified
-capabilities remain unimplemented. **Scope date:** October 12-14, 2026.
+capabilities remain unimplemented. **Scope date:** October 12-15, 2026.
 
 This document specifies the externally observable contract for the proposed
 Cloud engine in `obsidian-supernote-companion`. It is a behavior-and-protocol
@@ -260,13 +260,13 @@ use the specification's fail-closed behavior.
 
 ### 6.6 Query current account identity
 
-| Item             | Classification      | Specification                                                                                                |
-| ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Method and route | Documented fact     | `POST /api/user/query`                                                                                       |
-| Authentication   | Documented fact     | Requires `x-access-token`.                                                                                   |
-| Request JSON     | Documented fact     | No request body is declared.                                                                                 |
-| Success JSON     | Documented fact     | Common response fields plus `userId` (int64), profile fields, and account status.                            |
-| Product use      | Product requirement | On first successful Cloud setup, retain the returned stable `userId` as the account binding for that mirror. |
+| Item             | Classification      | Specification                                                                                                          |
+| ---------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Method and route | Documented fact     | `POST /api/user/query`                                                                                                 |
+| Authentication   | Documented fact     | Requires `x-access-token`.                                                                                             |
+| Request JSON     | Documented fact     | No request body is declared.                                                                                           |
+| Success JSON     | Documented fact     | Common response fields plus `userId` (int64), `userName` (profile nickname), other profile fields, and account status. |
+| Product use      | Product requirement | On first successful Cloud setup, retain the returned stable `userId` as the account binding for that mirror.           |
 
 **Product assumption:** the canonical `userId` is stable and unique for as long
 as its account exists. The plugin uses it to prevent cross-account mirror reuse.
@@ -279,6 +279,11 @@ resets it.
 decimal string in JWT claims or as an int64-shaped profile field. The plugin
 must store the account binding as an opaque decimal string; this evidence does
 not establish lifetime stability or non-reuse by the hosted service.
+
+**Hosted observation (October 15, 2026):** an authorized, read-only identity
+query using an existing signed-in session returned a nonempty `userName` that
+matched the username supplied by the user. No login or OTP was initiated. This
+establishes availability for that session, not a guarantee for other accounts.
 
 ### 6.7 List a directory
 
@@ -464,7 +469,9 @@ safety rules in this specification.
 3. The plugin attempts account login using the published account-login route.
 4. On a successful token-bearing response, the plugin retrieves and records the
    account binding before enabling Cloud sync.
-5. The plugin reports the connected account without displaying the token.
+5. The Cloud session setting reports **Signed in as <username>** when a
+   verified, nonempty `userName` is available, or **Signed in** otherwise. It
+   never displays the token or numeric account ID.
 
 ### 8.2 Verification code
 
@@ -500,6 +507,12 @@ compatible error-code evidence.
 - The raw account ID is stored securely with the token only to protect the
   shared mirror from cross-account reconciliation. Synced mirror metadata
   contains only the versioned account fingerprint defined in Section 11.1.
+- The Cloud session setting obtains the current `userName` through a read-only
+  account-identity request using the saved token and checks the returned ID
+  against the still-active saved session. It does not store the username in
+  SecretStorage, plugin settings, or synced metadata. Reopening settings after a
+  reload fetches it again; a missing name or failed request leaves **Signed in**
+  visible without signing out or exposing the error response.
 - The password and verification code are used only for the active sign-in
   attempt and are never persisted.
 - A verified authentication failure clears the local token and changes Cloud
@@ -832,6 +845,12 @@ types, cookie names, and confirmation of matching identities. Passwords,
 verification codes, session/CSRF/pre-auth tokens, valid-code keys, cookie
 values, profile values, the raw account ID, and response bodies were not
 retained. This is evidence for those two sessions, not a service-wide guarantee.
+
+**Account display (October 15).** A separate read-only identity query using an
+existing authorized session confirmed that `userName` was present and matched
+the username supplied by the user. The username and raw response are omitted
+from this record. The plugin retrieves the field when rendering signed-in Cloud
+settings and does not persist it.
 
 **Directory listing and pagination (October 13).** With a separately validated
 cached, account-bound token and no login/OTP consent, requests used

@@ -199,6 +199,13 @@ export class SupernoteSettingTab extends PluginSettingTab {
             else this.display();
         };
         setting.setName('Cloud session').setDesc(status);
+        if (status === 'Signed in') {
+            void this.plugin.cloudSessionUsername().then((userName) => {
+                if (userName && setting.descEl.isConnected && this.plugin.cloudSessionStatus() === 'Signed in') {
+                    setting.setDesc(`Signed in as ${userName}`);
+                }
+            }, () => undefined);
+        }
         if (status === 'Sign in required') {
             setting.addButton((button) => button
                 .setButtonText('Sign in')

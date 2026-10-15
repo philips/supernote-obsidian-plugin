@@ -5,6 +5,7 @@ import {
     CloudVerificationRequiredError,
     deriveCloudPassword,
     deriveCloudVerificationSign,
+    queryCloudAccountProfile,
     verifyCloudAuthIdentityGate,
 } from './cloudAuth';
 import { CloudControlPlaneTransport, CloudJsonObject, CloudRawResponse } from './cloudProtocol';
@@ -123,6 +124,20 @@ function verificationPosts(accountId = '9223372036854775807'): ExpectedPost[] {
 }
 
 describe('Cloud password authentication', () => {
+    it('reads an optional username from the authenticated identity response', async () => {
+        const posts = successfulPosts();
+        const identity = posts.at(-1)!;
+        identity.response.body = '{"success":true,"userId":9223372036854775807,"userName":"Example user"}';
+        await expect(queryCloudAccountProfile(new FakeTransport([identity]), 'session-token')).resolves.toEqual({
+            accountId: '9223372036854775807', userName: 'Example user',
+        });
+
+        const missingName = successfulPosts().at(-1)!;
+        await expect(queryCloudAccountProfile(new FakeTransport([missingName]), 'session-token')).resolves.toMatchObject({
+            userName: null,
+        });
+    });
+
     it('derives the compatible password hash without Node crypto', () => {
         expect(deriveCloudPassword(credentials.password, randomCode)).toBe(derivedPassword);
     });

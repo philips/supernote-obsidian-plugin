@@ -22,7 +22,8 @@ import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
 import { CloudSignInModal } from './cloudSync/CloudSignInModal';
 import { shouldPromptCloudSignIn } from './cloudSync/cloudSessionPrompt';
-import { signOutCloud } from './cloudSync/cloudSessionActions';
+import { createCloudAuthTransport, signOutCloud } from './cloudSync/cloudSessionActions';
+import { queryCloudAccountProfile } from './cloudSync/cloudAuth';
 import { CloudSessionStorage } from './cloudSync/cloudSessionStorage';
 import { CloudSignInRequiredError, CloudSyncEngine } from './cloudSync/cloudSyncEngine';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
@@ -1563,6 +1564,19 @@ export default class SupernotePlugin extends Plugin {
 		} catch {
 			return 'Cloud session storage is invalid';
 		}
+	}
+
+	async cloudSessionUsername(): Promise<string | null> {
+		if (!this.app.secretStorage) return null;
+		const storage = new CloudSessionStorage(this.app.secretStorage);
+		const session = storage.load();
+		if (!session) return null;
+		const transport = createCloudAuthTransport();
+		await transport.bootstrapCsrf();
+		const profile = await queryCloudAccountProfile(transport, session.token);
+		const current = storage.load();
+		return current?.token === session.token && current.accountId === profile.accountId
+			&& profile.accountId === session.accountId ? profile.userName : null;
 	}
 
 	openCloudSignIn(onSignedIn: () => void = () => {}): void {
