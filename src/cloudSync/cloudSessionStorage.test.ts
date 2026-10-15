@@ -22,6 +22,10 @@ describe('Cloud session storage', () => {
         expect(saveLocalStorage).not.toHaveBeenCalled();
         expect(() => store.save({ token: 'different', accountId: '2' })).toThrow('another account');
         expect(store.load()?.token).toBe('test-token');
+        store.clear();
+        expect(store.load()).toBeNull();
+        expect([...secrets.values()]).toEqual(['', '']);
+        expect(saveLocalStorage).not.toHaveBeenCalled();
     });
 
     it('does not propagate legacy plaintext session fields into execution state', () => {

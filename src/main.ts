@@ -19,7 +19,11 @@ import { IpSyncEngine } from './syncEngine';
 import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
-import { CloudSyncEngine } from './cloudSync/cloudSyncEngine';
+import { CloudSignInModal } from './cloudSync/CloudSignInModal';
+import { CloudSessionNoticeGate, shouldPromptCloudSignIn } from './cloudSync/cloudSessionPrompt';
+import { signOutCloud } from './cloudSync/cloudSessionActions';
+import { CloudSessionStorage } from './cloudSync/cloudSessionStorage';
+import { CloudSignInRequiredError, CloudSyncEngine } from './cloudSync/cloudSyncEngine';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
@@ -1138,6 +1142,8 @@ export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
 	private syncCoordinator!: SyncCoordinator;
+	private readonly cloudSyncNotices = new CloudSessionNoticeGate();
+	private cloudSignInModal: CloudSignInModal | null = null;
 	// Live reference handed to VaultWriter — registering/unregistering here
 	// after construction still takes effect, since both hold the same Set.
 	pageTextProcessors: Set<PageTextProcessor> = new Set();
@@ -1530,6 +1536,30 @@ export default class SupernotePlugin extends Plugin {
 		await this.syncCoordinator.clearActiveHistory();
 	}
 
+	cloudSessionStatus(): string {
+		if (!this.app.secretStorage) return 'SecretStorage is unavailable';
+		try {
+			return new CloudSessionStorage(this.app.secretStorage).load() ? 'Signed in' : 'Sign in required';
+		} catch {
+			return 'Cloud session storage is invalid';
+		}
+	}
+
+	openCloudSignIn(onSignedIn: () => void = () => {}): void {
+		if (this.cloudSignInModal) return;
+		this.cloudSignInModal = new CloudSignInModal(this.app, this.settings, () => {
+			this.cloudSyncNotices.reset();
+			onSignedIn();
+		}, () => { this.cloudSignInModal = null; });
+		this.cloudSignInModal.open();
+	}
+
+	async signOutCloud(): Promise<void> {
+		if (this.syncCoordinator.isRunning()) throw new Error('Wait for the current sync before signing out');
+		await signOutCloud(this.app);
+		this.cloudSyncNotices.reset();
+	}
+
 	private showSyncResult(result: SyncRunResult): void {
 		const protectedCount = result.issues.filter((issue) => issue.kind === 'protected').length;
 		const failureCount = result.issues.filter((issue) => issue.kind === 'failure').length;
@@ -1548,11 +1578,36 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	private async pollAutomaticSync(): Promise<void> {
+		if (this.getActiveSyncEngineId() === 'supernote-cloud' && this.isAutoSyncEnabled()) {
+			if (this.cloudSessionStatus() === 'Sign in required') {
+				if (this.cloudSyncNotices.shouldNotify('sign-in')) {
+					new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
+				}
+			}
+		}
 		try {
 			const result = await this.syncCoordinator.pollAutomatic();
-			if (result) this.showSyncResult(result);
-		} catch {
-			new Notice('Scheduled supernote sync failed; check the active engine and try syncing manually');
+			if (result) {
+				this.cloudSyncNotices.reset();
+				this.showSyncResult(result);
+			}
+		} catch (error) {
+			if (error instanceof CloudSignInRequiredError) {
+				if (this.cloudSyncNotices.shouldNotify('sign-in')) {
+					new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
+				}
+			} else if (this.getActiveSyncEngineId() === 'supernote-cloud' && error instanceof Error
+				&& (error.message.includes('account') || error.message.includes('binding'))) {
+				if (this.cloudSyncNotices.shouldNotify('account')) {
+					new Notice('Scheduled Cloud sync blocked: account identity or mirror binding does not match');
+				}
+			} else if (this.getActiveSyncEngineId() === 'supernote-cloud') {
+				if (this.cloudSyncNotices.shouldNotify('failure')) {
+					new Notice('Scheduled Cloud sync failed; check your connection or session in Cloud Engine settings');
+				}
+			} else {
+				new Notice('Scheduled supernote sync failed; check the active engine and try syncing manually');
+			}
 		}
 	}
 
@@ -1569,8 +1624,12 @@ export default class SupernotePlugin extends Plugin {
 			const error = err instanceof Error ? err : new Error(String(err));
 			if (this.getActiveSyncEngineId() === 'ip-device') {
 				new DirectConnectErrorModal(this.app, this.settings, error).open();
+			} else if (shouldPromptCloudSignIn(error)) {
+				this.openCloudSignIn();
 			} else {
-				new ErrorModal(this.app, error).open();
+				new Notice(error.message.includes('account') || error.message.includes('binding')
+					? 'Cloud sync blocked: account identity or mirror binding does not match'
+					: 'Cloud sync failed. Check your connection or session in Cloud Engine settings');
 			}
 		}
 	}

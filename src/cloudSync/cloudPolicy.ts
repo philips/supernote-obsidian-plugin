@@ -21,6 +21,7 @@ export const CLOUD_ROUTES = {
     verificationLogin: '/api/official/user/sms/login',
     queryToken: '/api/user/query/token',
     accountIdentity: '/api/user/query',
+    logout: '/api/user/logout',
     directoryList: '/api/file/list/query',
     pathQuery: '/api/file/path/query',
     downloadDescriptor: '/api/file/download/url',

@@ -19,6 +19,10 @@ import { ObsidianMirrorManifestStorage } from './obsidianMirrorManifestStorage';
 import { cloudAccountFingerprint, requireBoundCloudAccount } from './sharedMirrorManifest';
 import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
 
+export class CloudSignInRequiredError extends Error {
+    constructor() { super('Sign in to Supernote Cloud in settings to resume sync'); }
+}
+
 export class CloudSyncEngine implements SyncEngine {
     readonly id = 'supernote-cloud' as const;
     readonly name = 'Supernote Cloud';
@@ -33,7 +37,7 @@ export class CloudSyncEngine implements SyncEngine {
         if (!this.app.secretStorage) return { ready: false, reason: 'SecretStorage is unavailable' };
         try {
             return new CloudSessionStorage(this.app.secretStorage).load()
-                ? { ready: true } : { ready: false, reason: 'Import a Cloud access token first' };
+                ? { ready: true } : { ready: false, reason: 'Sign in to Supernote Cloud in settings to resume sync' };
         } catch {
             return { ready: false, reason: 'Cloud session storage is invalid' };
         }
@@ -41,12 +45,20 @@ export class CloudSyncEngine implements SyncEngine {
 
     async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
         const session = new CloudSessionStorage(this.app.secretStorage).load();
-        if (!session) throw new Error('Import a Cloud access token first');
+        if (!session) throw new CloudSignInRequiredError();
         const transport = new NodeCloudProtocolTransport({
             session: 'cloud-mirror', budget: new CloudRequestBudget(5_000),
             fetchImplementation: createObsidianCloudRequest(),
         });
-        await validateCloudProtocolSession(transport, { ...session, source: 'environment' });
+        try {
+            await validateCloudProtocolSession(transport, { ...session, source: 'environment' });
+        } catch (error) {
+            if (error instanceof Error && error.message === 'Supernote Cloud request failed (HTTP 401)') {
+                new CloudSessionStorage(this.app.secretStorage).clear();
+                throw new CloudSignInRequiredError();
+            }
+            throw error;
+        }
         const fingerprint = cloudAccountFingerprint(session.accountId);
         const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
         let loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);

@@ -23,6 +23,7 @@ const AUTH_IDENTITY_ROUTES = new Set<string>([
     CLOUD_ROUTES.verificationLogin,
     CLOUD_ROUTES.queryToken,
     CLOUD_ROUTES.accountIdentity,
+    CLOUD_ROUTES.logout,
     CLOUD_ROUTES.directoryList,
     CLOUD_ROUTES.pathQuery,
     CLOUD_ROUTES.downloadDescriptor,

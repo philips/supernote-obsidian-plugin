@@ -487,8 +487,9 @@ compatible error-code evidence.
 
 ### 8.3 Session lifecycle
 
-- The minimum supported Obsidian version is now 1.11.5 (raised from 1.8.7 with
-  approval on October 13, 2026). SecretStorage became available to plugins in
+- The minimum supported Obsidian version was raised to 1.11.5 from 1.8.7 with
+  approval on October 13, 2026 and is now 1.13.0 per `manifest.json`.
+  SecretStorage became available to plugins in
   1.11.4, and desktop 1.11.5 added OS-backed encryption at rest. This avoids
   storing Cloud tokens in plugin settings or vault files, at the cost of
   dropping support for older Obsidian installations. The tested Windows desktop
@@ -508,6 +509,15 @@ compatible error-code evidence.
   because its meaning is unknown.
 - Signing out removes the local token, retains shared sync history, and prevents
   future Cloud runs until a user signs in.
+- Obsidian's public SecretStorage API exposes `setSecret` and `getSecret`, but no
+  deletion operation. Local sign-out overwrites the token and account ID with
+  empty values, which the plugin treats as signed out; it cannot remove their
+  secret IDs through the public API. Remote logout is best effort after local
+  invalidation.
+- The account-identity endpoint returned HTTP 401 for a rejected token in the
+  October 13, 2026 observation. Cloud sync clears a stored token for this
+  specific identity-query outcome. Other HTTP and service errors retain the
+  token because their authentication meaning has not been established.
 - Signing in as a different account is blocked while the Cloud mirror is bound
   to another account. The user must explicitly reset the existing Cloud mirror.
 

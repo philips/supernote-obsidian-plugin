@@ -1,19 +1,16 @@
 # Cloud Sync Sprint Hand-Off
 
-## Recommended Next Sprint: Cloud Sign-In and Session UX
+## Recommended Next Sprint: Controlled Scheduled Cloud Validation
 
-1. Add a Cloud Engine settings section with signed-in/signed-out status and Sign
-   in / Sign out controls. Implement the documented credential flow, including
-   conditional email verification, and persist only the validated session token
-   and account identity in device-local SecretStorage.
-2. Handle signed-out, expired, rejected, and account-mismatched sessions for
-   manual and scheduled Cloud sync with an actionable status and sign-in prompt.
-   Avoid uncaught errors, silent failures, repeated scheduled notices, and
-   background login/OTP attempts.
-3. Add synthetic tests for authentication outcomes, cancellation, sign-out,
-   manual/scheduled prompting, deduplication, and secret handling. Any live
-   login/OTP check requires separate explicit authorization.
-4. After this sprint, agree on a controlled synthetic fixture scope and
-   permissions before testing live scheduled Cloud behavior. Do not mutate Cloud
-   contents or broaden the fixture scope without explicit authorization; record
-   only non-sensitive results in [`cloud-sync-plan.md`](cloud-sync-plan.md).
+1. Agree on a synthetic test-vault destination, replaceable Cloud fixtures,
+   allowed operations, and whether an existing authorized session may be used.
+   Do not initiate live login or OTP without separate explicit permission.
+2. Exercise signed-in status and controls in a running Obsidian desktop UI, then
+   validate a due scheduled tick, unchanged repeat, inactive-engine gate,
+   overlap suppression, and signed-out/rejected-session notices without
+   accessing unrelated account data.
+3. Verify that file and folder Trash behavior remains guarded. Do not mutate
+   Cloud contents or expand the fixture scope without explicit authorization.
+   Record only non-sensitive observations in
+   [`cloud-sync-plan.md`](cloud-sync-plan.md), separating observed behavior
+   from synthetic test results.

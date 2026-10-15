@@ -1,11 +1,10 @@
 # Cloud Sync Implementation Plan
 
-**Status:** Manual and scheduled Cloud mirroring, lifecycle notifications,
-guarded remote-deletion cleanup, and empty mirror folder cleanup are
-implemented. Cloud credentials still use a development token-import flow;
-user-facing sign-in/sign-out and sync-triggered sign-in prompts are not
-implemented. Controlled folder cleanup validation is complete; live scheduled
-Cloud validation remains pending. Updated October 15, 2026.
+**Status:** Manual and scheduled Cloud mirroring, guarded cleanup, interactive
+Cloud sign-in/sign-out, and session prompts are implemented and synthetically
+tested. The token-import command remains available for development, but is no
+longer the normal setup path. Live login/OTP and scheduled Cloud behavior have
+not been validated. Updated October 15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -154,26 +153,20 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 ## Planned Work
 
-### Sprint 6: Cloud Sign-In and Session UX
+### Sprint 6: Cloud Sign-In and Session UX (completed synthetically)
 
-- Add a dedicated Cloud Engine settings section with clear signed-in/signed-out
-  status and Sign in / Sign out actions. Replace the development token-import
-  flow as the normal user-facing setup path.
-- Implement the credential sign-in flow described in the external design,
-  including the email verification-code step when required. Keep credentials,
-  OTP values, pre-auth tokens, CSRF state, and intermediate verification keys in
-  memory only; persist only the validated session token and account identity in
-  device-local SecretStorage.
-- Make manual and scheduled Cloud attempts handle signed-out, expired, rejected,
-  or account-mismatched sessions without uncaught errors or silent failure. Show
-  an actionable status message and offer/open Sign in; a scheduled poll must not
-  repeatedly interrupt the user while no valid session is available. Do not
-  silently retry authentication or start login/OTP from a background poll.
-- Cover sign-in success and failure, conditional OTP, cancellation, sign-out,
-  invalid/expired sessions, manual and scheduled prompts, prompt deduplication,
-  and assurance that no sensitive values are logged or persisted outside
-  SecretStorage. Validate with synthetic protocol responses; any live login or
-  OTP validation still requires explicit authorization.
+- Added Cloud Engine settings with status and Sign in / Sign out controls.
+  Interactive sign-in uses the verified password flow and requests an email code
+  only when required; cancelled and failed attempts do not persist credentials.
+- The validated token and account identity alone are written to device-local
+  SecretStorage. Sign-out invalidates both locally and attempts remote logout
+  without relying on it. Existing mirror binding blocks a different account.
+- Manual sync prompts for sign-in; scheduled sync reports sign-in or account
+  binding problems without background authentication and suppresses repeated
+  notices. Account-identity HTTP 401 clears the token; unknown errors do not.
+- Added synthetic coverage for session storage, rejected/cancelled sign-in,
+  binding, sign-out, 401 retention policy, manual prompt classification, and
+  scheduled notice deduplication. No live login or OTP was attempted.
 
 ### Next: Controlled Scheduled Sync Validation
 
@@ -212,6 +205,12 @@ approved synthetic fixture scope and permissions remain outstanding.
 The interval-control follow-up passed `npm test` (430 passing), `npm run build`,
 and `npm run lint` (0 errors, 2 existing warnings). It was not exercised in a
 live scheduled Cloud run.
+
+Sprint 6 passed focused synthetic tests, `npm test` (439 passing), `npm run
+build`, `npm run lint` (0 errors; warnings include new UI sentence-case and
+settings fallback notices), and `git diff --check` on October 15, 2026.
+The UI was not visually exercised in Obsidian; the repository's headless
+Obsidian scripts target Fedora/RHEL rather than this Windows workspace.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

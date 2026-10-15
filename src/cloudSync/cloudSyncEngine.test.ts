@@ -7,7 +7,7 @@ import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { downloadCloudBytes } from './cloudDownload';
 import { cloudAccountFingerprint } from './sharedMirrorManifest';
 import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
-import { CloudSyncEngine } from './cloudSyncEngine';
+import { CloudSignInRequiredError, CloudSyncEngine } from './cloudSyncEngine';
 
 const post = vi.hoisted(() => vi.fn());
 const notice = vi.hoisted(() => vi.fn());
@@ -81,6 +81,28 @@ describe('Cloud engine', () => {
         expect(collectCloudInventory).not.toHaveBeenCalled();
         expect(loadMirrorManifest).not.toHaveBeenCalled();
         expect(notice).not.toHaveBeenCalled();
+    });
+
+    it('clears a token rejected by account identity but retains it for unknown errors', async () => {
+        const engine = new CloudSyncEngine(app, settings);
+        vi.mocked(validateCloudProtocolSession).mockRejectedValueOnce(new Error('Supernote Cloud request failed (HTTP 401)'));
+        await expect(engine.run({ kind: 'scheduled' })).rejects.toBeInstanceOf(CloudSignInRequiredError);
+        expect(setSecret).toHaveBeenCalledWith('supernote-cloud-access-token', '');
+        expect(setSecret).toHaveBeenCalledWith('supernote-cloud-account-id', '');
+        setSecret.mockClear();
+        vi.mocked(validateCloudProtocolSession).mockRejectedValueOnce(new Error('Supernote Cloud error E0000'));
+        await expect(engine.run({ kind: 'manual', commandId: 'sync-now' })).rejects.toThrow('E0000');
+        expect(setSecret).not.toHaveBeenCalled();
+        expect(collectCloudInventory).not.toHaveBeenCalled();
+    });
+
+    it('does not run without a session', () => {
+        const signedOut = { ...app, secretStorage: {
+            getSecret: () => null, setSecret,
+        } } as unknown as App;
+        expect(new CloudSyncEngine(signedOut, settings).getReadiness()).toEqual({
+            ready: false, reason: 'Sign in to Supernote Cloud in settings to resume sync',
+        });
     });
 
     it('binds the validated account and downloads the descriptor bytes', async () => {

@@ -189,6 +189,37 @@ export class SupernoteSettingTab extends PluginSettingTab {
             });
     }
 
+    private renderCloudSession(setting: Setting): void {
+        const status = this.plugin.cloudSessionStatus();
+        const refresh = () => {
+            const update = (this as PluginSettingTab & { update?: () => void }).update;
+            if (update) update.call(this);
+            else this.display();
+        };
+        setting.setName('Cloud session').setDesc(status);
+        if (status === 'Signed in' || status === 'Sign in required') {
+            setting.addButton((button) => button
+                .setButtonText('Sign in')
+                .setDisabled(status === 'Signed in')
+                .onClick(() => this.plugin.openCloudSignIn(refresh)));
+        }
+        if (status === 'Signed in' || status === 'Cloud session storage is invalid') {
+            setting.addButton((button) => button
+                .setButtonText('Sign out')
+                .onClick(async () => {
+                    button.setDisabled(true);
+                    try {
+                        await this.plugin.signOutCloud();
+                        new Notice('Supernote Cloud signed out on this device');
+                        refresh();
+                    } catch {
+                        button.setDisabled(false);
+                        new Notice('Cloud sign-out failed; check SecretStorage and try again');
+                    }
+                }));
+        }
+    }
+
     // Declarative settings, so entries appear in Obsidian's settings search on 1.13.0+.
     // `display()` below stays as the fallback for this plugin's minAppVersion (< 1.13.0),
     // which is still called on those older versions.
@@ -389,6 +420,11 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         render: (setting) => this.renderSyncInterval(setting),
                     },
                 ],
+            },
+            {
+                type: 'group',
+                heading: 'Cloud engine',
+                items: [{ name: 'Cloud session', render: (setting) => this.renderCloudSession(setting) }],
             },
             {
                 type: 'group',
@@ -600,6 +636,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
         intervalSetting = new Setting(sectionEl);
         this.renderSyncInterval(intervalSetting);
         intervalSetting.settingEl.hidden = !this.plugin.isAutoSyncEnabled();
+
+        sectionEl = createSection('Cloud engine');
+        this.renderCloudSession(new Setting(sectionEl));
 
         sectionEl = createSection('IP engine');
 

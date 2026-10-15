@@ -14,7 +14,7 @@ export class CloudSessionStorage {
     load(): CloudSession | null {
         const token = this.secrets.getSecret(TOKEN_SECRET_ID);
         const accountId = this.secrets.getSecret(ACCOUNT_SECRET_ID);
-        if (token === null && accountId === null) return null;
+        if (!token && !accountId) return null;
         if (!token || !accountId || !/^(0|[1-9]\d*)$/.test(accountId)) {
             throw new Error('Cloud session storage is incomplete or invalid');
         }
@@ -31,5 +31,10 @@ export class CloudSessionStorage {
         }
         this.secrets.setSecret(ACCOUNT_SECRET_ID, session.accountId);
         this.secrets.setSecret(TOKEN_SECRET_ID, session.token);
+    }
+
+    clear(): void {
+        this.secrets.setSecret(TOKEN_SECRET_ID, '');
+        this.secrets.setSecret(ACCOUNT_SECRET_ID, '');
     }
 }
