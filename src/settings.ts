@@ -36,7 +36,7 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
 
 export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
     'ip-device': 'Direct IP',
-    'supernote-cloud': 'Supernote Cloud',
+    'supernote-cloud': 'Supernote cloud',
 };
 
 function validateSyncMinutes(value: string): string | undefined {
@@ -229,7 +229,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
         return [
             {
                 type: 'group',
-                heading: 'Note Viewer',
+                heading: 'Note viewer',
                 items: [
                     {
                         name: 'Enable note viewer',
@@ -476,7 +476,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
             },
             {
                 type: 'group',
-                heading: 'Supernote Cloud',
+                heading: 'Supernote cloud',
                 visible: () => this.plugin.getActiveSyncEngineId() === 'supernote-cloud',
                 items: [{ name: 'Cloud session', render: (setting) => this.renderCloudSession(setting) }],
             },
@@ -504,7 +504,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
             return group.createDiv({ cls: 'setting-items' });
         };
 
-        let sectionEl = createSection('Note Viewer');
+        let sectionEl = createSection('Note viewer');
 
         const viewerSettingsEl = sectionEl.createDiv();
         const viewerToggleSetting = new Setting(sectionEl)
@@ -728,7 +728,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        sectionEl = createEngineSection('Supernote Cloud', this.plugin.getActiveSyncEngineId() === 'supernote-cloud');
+        sectionEl = createEngineSection('Supernote cloud', this.plugin.getActiveSyncEngineId() === 'supernote-cloud');
         this.renderCloudSession(new Setting(sectionEl));
 
     }

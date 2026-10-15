@@ -1,6 +1,6 @@
 import type { Setting } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_SETTINGS, SupernoteSettingTab } from './settings';
+import { DEFAULT_SETTINGS, SupernoteSettingTab, SYNC_ENGINE_LABELS } from './settings';
 
 vi.mock('obsidian', () => ({ PluginSettingTab: class PluginSettingTab {}, Setting: class Setting {} }));
 vi.mock('./main', () => ({ default: class SupernotePlugin {} }));
@@ -17,8 +17,11 @@ describe('note viewer settings', () => {
         } as never);
         const update = vi.fn();
         Object.assign(tab, { update });
-        const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Note Viewer');
-        if (!group || !('items' in group)) throw new Error('Note Viewer group missing');
+        const definitions = tab.getSettingDefinitions();
+        const group = definitions.find((item) => 'heading' in item && item.heading === 'Note viewer');
+        if (!group || !('items' in group)) throw new Error('Note viewer group missing');
+        expect(SYNC_ENGINE_LABELS).toMatchObject({ 'ip-device': 'Direct IP', 'supernote-cloud': 'Supernote cloud' });
+        expect(definitions.some((item) => 'heading' in item && item.heading === 'Supernote cloud')).toBe(true);
 
         expect(group.items.map((item) => 'name' in item ? item.name : '')).toEqual([
             'Enable note viewer', 'Invert colors in "dark mode"', 'Show export buttons', 'Vector ink',
