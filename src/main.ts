@@ -1,6 +1,7 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
+import { tryRegisterNoteViewer } from './noteViewerRegistration';
 import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildVectorInkBackgroundNote, buildRasterInkOverlayNote, toSvg } from 'supernote-typescript';
 import { encode } from 'image-js';
 import { DownloadListModal, UploadListModal } from './FileListModal';
@@ -1142,6 +1143,7 @@ export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
 	private syncCoordinator!: SyncCoordinator;
+	private noteViewerRegistered = false;
 	private readonly cloudSyncNotices = new CloudSessionNoticeGate();
 	private cloudSignInModal: CloudSignInModal | null = null;
 	// Live reference handed to VaultWriter — registering/unregistering here
@@ -1209,11 +1211,20 @@ export default class SupernotePlugin extends Plugin {
 			}
 		});
 
-		this.registerView(
-			VIEW_TYPE_SUPERNOTE,
-			(leaf) => new SupernoteView(leaf, this.settings)
-		);
-		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
+		if (this.settings.noteViewerEnabled) {
+			this.registerView(
+				VIEW_TYPE_SUPERNOTE,
+				(leaf) => new SupernoteView(leaf, this.settings)
+			);
+		}
+		const noteViewerRegistered = tryRegisterNoteViewer(this.settings.noteViewerEnabled,
+			() => this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE));
+		this.noteViewerRegistered = noteViewerRegistered;
+		if (this.settings.noteViewerEnabled && !noteViewerRegistered) {
+			this.settings.noteViewerEnabled = false;
+			await this.saveSettings();
+			new Notice('Note viewer unavailable: another plugin may already handle .note files. Disable that viewer and reload this plugin to try again.');
+		}
 
 		// `.spd` files (Supernote Atelier app) — see atelierView.ts.
 		this.registerView(
@@ -1230,10 +1241,16 @@ export default class SupernotePlugin extends Plugin {
 		// embed support (rather than throwing) keeps the rest of the plugin
 		// working either way.
 		if (this.app.embedRegistry?.registerExtension) {
-			this.app.embedRegistry.registerExtension('note', (context, file, subpath) =>
-				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
-			);
-			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+			if (noteViewerRegistered) {
+				try {
+					this.app.embedRegistry.registerExtension('note', (context, file, subpath) =>
+						new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
+					);
+					this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+				} catch {
+					new Notice('Note embeds unavailable: another plugin may already handle .note embeds.');
+				}
+			}
 
 			this.app.embedRegistry.registerExtension('spd', (context, file) =>
 				new SupernoteAtelierEmbed(this.app, this.settings, context.containerEl, file)
@@ -1510,6 +1527,10 @@ export default class SupernotePlugin extends Plugin {
 
 	getActiveSyncEngineId(): SyncEngineId {
 		return this.syncCoordinator.getActiveEngineId();
+	}
+
+	isNoteViewerReloadRequired(): boolean {
+		return this.settings.noteViewerEnabled !== this.noteViewerRegistered;
 	}
 
 	async setActiveSyncEngine(engineId: SyncEngineId): Promise<void> {

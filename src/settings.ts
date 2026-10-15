@@ -35,7 +35,7 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
 };
 
 export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
-    'ip-device': 'Direct IP connection',
+    'ip-device': 'Direct IP',
     'supernote-cloud': 'Supernote Cloud',
 };
 
@@ -99,6 +99,7 @@ type SettingDefinitionItem = SettingDefinitionControl | SettingDefinitionRender 
 
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
+    noteViewerEnabled: boolean;
     invertColorsWhenDark: boolean;
     showExportButtons: boolean;
     /** Draw pen strokes as crisp vector paths instead of rasterizing the
@@ -135,6 +136,7 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
 
 export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     directConnectIP: '',
+    noteViewerEnabled: true,
     invertColorsWhenDark: true,
     showExportButtons: false,
     vectorInk: true,
@@ -227,10 +229,28 @@ export class SupernoteSettingTab extends PluginSettingTab {
         return [
             {
                 type: 'group',
-                heading: 'UI',
+                heading: 'Note Viewer',
                 items: [
                     {
+                        name: 'Enable note viewer',
+                        render: (setting) => {
+                            setting.setDesc('The viewer can be disabled for compatibility with other plugins.');
+                            const warningEl = setting.descEl.createDiv({
+                                cls: 'supernote-sync-interval-warning',
+                                text: 'Obsidian or this plugin must be reloaded for changes to this setting to take effect.',
+                            });
+                            warningEl.hidden = !this.plugin.isNoteViewerReloadRequired();
+                            setting.addToggle((toggle) => toggle.setValue(this.plugin.settings.noteViewerEnabled)
+                                .onChange(async (enabled) => {
+                                    this.plugin.settings.noteViewerEnabled = enabled;
+                                    await this.plugin.saveSettings();
+                                    (this as PluginSettingTab & { update?: () => void }).update?.();
+                                }));
+                        },
+                    },
+                    {
                         name: 'Invert colors in "dark mode"',
+                        visible: () => this.plugin.settings.noteViewerEnabled,
                         desc: 'When Obsidian is in "dark mode" increase image visibility by inverting colors of images',
                         control: {
                             type: 'toggle',
@@ -239,6 +259,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     },
                     {
                         name: 'Show export buttons',
+                        visible: () => this.plugin.settings.noteViewerEnabled,
                         desc: 'When viewing .note files, show buttons for exporting images and/or markdown files to vault. These features can still be accessed via the command pallete.',
                         control: {
                             type: 'toggle',
@@ -247,6 +268,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     },
                     {
                         name: 'Vector ink',
+                        visible: () => this.plugin.settings.noteViewerEnabled,
                         desc: 'When on, the note viewer and PDF export draw pen strokes as crisp vector paths instead of rasterizing the ink. On by default; turn off if ink renders incorrectly or differently from the device.',
                         control: {
                             type: 'toggle',
@@ -389,21 +411,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         },
                     },
                     {
-                        name: 'Sync engine',
-                        render: (setting) => {
-                            setting
-                                .setDesc('Choose which sync engine is used for manual and scheduled sync.')
-                                .addDropdown((dropdown) => {
-                                    dropdown
-                                        .addOptions(SYNC_ENGINE_LABELS)
-                                        .setValue(this.plugin.getActiveSyncEngineId())
-                                        .onChange(async (value) => {
-                                            await this.plugin.setActiveSyncEngine(value as SyncEngineId);
-                                        });
-                                });
-                        },
-                    },
-                    {
                         name: 'Automatic sync',
                         render: (setting) => {
                             setting.setDesc('Run the active sync engine on a schedule. Off by default.')
@@ -419,16 +426,28 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         visible: () => this.plugin.isAutoSyncEnabled(),
                         render: (setting) => this.renderSyncInterval(setting),
                     },
+                    {
+                        name: 'Sync engine',
+                        render: (setting) => {
+                            setting
+                                .setDesc('Choose which sync engine is used for manual and scheduled sync.')
+                                .addDropdown((dropdown) => {
+                                    dropdown
+                                        .addOptions(SYNC_ENGINE_LABELS)
+                                        .setValue(this.plugin.getActiveSyncEngineId())
+                                        .onChange(async (value) => {
+                                            await this.plugin.setActiveSyncEngine(value as SyncEngineId);
+                                            (this as PluginSettingTab & { update?: () => void }).update?.();
+                                        });
+                                });
+                        },
+                    },
                 ],
             },
             {
                 type: 'group',
-                heading: 'Cloud engine',
-                items: [{ name: 'Cloud session', render: (setting) => this.renderCloudSession(setting) }],
-            },
-            {
-                type: 'group',
-                heading: 'IP engine',
+                heading: 'Direct IP',
+                visible: () => this.plugin.getActiveSyncEngineId() === 'ip-device',
                 items: [
                     {
                         name: 'Supernote IP address',
@@ -446,7 +465,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     },
                     {
                         name: 'Device file browser sort order',
-                        desc: 'Default order to list files and folders in when browsing the supernote over a direct IP connection. Can also be changed from the browser itself.',
+                        desc: 'Default order to list files and folders in when browsing the Supernote over a direct IP connection. Can also be changed from the browser itself.',
                         control: {
                             type: 'dropdown',
                             key: 'fileBrowserSortOrder',
@@ -454,6 +473,12 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         },
                     },
                 ],
+            },
+            {
+                type: 'group',
+                heading: 'Supernote Cloud',
+                visible: () => this.plugin.getActiveSyncEngineId() === 'supernote-cloud',
+                items: [{ name: 'Cloud session', render: (setting) => this.renderCloudSession(setting) }],
             },
         ];
     }
@@ -472,7 +497,33 @@ export class SupernoteSettingTab extends PluginSettingTab {
             return group.createDiv({ cls: 'setting-items' });
         };
 
-        let sectionEl = createSection('UI');
+        const createEngineSection = (heading: string, visible: boolean): HTMLElement => {
+            const group = containerEl.createDiv({ cls: 'setting-group' });
+            group.hidden = !visible;
+            new Setting(group).setName(heading).setHeading();
+            return group.createDiv({ cls: 'setting-items' });
+        };
+
+        let sectionEl = createSection('Note Viewer');
+
+        const viewerSettingsEl = sectionEl.createDiv();
+        const viewerToggleSetting = new Setting(sectionEl)
+            .setName('Enable note viewer')
+            .setDesc('The viewer can be disabled for compatibility with other plugins.');
+        const viewerWarningEl = viewerToggleSetting.descEl.createDiv({
+            cls: 'supernote-sync-interval-warning',
+            text: 'Obsidian or this plugin must be reloaded for changes to this setting to take effect.',
+        });
+        viewerWarningEl.hidden = !this.plugin.isNoteViewerReloadRequired();
+        viewerToggleSetting.addToggle(toggle => toggle.setValue(this.plugin.settings.noteViewerEnabled)
+                .onChange(async (enabled) => {
+                    this.plugin.settings.noteViewerEnabled = enabled;
+                    await this.plugin.saveSettings();
+                    viewerSettingsEl.hidden = !enabled;
+                    viewerWarningEl.hidden = !this.plugin.isNoteViewerReloadRequired();
+                }));
+        viewerSettingsEl.hidden = !this.plugin.settings.noteViewerEnabled;
+        sectionEl = viewerSettingsEl;
 
         new Setting(sectionEl)
             .setName('Invert colors in "dark mode"')
@@ -613,17 +664,6 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        new Setting(sectionEl)
-            .setName('Sync engine')
-            .setDesc('Choose which sync engine is used for manual and scheduled sync.')
-            .addDropdown(dropdown => dropdown
-                .addOptions(SYNC_ENGINE_LABELS)
-                .setValue(this.plugin.getActiveSyncEngineId())
-                .onChange(async (value) => {
-                    await this.plugin.setActiveSyncEngine(value as SyncEngineId);
-                })
-            );
-
         let intervalSetting: Setting;
         new Setting(sectionEl)
             .setName('Automatic sync')
@@ -637,10 +677,19 @@ export class SupernoteSettingTab extends PluginSettingTab {
         this.renderSyncInterval(intervalSetting);
         intervalSetting.settingEl.hidden = !this.plugin.isAutoSyncEnabled();
 
-        sectionEl = createSection('Cloud engine');
-        this.renderCloudSession(new Setting(sectionEl));
+        new Setting(sectionEl)
+            .setName('Sync engine')
+            .setDesc('Choose which sync engine is used for manual and scheduled sync.')
+            .addDropdown(dropdown => dropdown
+                .addOptions(SYNC_ENGINE_LABELS)
+                .setValue(this.plugin.getActiveSyncEngineId())
+                .onChange(async (value) => {
+                    await this.plugin.setActiveSyncEngine(value as SyncEngineId);
+                    this.display();
+                })
+            );
 
-        sectionEl = createSection('IP engine');
+        sectionEl = createEngineSection('Direct IP', this.plugin.getActiveSyncEngineId() === 'ip-device');
 
         new Setting(sectionEl)
             .setName('Supernote IP address')
@@ -678,6 +727,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+
+        sectionEl = createEngineSection('Supernote Cloud', this.plugin.getActiveSyncEngineId() === 'supernote-cloud');
+        this.renderCloudSession(new Setting(sectionEl));
 
     }
 }
