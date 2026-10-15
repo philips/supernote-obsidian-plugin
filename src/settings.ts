@@ -1,5 +1,6 @@
-import { createCustomDictionarySettingsUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, CustomDictionarySettings } from "./customDictionary";
+import { createCustomDictionarySettingsUI, createDictionaryTableUI, CUSTOM_DICTIONARY_DEFAULT_SETTINGS, CustomDictionarySettings } from "./customDictionary";
 import SupernotePlugin from "./main";
+import * as Obsidian from 'obsidian';
 import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { SyncManifest } from './deviceSync';
 import { SyncEngineId } from './syncAbstraction';
@@ -78,7 +79,13 @@ interface SettingDefinitionGroup {
     heading: string;
     items: SettingDefinitionItem[];
 }
-type SettingDefinitionItem = SettingDefinitionControl | SettingDefinitionRender | SettingDefinitionGroup;
+interface SettingDefinitionPage {
+    type: 'page';
+    name: string;
+    visible?: () => boolean;
+    page: () => { title: string; containerEl: HTMLElement; display(): void };
+}
+type SettingDefinitionItem = SettingDefinitionControl | SettingDefinitionRender | SettingDefinitionGroup | SettingDefinitionPage;
 
 export interface SupernotePluginSettings extends CustomDictionarySettings {
     directConnectIP: string;
@@ -188,11 +195,53 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         },
                     },
                     {
-                        name: 'Custom dictionary',
+                        name: 'Enable custom dictionary',
                         render: (setting) => {
-                            setting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
-                            setting.setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
-                            createCustomDictionarySettingsUI(setting.settingEl, this.plugin);
+                            setting.setDesc('Replace recognized text when converting notes to Markdown. Raw files copied by sync engines are not modified.');
+                            setting.descEl.appendText(' ');
+                            const link = setting.descEl.createEl('a', { text: 'Edit dictionary entries', href: '#' });
+                            const settings = (this.app as App & {
+                                setting?: { openPagePath?: (id: string, path: string[]) => unknown };
+                            }).setting;
+                            link.hidden = !this.plugin.settings.isCustomDictionaryEnabled || !settings?.openPagePath;
+                            link.addEventListener('click', (event) => {
+                                event.preventDefault();
+                                // Obsidian exposes native page navigation internally, but not in its public API.
+                                settings?.openPagePath?.(this.plugin.manifest.id, ['Edit dictionary entries']);
+                            });
+                            setting.addToggle((toggle) => toggle
+                                .setValue(this.plugin.settings.isCustomDictionaryEnabled)
+                                .onChange(async (value) => {
+                                    this.plugin.settings.isCustomDictionaryEnabled = value;
+                                    link.hidden = !value || !settings?.openPagePath;
+                                    (this as PluginSettingTab & { refreshDomState?: () => void }).refreshDomState?.();
+                                    await this.plugin.saveSettings();
+                                }));
+                        },
+                    },
+                    {
+                        type: 'page',
+                        name: 'Edit dictionary entries',
+                        visible: () => this.plugin.settings.isCustomDictionaryEnabled && !(
+                            this.app as App & { setting?: { openPagePath?: unknown } }
+                        ).setting?.openPagePath,
+                        page: () => {
+                            const SettingPage = (Obsidian as typeof Obsidian & {
+                                SettingPage: new () => { title: string; containerEl: HTMLElement; display(): void };
+                            }).SettingPage;
+                            const plugin = this.plugin;
+                            return new (class extends SettingPage {
+                                constructor() {
+                                    super();
+                                    this.title = 'Custom dictionary';
+                                }
+
+                                display(): void {
+                                    this.containerEl.empty();
+                                    this.containerEl.addClass('supernote-settings-custom-dictionary');
+                                    createDictionaryTableUI(this.containerEl, plugin);
+                                }
+                            })();
                         },
                     },
                 ],

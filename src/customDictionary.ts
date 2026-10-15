@@ -102,7 +102,7 @@ function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionar
 }
 
 // Create the UI for the dictionary table
-function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlugin) {
+export function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlugin) {
 	const CONTAINER_CLASSNAME = 'supernote-settings-custom-dictionary-entries';
 
 	// Remove existing dictionary entries to prepare for re-render
