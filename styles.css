@@ -10,6 +10,31 @@
     display: none;
 }
 
+.modal.supernote-cloud-sign-in-modal {
+    width: min(440px, calc(100vw - 32px));
+}
+
+.supernote-cloud-sign-in-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.supernote-cloud-sign-in-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.supernote-cloud-sign-in-form input {
+    width: 100%;
+}
+
+.supernote-cloud-sign-in-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
 .theme-dark img[alt*="supernote-invert-dark"] {
     filter: invert(1);
 }

@@ -15,15 +15,18 @@ export class CloudSignInModal extends Modal {
     onOpen(): void {
         this.cancelled = false;
         this.contentEl.empty();
-        this.contentEl.createEl('h2', { text: 'Sign in to Supernote Cloud' });
-        const email = this.contentEl.createEl('input', { type: 'email', attr: { autocomplete: 'username' } });
-        email.setAttribute('aria-label', 'Cloud email');
-        email.addClass('full-width');
-        const password = this.contentEl.createEl('input', { type: 'password', attr: { autocomplete: 'current-password' } });
-        password.setAttribute('aria-label', 'Cloud password');
-        password.addClass('full-width');
-        const submit = this.contentEl.createEl('button', { text: 'Sign in', cls: 'mod-cta' });
-        submit.addEventListener('click', () => {
+        this.modalEl.addClass('supernote-cloud-sign-in-modal');
+        this.contentEl.createEl('h2', { text: 'Sign in to Supernote cloud' });
+        const form = this.contentEl.createEl('form', { cls: 'supernote-cloud-sign-in-form' });
+        form.noValidate = true;
+        const emailLabel = form.createEl('label', { text: 'Email' });
+        const email = emailLabel.createEl('input', { type: 'email', attr: { autocomplete: 'username' } });
+        const passwordLabel = form.createEl('label', { text: 'Password' });
+        const password = passwordLabel.createEl('input', { type: 'password', attr: { autocomplete: 'current-password' } });
+        const actions = form.createDiv({ cls: 'supernote-cloud-sign-in-actions' });
+        const submit = actions.createEl('button', { text: 'Sign in', cls: 'mod-cta', attr: { type: 'submit' } });
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
             if (this.submitting || !email.value.trim() || !password.value) return;
             this.submitting = true;
             submit.disabled = true;
@@ -58,11 +61,14 @@ export class CloudSignInModal extends Modal {
             this.contentEl.empty();
             this.contentEl.createEl('h2', { text: 'Email verification' });
             this.contentEl.createEl('p', { text: 'Enter the code sent to your email.' });
-            const input = this.contentEl.createEl('input', { type: 'text', attr: { autocomplete: 'one-time-code' } });
-            input.setAttribute('aria-label', 'Email verification code');
-            input.addClass('full-width');
-            const button = this.contentEl.createEl('button', { text: 'Verify', cls: 'mod-cta' });
-            button.addEventListener('click', () => {
+            const form = this.contentEl.createEl('form', { cls: 'supernote-cloud-sign-in-form' });
+            form.noValidate = true;
+            const label = form.createEl('label', { text: 'Verification code' });
+            const input = label.createEl('input', { type: 'text', attr: { autocomplete: 'one-time-code' } });
+            const actions = form.createDiv({ cls: 'supernote-cloud-sign-in-actions' });
+            const button = actions.createEl('button', { text: 'Verify', cls: 'mod-cta', attr: { type: 'submit' } });
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
                 if (!input.value.trim()) return;
                 const code = input.value;
                 input.value = '';
