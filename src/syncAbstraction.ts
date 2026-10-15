@@ -83,7 +83,7 @@ export interface SyncCoordinator {
     setAutoSyncEnabled(enabled: boolean): void;
     getAutoSyncMinutes(): number;
     setAutoSyncMinutes(minutes: number): void;
-    pollAutomatic(now?: number): Promise<SyncRunResult | null>;
+    pollAutomatic(now?: number, onUnready?: (engineId: SyncEngineId, reason?: string) => void): Promise<SyncRunResult | null>;
     runActive(trigger: SyncTrigger): Promise<SyncRunResult | null>;
     isRunning(): boolean;
     clearActiveHistory(): Promise<void>;
@@ -158,7 +158,7 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
         this.stateStore.save(this.executionState);
     }
 
-    async pollAutomatic(now = Date.now()): Promise<SyncRunResult | null> {
+    async pollAutomatic(now = Date.now(), onUnready?: (engineId: SyncEngineId, reason?: string) => void): Promise<SyncRunResult | null> {
         const minutes = this.executionState.autoSyncMinutes;
         if (!this.executionState.autoSyncEnabled || !Number.isSafeInteger(minutes) || minutes < 1
             || !Number.isFinite(now) || this.running) return null;
@@ -175,11 +175,15 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
         }
         if (now - previous < minutes * 60_000) return null;
         const engine = this.getActiveEngine();
-        if (!engine.getReadiness().ready) return null;
         this.executionState = { ...this.executionState, lastAutomaticAttemptAt: {
             ...this.executionState.lastAutomaticAttemptAt, [engineId]: new Date(now).toISOString(),
         } };
         this.stateStore.save(this.executionState);
+        const readiness = engine.getReadiness();
+        if (!readiness.ready) {
+            onUnready?.(engineId, readiness.reason);
+            return null;
+        }
         return this.runActive({ kind: 'scheduled' });
     }
 

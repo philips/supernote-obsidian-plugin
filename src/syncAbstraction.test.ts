@@ -130,7 +130,7 @@ describe('SingleEngineSyncCoordinator', () => {
         expect(state.current().lastAutomaticAttemptAt['supernote-cloud']).toBe(new Date(3_600_000).toISOString());
     });
 
-    it('schedules IP too, and skips unready engines without consuming the due attempt', async () => {
+    it('schedules IP too, and paces unready engines at the configured interval', async () => {
         const ip = createEngineHarness('ip-device', false);
         const state = stateStore();
         state.store.save({ ...state.current(), autoSyncEnabled: true, autoSyncMinutes: 1,
@@ -138,11 +138,33 @@ describe('SingleEngineSyncCoordinator', () => {
         const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine }, state.store);
         await coordinator.pollAutomatic(60_000);
         expect(ip.run).not.toHaveBeenCalled();
-        expect(state.current().lastAutomaticAttemptAt['ip-device']).toBe(new Date(0).toISOString());
+        expect(state.current().lastAutomaticAttemptAt['ip-device']).toBe(new Date(60_000).toISOString());
         const readyIp = createEngineHarness('ip-device');
         const restarted = new SingleEngineSyncCoordinator({ 'ip-device': readyIp.syncEngine }, state.store);
         await restarted.pollAutomatic(60_001);
+        expect(readyIp.run).not.toHaveBeenCalled();
+        await restarted.pollAutomatic(120_000);
         expect(readyIp.run).toHaveBeenCalledExactlyOnceWith({ kind: 'scheduled' });
+    });
+
+    it('reports an unready cloud engine only when the automatic interval is due', async () => {
+        const cloud = createEngineHarness('supernote-cloud', false);
+        const state = stateStore('supernote-cloud');
+        state.store.save({ ...state.current(), autoSyncEnabled: true, autoSyncMinutes: 5,
+            lastAutomaticAttemptAt: { 'supernote-cloud': new Date(0).toISOString() } });
+        const coordinator = new SingleEngineSyncCoordinator({ 'supernote-cloud': cloud.syncEngine }, state.store);
+        const onUnready = vi.fn();
+
+        await coordinator.pollAutomatic(60_000, onUnready);
+        expect(onUnready).not.toHaveBeenCalled();
+        await coordinator.pollAutomatic(300_000, onUnready);
+        expect(onUnready).toHaveBeenCalledExactlyOnceWith('supernote-cloud', 'supernote-cloud is not configured');
+        await coordinator.pollAutomatic(360_000, onUnready);
+        expect(onUnready).toHaveBeenCalledTimes(1);
+        await coordinator.pollAutomatic(600_000, onUnready);
+        expect(onUnready).toHaveBeenCalledTimes(2);
+        expect(cloud.run).not.toHaveBeenCalled();
+        expect(state.current().lastAutomaticAttemptAt['supernote-cloud']).toBe(new Date(600_000).toISOString());
     });
 
     it('skips overlapping polls while preserving manual sync', async () => {

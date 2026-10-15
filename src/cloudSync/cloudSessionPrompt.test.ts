@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CloudSignInRequiredError } from './cloudSyncEngine';
-import { CloudSessionNoticeGate, shouldPromptCloudSignIn } from './cloudSessionPrompt';
+import { shouldPromptCloudSignIn } from './cloudSessionPrompt';
 
 vi.mock('obsidian', () => ({ Platform: { isDesktop: true }, Notice: vi.fn(), TFile: class TFile {} }));
 
@@ -12,13 +12,4 @@ describe('Cloud sync session prompting', () => {
         expect(shouldPromptCloudSignIn(new Error('Supernote Cloud request timed out'))).toBe(false);
     });
 
-    it('shows one scheduled notice for each unresolved reason until the session changes', () => {
-        const gate = new CloudSessionNoticeGate();
-        expect(gate.shouldNotify('sign-in')).toBe(true);
-        expect(gate.shouldNotify('sign-in')).toBe(false);
-        expect(gate.shouldNotify('account')).toBe(true);
-        expect(gate.shouldNotify('account')).toBe(false);
-        gate.reset();
-        expect(gate.shouldNotify('sign-in')).toBe(true);
-    });
 });

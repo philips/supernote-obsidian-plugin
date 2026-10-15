@@ -162,11 +162,12 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   SecretStorage. Sign-out invalidates both locally and attempts remote logout
   without relying on it. Existing mirror binding blocks a different account.
 - Manual sync prompts for sign-in; scheduled sync reports sign-in or account
-  binding problems without background authentication and suppresses repeated
-  notices. Account-identity HTTP 401 clears the token; unknown errors do not.
+  binding problems in the main window without background authentication. A
+  notice appears for each due failed attempt, paced by the configured interval.
+  Account-identity HTTP 401 clears the token; unknown errors do not.
 - Added synthetic coverage for session storage, rejected/cancelled sign-in,
   binding, sign-out, 401 retention policy, manual prompt classification, and
-  scheduled notice deduplication. No live login or OTP was attempted.
+  scheduled attempt pacing. No live login or OTP was attempted.
 
 ### Next: Controlled Scheduled Sync Validation
 

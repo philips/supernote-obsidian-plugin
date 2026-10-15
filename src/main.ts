@@ -21,7 +21,7 @@ import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEn
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
 import { CloudSignInModal } from './cloudSync/CloudSignInModal';
-import { CloudSessionNoticeGate, shouldPromptCloudSignIn } from './cloudSync/cloudSessionPrompt';
+import { shouldPromptCloudSignIn } from './cloudSync/cloudSessionPrompt';
 import { signOutCloud } from './cloudSync/cloudSessionActions';
 import { CloudSessionStorage } from './cloudSync/cloudSessionStorage';
 import { CloudSignInRequiredError, CloudSyncEngine } from './cloudSync/cloudSyncEngine';
@@ -1144,7 +1144,6 @@ export default class SupernotePlugin extends Plugin {
 	vaultWriter!: VaultWriter;
 	private syncCoordinator!: SyncCoordinator;
 	private noteViewerRegistered = false;
-	private readonly cloudSyncNotices = new CloudSessionNoticeGate();
 	private cloudSignInModal: CloudSignInModal | null = null;
 	// Live reference handed to VaultWriter — registering/unregistering here
 	// after construction still takes effect, since both hold the same Set.
@@ -1569,7 +1568,6 @@ export default class SupernotePlugin extends Plugin {
 	openCloudSignIn(onSignedIn: () => void = () => {}): void {
 		if (this.cloudSignInModal) return;
 		this.cloudSignInModal = new CloudSignInModal(this.app, this.settings, () => {
-			this.cloudSyncNotices.reset();
 			onSignedIn();
 		}, () => { this.cloudSignInModal = null; });
 		this.cloudSignInModal.open();
@@ -1578,7 +1576,6 @@ export default class SupernotePlugin extends Plugin {
 	async signOutCloud(): Promise<void> {
 		if (this.syncCoordinator.isRunning()) throw new Error('Wait for the current sync before signing out');
 		await signOutCloud(this.app);
-		this.cloudSyncNotices.reset();
 	}
 
 	private showSyncResult(result: SyncRunResult): void {
@@ -1599,33 +1596,27 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	private async pollAutomaticSync(): Promise<void> {
-		if (this.getActiveSyncEngineId() === 'supernote-cloud' && this.isAutoSyncEnabled()) {
-			if (this.cloudSessionStatus() === 'Sign in required') {
-				if (this.cloudSyncNotices.shouldNotify('sign-in')) {
-					new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
-				}
-			}
-		}
 		try {
-			const result = await this.syncCoordinator.pollAutomatic();
+			const result = await this.syncCoordinator.pollAutomatic(Date.now(), (engineId, reason) => {
+				if (engineId === 'supernote-cloud') {
+					new Notice(reason === 'Sign in to Supernote Cloud in settings to resume sync'
+						? 'Scheduled Cloud sync paused: sign in to Supernote Cloud in settings'
+						: 'Scheduled Cloud sync paused: check Cloud Engine settings');
+				} else {
+					new Notice('Scheduled supernote sync paused: set a Supernote IP address in settings');
+				}
+			});
 			if (result) {
-				this.cloudSyncNotices.reset();
 				this.showSyncResult(result);
 			}
 		} catch (error) {
 			if (error instanceof CloudSignInRequiredError) {
-				if (this.cloudSyncNotices.shouldNotify('sign-in')) {
-					new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
-				}
+				new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
 			} else if (this.getActiveSyncEngineId() === 'supernote-cloud' && error instanceof Error
 				&& (error.message.includes('account') || error.message.includes('binding'))) {
-				if (this.cloudSyncNotices.shouldNotify('account')) {
-					new Notice('Scheduled Cloud sync blocked: account identity or mirror binding does not match');
-				}
+				new Notice('Scheduled Cloud sync blocked: account identity or mirror binding does not match');
 			} else if (this.getActiveSyncEngineId() === 'supernote-cloud') {
-				if (this.cloudSyncNotices.shouldNotify('failure')) {
-					new Notice('Scheduled Cloud sync failed; check your connection or session in Cloud Engine settings');
-				}
+				new Notice('Scheduled Cloud sync failed; check your connection or session in Cloud Engine settings');
 			} else {
 				new Notice('Scheduled supernote sync failed; check the active engine and try syncing manually');
 			}
