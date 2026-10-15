@@ -53,6 +53,7 @@ export interface SyncEngine {
 export interface SyncExecutionState {
     version: 1;
     activeSyncEngine: SyncEngineId;
+    autoSyncEnabled: boolean;
     autoSyncMinutes: number;
     lastAutomaticAttemptAt: Partial<Record<SyncEngineId, string>>;
     lastRunAt: Partial<Record<SyncEngineId, string>>;
@@ -62,7 +63,8 @@ export interface SyncExecutionState {
 export const DEFAULT_SYNC_EXECUTION_STATE: SyncExecutionState = {
     version: 1,
     activeSyncEngine: 'ip-device',
-    autoSyncMinutes: 0,
+    autoSyncEnabled: false,
+    autoSyncMinutes: 15,
     lastAutomaticAttemptAt: {},
     lastRunAt: {},
     lastRunOutcome: {},
@@ -77,6 +79,11 @@ export interface SyncCoordinator {
     getActiveEngine(): SyncEngine;
     getActiveEngineId(): SyncEngineId;
     setActiveEngine(engineId: SyncEngineId): Promise<void>;
+    isAutoSyncEnabled(): boolean;
+    setAutoSyncEnabled(enabled: boolean): void;
+    getAutoSyncMinutes(): number;
+    setAutoSyncMinutes(minutes: number): void;
+    pollAutomatic(now?: number): Promise<SyncRunResult | null>;
     runActive(trigger: SyncTrigger): Promise<SyncRunResult | null>;
     isRunning(): boolean;
     clearActiveHistory(): Promise<void>;
@@ -116,8 +123,64 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
         if (!this.engines[engineId]) {
             throw new Error(`Unknown sync engine: ${engineId}`);
         }
-        this.executionState = { ...this.executionState, activeSyncEngine: engineId };
+        if (engineId === this.executionState.activeSyncEngine) return;
+        this.executionState = { ...this.executionState, activeSyncEngine: engineId,
+            lastAutomaticAttemptAt: { ...this.executionState.lastAutomaticAttemptAt, [engineId]: new Date().toISOString() } };
         this.stateStore.save(this.executionState);
+    }
+
+    isAutoSyncEnabled(): boolean {
+        return this.executionState.autoSyncEnabled;
+    }
+
+    setAutoSyncEnabled(enabled: boolean): void {
+        if (enabled === this.executionState.autoSyncEnabled) return;
+        this.executionState = { ...this.executionState, autoSyncEnabled: enabled,
+            lastAutomaticAttemptAt: enabled ? {
+                ...this.executionState.lastAutomaticAttemptAt,
+                [this.getActiveEngineId()]: new Date().toISOString(),
+            } : this.executionState.lastAutomaticAttemptAt };
+        this.stateStore.save(this.executionState);
+    }
+
+    getAutoSyncMinutes(): number {
+        return this.executionState.autoSyncMinutes;
+    }
+
+    setAutoSyncMinutes(minutes: number): void {
+        if (!Number.isSafeInteger(minutes) || minutes < 1) throw new Error('Invalid automatic sync interval');
+        const changed = this.executionState.autoSyncMinutes !== minutes && this.executionState.autoSyncEnabled;
+        this.executionState = { ...this.executionState, autoSyncMinutes: minutes,
+            lastAutomaticAttemptAt: changed ? {
+                ...this.executionState.lastAutomaticAttemptAt,
+                [this.getActiveEngineId()]: new Date().toISOString(),
+            } : this.executionState.lastAutomaticAttemptAt };
+        this.stateStore.save(this.executionState);
+    }
+
+    async pollAutomatic(now = Date.now()): Promise<SyncRunResult | null> {
+        const minutes = this.executionState.autoSyncMinutes;
+        if (!this.executionState.autoSyncEnabled || !Number.isSafeInteger(minutes) || minutes < 1
+            || !Number.isFinite(now) || this.running) return null;
+        const engineId = this.getActiveEngineId();
+        const timestamp = this.executionState.lastAutomaticAttemptAt[engineId];
+        const previous = typeof timestamp === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(timestamp)
+            ? Date.parse(timestamp) : NaN;
+        if (!Number.isFinite(previous) || new Date(previous).toISOString() !== timestamp || previous > now) {
+            this.executionState = { ...this.executionState, lastAutomaticAttemptAt: {
+                ...this.executionState.lastAutomaticAttemptAt, [engineId]: new Date(now).toISOString(),
+            } };
+            this.stateStore.save(this.executionState);
+            return null;
+        }
+        if (now - previous < minutes * 60_000) return null;
+        const engine = this.getActiveEngine();
+        if (!engine.getReadiness().ready) return null;
+        this.executionState = { ...this.executionState, lastAutomaticAttemptAt: {
+            ...this.executionState.lastAutomaticAttemptAt, [engineId]: new Date(now).toISOString(),
+        } };
+        this.stateStore.save(this.executionState);
+        return this.runActive({ kind: 'scheduled' });
     }
 
     async runActive(trigger: SyncTrigger): Promise<SyncRunResult | null> {

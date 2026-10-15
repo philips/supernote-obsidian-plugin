@@ -1,27 +1,19 @@
 # Cloud Sync Sprint Hand-Off
 
-## Recommended Next Sprint: Active-Engine Automatic Sync
+## Recommended Next Sprint: Cloud Sign-In and Session UX
 
-1. Add one shared coordinator-owned interval poller that dispatches only the
-   selected engine (IP or Cloud) when enabled. Do not run immediately on startup
-   or in response to sign-in, destination changes, or filter changes; these
-   events must not trigger surprising reconciliation or automatic setup/auth
-   flows. On startup, let the first poll dispatch at most one run when a valid
-   persisted attempt timestamp shows the active engine's interval elapsed while
-   Obsidian was closed; do not run unconditionally or replay multiple missed
-   intervals. Initialize missing/invalid timestamps without a run. Skip
-   overlapping ticks instead of queuing them, and preserve manual sync behavior.
-2. Allow scheduled Cloud runs through the coordinator's existing readiness and
-   overlap gates. Reuse the manual Cloud inventory, account-binding, download,
-   and guarded file/folder Trash behavior without a separate destructive path;
-   keep IP scheduling on this same coordinator-owned poller.
-3. Add focused tests for disabled intervals, active-engine selection (including
-   IP), readiness failures, overlapping triggers, restart catch-up (one run only
-   when due, none for missing/invalid timestamps), and manual/scheduled Cloud
-   parity. Run `npm test`, `npm run build`, `npm run lint`, and
-   `git diff --check`.
-4. Before any live scheduled run, agree on a controlled synthetic fixture scope
-   and required permissions. Do not initiate login/OTP, mutate Cloud contents,
-   or broaden the fixture scope without explicit authorization. Record only
-   non-sensitive validation results in
-   [`cloud-sync-plan.md`](cloud-sync-plan.md).
+1. Add a Cloud Engine settings section with signed-in/signed-out status and Sign
+   in / Sign out controls. Implement the documented credential flow, including
+   conditional email verification, and persist only the validated session token
+   and account identity in device-local SecretStorage.
+2. Handle signed-out, expired, rejected, and account-mismatched sessions for
+   manual and scheduled Cloud sync with an actionable status and sign-in prompt.
+   Avoid uncaught errors, silent failures, repeated scheduled notices, and
+   background login/OTP attempts.
+3. Add synthetic tests for authentication outcomes, cancellation, sign-out,
+   manual/scheduled prompting, deduplication, and secret handling. Any live
+   login/OTP check requires separate explicit authorization.
+4. After this sprint, agree on a controlled synthetic fixture scope and
+   permissions before testing live scheduled Cloud behavior. Do not mutate Cloud
+   contents or broaden the fixture scope without explicit authorization; record
+   only non-sensitive results in [`cloud-sync-plan.md`](cloud-sync-plan.md).

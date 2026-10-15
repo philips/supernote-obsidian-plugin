@@ -1,9 +1,11 @@
 # Cloud Sync Implementation Plan
 
-**Status:** Manual Cloud mirroring, lifecycle notifications, guarded
-remote-deletion cleanup, and empty mirror folder cleanup are implemented;
-controlled folder cleanup validation is complete. Automatic Cloud sync remains
-unimplemented. Updated October 14, 2026.
+**Status:** Manual and scheduled Cloud mirroring, lifecycle notifications,
+guarded remote-deletion cleanup, and empty mirror folder cleanup are
+implemented. Cloud credentials still use a development token-import flow;
+user-facing sign-in/sign-out and sync-triggered sign-in prompts are not
+implemented. Controlled folder cleanup validation is complete; live scheduled
+Cloud validation remains pending. Updated October 15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -33,8 +35,8 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - Implemented guarded byte transfer and vault writes: credential-free Obsidian
   `requestUrl` GET, size and MD5 verification, local-edit checks immediately
   before writes, and no rewrite for identical bytes.
-- Implemented a desktop-only manual Cloud mirror engine. Cloud automatic sync
-  and history reset remain disabled/unimplemented.
+- Implemented a desktop-only Cloud mirror engine for manual and scheduled runs.
+  Cloud history reset remains disabled/unimplemented.
 - Implemented opt-in, redacted protocol-harness modes for account-bound
   inventory and descriptor checks. The harness remains separate from product
   sync and requires explicit consent for login/OTP and other approved probes.
@@ -61,8 +63,9 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 ### Implementation Decisions
 
-- Keep Cloud sync manual and desktop-only until automatic scheduling is
-  explicitly implemented and validated. Only the active engine may run.
+- Keep Cloud sync desktop-only and dispatch only the active engine. Scheduled
+  runs use the same readiness and mirror safeguards as manual runs; live
+  scheduled Cloud validation requires an agreed synthetic fixture scope.
 - Keep all mirror writes non-destructive until the complete-inventory,
   account-binding, canonical-path, shared-manifest, and unchanged-local-hash
   protections are in place.
@@ -76,7 +79,7 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   bodies, or identifying account/file data in logs, fixtures, or reports. Retain
   the harness cache unless separately authorized for cleanup.
 
-## Completed Sprint Checks
+## Completed Sprints
 
 ### Sprint 1: Lifecycle Notifications
 
@@ -129,20 +132,59 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   independently captured Obsidian diagnostic. No additional code change was
   reported as necessary during validation.
 
-## Next Implementation Sprint: Active-Engine Automatic Sync
+### Sprint 5: Active-Engine Automatic Sync
 
-- The shared sync state has an interval setting but no scheduler currently
-  dispatches scheduled runs. Cloud explicitly rejects scheduled triggers.
-- Implement one shared coordinator-owned interval poller for the active engine,
-  whether IP or Cloud. Startup does not unconditionally run sync: the first poll
-  may dispatch one scheduled run when a valid persisted timestamp shows the
-  interval elapsed while Obsidian was closed. Initialize missing/invalid
-  timestamps without running and do not replay multiple missed intervals.
-  Lifecycle and settings changes must not implicitly start reconciliation or
-  automatic Cloud setup/auth flows. Preserve coordinator readiness and overlap
-  checks. Keep Cloud network, account, inventory, and local-deletion safeguards
-  identical to manual runs. Do not enable a live scheduled Cloud run without a
-  controlled validation scope and required access approvals.
+- Added a shared coordinator-owned one-minute poller and an opt-in interval
+  setting (off by default). Valid persisted attempt timestamps allow at most one
+  due catch-up run on restart; missing, malformed, or future timestamps
+  initialize without running. Changing engines or interval choices rebases the
+  active clock rather than dispatching a run.
+- Replaced the fixed interval dropdown with an Automatic sync toggle and a
+  conditional numeric Interval field in minutes. The selected interval is
+  retained when disabled and re-enabling starts a fresh wait. Positive safe
+  integers are accepted without an arbitrary upper limit; values under five
+  minutes display a Cloud throttling advisory because the service limit is
+  unknown. Existing positive saved intervals remain enabled; legacy zero remains
+  off with 15 minutes as the default saved choice.
+- Due polls select only the active engine, skip overlap and unready engines, and
+  record the attempt before dispatch. Cloud scheduled runs reuse the manual
+  account validation, inventory, manifest, download, and guarded Trash path.
+- No live scheduled run was initiated for this sprint. A controlled synthetic
+  fixture scope and access approval are still required before live validation.
+
+## Planned Work
+
+### Sprint 6: Cloud Sign-In and Session UX
+
+- Add a dedicated Cloud Engine settings section with clear signed-in/signed-out
+  status and Sign in / Sign out actions. Replace the development token-import
+  flow as the normal user-facing setup path.
+- Implement the credential sign-in flow described in the external design,
+  including the email verification-code step when required. Keep credentials,
+  OTP values, pre-auth tokens, CSRF state, and intermediate verification keys in
+  memory only; persist only the validated session token and account identity in
+  device-local SecretStorage.
+- Make manual and scheduled Cloud attempts handle signed-out, expired, rejected,
+  or account-mismatched sessions without uncaught errors or silent failure. Show
+  an actionable status message and offer/open Sign in; a scheduled poll must not
+  repeatedly interrupt the user while no valid session is available. Do not
+  silently retry authentication or start login/OTP from a background poll.
+- Cover sign-in success and failure, conditional OTP, cancellation, sign-out,
+  invalid/expired sessions, manual and scheduled prompts, prompt deduplication,
+  and assurance that no sensitive values are logged or persisted outside
+  SecretStorage. Validate with synthetic protocol responses; any live login or
+  OTP validation still requires explicit authorization.
+
+### Next: Controlled Scheduled Sync Validation
+
+- After Sprint 6, agree on a controlled synthetic destination and fixture scope,
+  permissions, and whether an existing authorized Cloud session can be used
+  before enabling a live scheduled Cloud run.
+- Verify a due Cloud tick, unchanged repeat, inactive-engine gate, overlap
+  suppression, and signed-out/expired-session prompting. Confirm file/folder
+  Trash remains guarded and production data untouched.
+- Record only non-sensitive observed results. Distinguish user-reported checks
+  from independently captured diagnostics.
 
 ## Validation Gates
 
@@ -161,6 +203,15 @@ For Sprint 3, focused synthetic tests, `npm test` (423 passing),
 `git diff --check` passed. Sprint 4's controlled-vault checks were subsequently
 reported complete by the user; no new automated gates were run for that
 validation-only sprint.
+
+For Sprint 5 on October 15, 2026, focused coordinator and Cloud-engine tests,
+`npm test` (428 passing), `npm run build`, and `npm run lint` (0 errors, 2
+pre-existing warnings) passed. Live scheduled Cloud behavior was not tested; the
+approved synthetic fixture scope and permissions remain outstanding.
+
+The interval-control follow-up passed `npm test` (430 passing), `npm run build`,
+and `npm run lint` (0 errors, 2 existing warnings). It was not exercised in a
+live scheduled Cloud run.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

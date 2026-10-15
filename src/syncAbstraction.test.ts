@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { App } from 'obsidian';
+import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import {
     formatSyncSummary,
     SingleEngineSyncCoordinator,
@@ -33,7 +35,8 @@ function stateStore(activeSyncEngine: 'ip-device' | 'supernote-cloud' = 'ip-devi
     let state: SyncExecutionState = {
         version: 1,
         activeSyncEngine,
-        autoSyncMinutes: 0,
+        autoSyncEnabled: false,
+        autoSyncMinutes: 15,
         lastAutomaticAttemptAt: {},
         lastRunAt: {},
         lastRunOutcome: {},
@@ -44,6 +47,24 @@ function stateStore(activeSyncEngine: 'ip-device' | 'supernote-cloud' = 'ip-devi
     };
     return { store, current: () => state };
 }
+
+describe('stored automatic sync settings', () => {
+    it('migrates old enabled and disabled intervals without changing the selected engine', () => {
+        let stored: Record<string, unknown> = { version: 1, activeSyncEngine: 'supernote-cloud', autoSyncMinutes: 5 };
+        const app = {
+            loadLocalStorage: () => stored,
+            saveLocalStorage: (_key: string, next: Record<string, unknown>) => { stored = next; },
+        } as unknown as App;
+        const store = new ObsidianSyncExecutionStateStore(app);
+        expect(store.load()).toMatchObject({ activeSyncEngine: 'supernote-cloud', autoSyncEnabled: true, autoSyncMinutes: 5 });
+        stored = { version: 1, activeSyncEngine: 'supernote-cloud', autoSyncMinutes: 0 };
+        expect(store.load()).toMatchObject({ autoSyncEnabled: false, autoSyncMinutes: 15 });
+        stored = { version: 1, activeSyncEngine: 'supernote-cloud', autoSyncEnabled: true, autoSyncMinutes: 'invalid' };
+        expect(store.load()).toMatchObject({ autoSyncEnabled: false, autoSyncMinutes: 15 });
+        store.save({ ...store.load(), autoSyncEnabled: true });
+        expect(stored).toMatchObject({ autoSyncEnabled: true, autoSyncMinutes: 15 });
+    });
+});
 
 describe('Cloud completion summary', () => {
     it('includes every secret-free count even when no files change', () => {
@@ -71,6 +92,117 @@ describe('Cloud completion summary', () => {
 });
 
 describe('SingleEngineSyncCoordinator', () => {
+    it('keeps disabled intervals idle and initializes missing or invalid timestamps without a run', async () => {
+        const ip = createEngineHarness('ip-device');
+        const state = stateStore();
+        const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine }, state.store);
+        await coordinator.pollAutomatic(60_000);
+        expect(ip.run).not.toHaveBeenCalled();
+        state.store.save({ ...state.current(), autoSyncEnabled: true, autoSyncMinutes: 1 });
+        const restarted = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine }, state.store);
+        await restarted.pollAutomatic(60_000);
+        expect(state.current().lastAutomaticAttemptAt['ip-device']).toBe(new Date(60_000).toISOString());
+        await restarted.pollAutomatic(60_001);
+        expect(ip.run).not.toHaveBeenCalled();
+        state.store.save({ ...state.current(), lastAutomaticAttemptAt: { 'ip-device': 'not-a-date' } });
+        const invalidRestart = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine }, state.store);
+        await invalidRestart.pollAutomatic(120_000);
+        expect(ip.run).not.toHaveBeenCalled();
+        state.store.save({ ...state.current(), lastAutomaticAttemptAt: { 'ip-device': new Date(300_000).toISOString() } });
+        const futureRestart = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine }, state.store);
+        await futureRestart.pollAutomatic(180_000);
+        expect(state.current().lastAutomaticAttemptAt['ip-device']).toBe(new Date(180_000).toISOString());
+        expect(ip.run).not.toHaveBeenCalled();
+    });
+
+    it('runs one due catch-up on the active engine and never replays missed intervals', async () => {
+        const ip = createEngineHarness('ip-device');
+        const cloud = createEngineHarness('supernote-cloud');
+        const state = stateStore('supernote-cloud');
+        state.store.save({ ...state.current(), autoSyncEnabled: true, autoSyncMinutes: 5,
+            lastAutomaticAttemptAt: { 'supernote-cloud': new Date(0).toISOString() } });
+        const coordinator = new SingleEngineSyncCoordinator(
+            { 'ip-device': ip.syncEngine, 'supernote-cloud': cloud.syncEngine }, state.store);
+        await coordinator.pollAutomatic(3_600_000);
+        await coordinator.pollAutomatic(3_600_001);
+        expect(cloud.run).toHaveBeenCalledExactlyOnceWith({ kind: 'scheduled' });
+        expect(ip.run).not.toHaveBeenCalled();
+        expect(state.current().lastAutomaticAttemptAt['supernote-cloud']).toBe(new Date(3_600_000).toISOString());
+    });
+
+    it('schedules IP too, and skips unready engines without consuming the due attempt', async () => {
+        const ip = createEngineHarness('ip-device', false);
+        const state = stateStore();
+        state.store.save({ ...state.current(), autoSyncEnabled: true, autoSyncMinutes: 1,
+            lastAutomaticAttemptAt: { 'ip-device': new Date(0).toISOString() } });
+        const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine }, state.store);
+        await coordinator.pollAutomatic(60_000);
+        expect(ip.run).not.toHaveBeenCalled();
+        expect(state.current().lastAutomaticAttemptAt['ip-device']).toBe(new Date(0).toISOString());
+        const readyIp = createEngineHarness('ip-device');
+        const restarted = new SingleEngineSyncCoordinator({ 'ip-device': readyIp.syncEngine }, state.store);
+        await restarted.pollAutomatic(60_001);
+        expect(readyIp.run).toHaveBeenCalledExactlyOnceWith({ kind: 'scheduled' });
+    });
+
+    it('skips overlapping polls while preserving manual sync', async () => {
+        let finishRun: ((value: SyncRunResult) => void) | undefined;
+        const ip = engine('ip-device');
+        const run = vi.fn(() => new Promise<SyncRunResult>((resolve) => { finishRun = resolve; }));
+        ip.run = run;
+        const state = stateStore();
+        state.store.save({ ...state.current(), autoSyncEnabled: true, autoSyncMinutes: 1,
+            lastAutomaticAttemptAt: { 'ip-device': new Date(0).toISOString() } });
+        const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': ip }, state.store);
+        const manual = coordinator.runActive({ kind: 'manual', commandId: 'sync-now' });
+        await expect(coordinator.pollAutomatic(60_000)).resolves.toBeNull();
+        expect(state.current().lastAutomaticAttemptAt['ip-device']).toBe(new Date(0).toISOString());
+        finishRun?.(result('ip-device'));
+        await manual;
+        const scheduled = coordinator.pollAutomatic(60_000);
+        expect(run).toHaveBeenCalledTimes(2);
+        finishRun?.(result('ip-device'));
+        await scheduled;
+    });
+
+    it('rebases the clock on enabling the interval or switching engines', async () => {
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(new Date('2026-10-15T12:00:00.000Z'));
+            const state = stateStore();
+            const coordinator = new SingleEngineSyncCoordinator({
+                'ip-device': engine('ip-device'), 'supernote-cloud': engine('supernote-cloud'),
+            }, state.store);
+            coordinator.setAutoSyncMinutes(5);
+            coordinator.setAutoSyncEnabled(true);
+            await coordinator.setActiveEngine('supernote-cloud');
+            expect(state.current().lastAutomaticAttemptAt).toEqual({
+                'ip-device': '2026-10-15T12:00:00.000Z', 'supernote-cloud': '2026-10-15T12:00:00.000Z',
+            });
+            await coordinator.pollAutomatic(Date.now());
+            expect(state.current().lastAutomaticAttemptAt['supernote-cloud']).toBe('2026-10-15T12:00:00.000Z');
+            coordinator.setAutoSyncEnabled(false);
+            expect(coordinator.getAutoSyncMinutes()).toBe(5);
+            vi.setSystemTime(new Date('2026-10-15T13:00:00.000Z'));
+            await coordinator.pollAutomatic();
+            coordinator.setAutoSyncEnabled(true);
+            expect(state.current().lastAutomaticAttemptAt['supernote-cloud']).toBe('2026-10-15T13:00:00.000Z');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('rejects zero, fractional, and imprecise intervals without changing the saved value', () => {
+        const state = stateStore();
+        const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': engine('ip-device') }, state.store);
+        for (const minutes of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
+            expect(() => coordinator.setAutoSyncMinutes(minutes)).toThrow('Invalid automatic sync interval');
+        }
+        expect(state.current().autoSyncMinutes).toBe(15);
+        coordinator.setAutoSyncMinutes(Number.MAX_SAFE_INTEGER);
+        expect(state.current().autoSyncMinutes).toBe(Number.MAX_SAFE_INTEGER);
+    });
+
     it('runs only the selected engine and persists selection changes', async () => {
         const ip = createEngineHarness('ip-device');
         const cloud = createEngineHarness('supernote-cloud');

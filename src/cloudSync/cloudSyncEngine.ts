@@ -39,8 +39,7 @@ export class CloudSyncEngine implements SyncEngine {
         }
     }
 
-    async run(trigger: SyncTrigger): Promise<SyncRunResult> {
-        if (trigger.kind !== 'manual') throw new Error('Automatic Cloud mirror is not enabled');
+    async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
         const session = new CloudSessionStorage(this.app.secretStorage).load();
         if (!session) throw new Error('Import a Cloud access token first');
         const transport = new NodeCloudProtocolTransport({

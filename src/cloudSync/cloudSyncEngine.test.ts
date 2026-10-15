@@ -62,11 +62,16 @@ beforeEach(() => {
     });
 });
 
-describe('manual Cloud engine', () => {
-    it('refuses scheduled runs without touching the account', async () => {
+describe('Cloud engine', () => {
+    it('uses the same guarded mirror pipeline for manual and scheduled runs', async () => {
         const engine = new CloudSyncEngine(app, settings);
-        await expect(engine.run({ kind: 'scheduled' })).rejects.toThrow('Automatic Cloud mirror');
-        expect(validateCloudProtocolSession).not.toHaveBeenCalled();
+        const manual = await engine.run({ kind: 'manual', commandId: 'sync-now' });
+        const scheduled = await engine.run({ kind: 'scheduled' });
+        expect(scheduled).toEqual(manual);
+        expect(validateCloudProtocolSession).toHaveBeenCalledTimes(2);
+        expect(collectCloudInventory).toHaveBeenCalledTimes(2);
+        expect(runVerifiedCloudMirror).toHaveBeenCalledTimes(2);
+        expect(saveMirrorManifest).toHaveBeenCalledTimes(2);
     });
 
     it('blocks a rejected account before inventory or vault access', async () => {

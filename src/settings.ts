@@ -36,8 +36,17 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
 
 export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
     'ip-device': 'Direct IP connection',
-    'supernote-cloud': 'Supernote Cloud (manual mirror)',
+    'supernote-cloud': 'Supernote Cloud',
 };
+
+function validateSyncMinutes(value: string): string | undefined {
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        return 'Enter a positive whole number of minutes';
+    }
+}
+
+const SYNC_INTERVAL_DESCRIPTION = 'Minutes between automatic runs of the active sync engine.';
+const SYNC_INTERVAL_WARNING = 'Intervals under 5 minutes may risk Cloud throttling; the service limit is unknown.';
 
 // Obsidian's declarative settings API (1.13+): PluginSettingTab.getSettingDefinitions().
 // Not present in the `obsidian` devDependency's types (pinned pre-1.13, see CLAUDE.md on
@@ -72,6 +81,7 @@ interface SettingDefinitionControl {
 }
 interface SettingDefinitionRender {
     name: string;
+    visible?: () => boolean;
     render: (setting: Setting) => void;
 }
 interface SettingDefinitionGroup {
@@ -144,6 +154,39 @@ export class SupernoteSettingTab extends PluginSettingTab {
     constructor(app: App, plugin: SupernotePlugin) {
         super(app, plugin);
         this.plugin = plugin;
+    }
+
+    private renderSyncInterval(setting: Setting): void {
+        setting.setName('Interval').setDesc(SYNC_INTERVAL_DESCRIPTION);
+        const validationEl = setting.descEl.createDiv({
+            cls: 'supernote-sync-interval-validation',
+        });
+        validationEl.hidden = true;
+        const warningEl = setting.descEl.createDiv({
+            cls: 'supernote-sync-interval-warning',
+            text: SYNC_INTERVAL_WARNING,
+        });
+        warningEl.hidden = this.plugin.getAutoSyncMinutes() >= 5;
+        setting
+            .addText((text) => {
+                text.inputEl.type = 'number';
+                text.inputEl.min = '1';
+                text.inputEl.max = String(Number.MAX_SAFE_INTEGER);
+                text.inputEl.step = '1';
+                text.setValue(String(this.plugin.getAutoSyncMinutes())).onChange((value) => {
+                    const error = validateSyncMinutes(value);
+                    if (error) {
+                        validationEl.setText(error);
+                        validationEl.hidden = false;
+                        return;
+                    }
+                    validationEl.empty();
+                    validationEl.hidden = true;
+                    const minutes = Number(value);
+                    this.plugin.setAutoSyncMinutes(minutes);
+                    warningEl.hidden = minutes >= 5;
+                });
+            });
     }
 
     // Declarative settings, so entries appear in Obsidian's settings search on 1.13.0+.
@@ -328,6 +371,22 @@ export class SupernoteSettingTab extends PluginSettingTab {
                                         });
                                 });
                         },
+                    },
+                    {
+                        name: 'Automatic sync',
+                        render: (setting) => {
+                            setting.setDesc('Run the active sync engine on a schedule. Off by default.')
+                                .addToggle((toggle) => toggle.setValue(this.plugin.isAutoSyncEnabled())
+                                    .onChange((enabled) => {
+                                        this.plugin.setAutoSyncEnabled(enabled);
+                                        (this as PluginSettingTab & { update?: () => void }).update?.();
+                                    }));
+                        },
+                    },
+                    {
+                        name: 'Interval',
+                        visible: () => this.plugin.isAutoSyncEnabled(),
+                        render: (setting) => this.renderSyncInterval(setting),
                     },
                 ],
             },
@@ -520,7 +579,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(sectionEl)
             .setName('Sync engine')
-            .setDesc('Choose the manual sync engine. Cloud automatic sync is not enabled yet.')
+            .setDesc('Choose which sync engine is used for manual and scheduled sync.')
             .addDropdown(dropdown => dropdown
                 .addOptions(SYNC_ENGINE_LABELS)
                 .setValue(this.plugin.getActiveSyncEngineId())
@@ -528,6 +587,19 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     await this.plugin.setActiveSyncEngine(value as SyncEngineId);
                 })
             );
+
+        let intervalSetting: Setting;
+        new Setting(sectionEl)
+            .setName('Automatic sync')
+            .setDesc('Run the active sync engine on a schedule. Off by default.')
+            .addToggle(toggle => toggle.setValue(this.plugin.isAutoSyncEnabled())
+                .onChange((enabled) => {
+                    this.plugin.setAutoSyncEnabled(enabled);
+                    intervalSetting.settingEl.hidden = !enabled;
+                }));
+        intervalSetting = new Setting(sectionEl);
+        this.renderSyncInterval(intervalSetting);
+        intervalSetting.settingEl.hidden = !this.plugin.isAutoSyncEnabled();
 
         sectionEl = createSection('IP engine');
 

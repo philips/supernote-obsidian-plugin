@@ -1,3 +1,11 @@
+.supernote-sync-interval-warning {
+    color: var(--text-warning);
+}
+
+.supernote-sync-interval-validation {
+    color: var(--text-error);
+}
+
 .supernote-settings-hidden {
     display: none;
 }

@@ -1498,6 +1498,8 @@ export default class SupernotePlugin extends Plugin {
 			name: 'Import cloud access token',
 			callback: () => new CloudSessionImportModal(this.app).open(),
 		});
+		this.registerInterval(window.setInterval(() => { void this.pollAutomaticSync(); }, 60_000));
+		void this.pollAutomaticSync();
 	}
 
 	getActiveSyncEngineId(): SyncEngineId {
@@ -1506,6 +1508,22 @@ export default class SupernotePlugin extends Plugin {
 
 	async setActiveSyncEngine(engineId: SyncEngineId): Promise<void> {
 		await this.syncCoordinator.setActiveEngine(engineId);
+	}
+
+	getAutoSyncMinutes(): number {
+		return this.syncCoordinator.getAutoSyncMinutes();
+	}
+
+	isAutoSyncEnabled(): boolean {
+		return this.syncCoordinator.isAutoSyncEnabled();
+	}
+
+	setAutoSyncEnabled(enabled: boolean): void {
+		this.syncCoordinator.setAutoSyncEnabled(enabled);
+	}
+
+	setAutoSyncMinutes(minutes: number): void {
+		this.syncCoordinator.setAutoSyncMinutes(minutes);
 	}
 
 	async clearActiveSyncHistory(): Promise<void> {
@@ -1526,6 +1544,15 @@ export default class SupernotePlugin extends Plugin {
 		if (failureCount > 0 && result.engineId === 'supernote-cloud') {
 			const categories = [...new Set(result.issues.filter((issue) => issue.kind === 'failure').map((issue) => issue.message))];
 			new Notice(`Cloud mirror failures: ${categories.join('; ')}`);
+		}
+	}
+
+	private async pollAutomaticSync(): Promise<void> {
+		try {
+			const result = await this.syncCoordinator.pollAutomatic();
+			if (result) this.showSyncResult(result);
+		} catch {
+			new Notice('Scheduled supernote sync failed; check the active engine and try syncing manually');
 		}
 	}
 
