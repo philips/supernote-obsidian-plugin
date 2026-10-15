@@ -199,10 +199,9 @@ export class SupernoteSettingTab extends PluginSettingTab {
             else this.display();
         };
         setting.setName('Cloud session').setDesc(status);
-        if (status === 'Signed in' || status === 'Sign in required') {
+        if (status === 'Sign in required') {
             setting.addButton((button) => button
                 .setButtonText('Sign in')
-                .setDisabled(status === 'Signed in')
                 .onClick(() => this.plugin.openCloudSignIn(refresh)));
         }
         if (status === 'Signed in' || status === 'Cloud session storage is invalid') {

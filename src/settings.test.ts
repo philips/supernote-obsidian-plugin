@@ -63,3 +63,36 @@ describe('note viewer settings', () => {
         expect(warning.hidden).toBe(true);
     });
 });
+
+describe('Cloud session settings', () => {
+    it.each([
+        ['Signed in', ['Sign out']],
+        ['Sign in required', ['Sign in']],
+        ['Cloud session storage is invalid', ['Sign out']],
+        ['SecretStorage is unavailable', []],
+    ])('shows the appropriate actions for %s', (status, expectedButtons) => {
+        const tab = new SupernoteSettingTab({} as never, {
+            cloudSessionStatus: () => status,
+        } as never);
+        const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Supernote cloud');
+        if (!group || !('items' in group)) throw new Error('Supernote cloud group missing');
+        const session = group.items[0];
+        if (!('render' in session) || !session.render) throw new Error('Cloud session renderer missing');
+
+        const buttons: string[] = [];
+        const setting = {
+            setName: vi.fn().mockReturnThis(),
+            setDesc: vi.fn().mockReturnThis(),
+            addButton: vi.fn((configure: (button: { setButtonText: (text: string) => unknown; onClick: () => unknown }) => void) => {
+                const button = {
+                    setButtonText: (text: string) => { buttons.push(text); return button; },
+                    onClick: () => button,
+                };
+                configure(button);
+            }),
+        };
+        session.render(setting as unknown as Setting);
+        expect(setting.setDesc).toHaveBeenCalledWith(status);
+        expect(buttons).toEqual(expectedButtons);
+    });
+});
