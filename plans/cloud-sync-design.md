@@ -520,8 +520,12 @@ compatible error-code evidence.
 - When IP is active, no Cloud control-plane or download request is made.
 - Automatic sync uses the same Cloud behavior only when Cloud is active and the
   shared interval is enabled.
-- No sync begins on plugin startup, vault events, workspace events, sign-in,
-  sign-out, destination changes, or filter changes.
+- Plugin startup does not unconditionally begin a sync. The shared coordinator's
+  first scheduler poll may dispatch at most one scheduled run for the active
+  engine if its valid persisted attempt timestamp shows the configured interval
+  elapsed while Obsidian was closed. Missing or invalid timestamps initialize
+  without a run. No sync begins in response to vault events, workspace events,
+  sign-in, sign-out, destination changes, or filter changes.
 - A second manual or scheduled trigger while any sync is running is skipped; it
   is not queued as another run.
 

@@ -32,15 +32,21 @@ progress and verification.
 
 ### Shared scheduler
 
-- Implement one registered 60-second poll for the selected engine and shared
-  interval setting.
-- Track per-engine automatic-attempt timestamps. Initialize missing/invalid
-  timestamps without an immediate run; record an attempt before dispatch so a
-  failure cannot retry every poll.
+- Implement one registered 60-second poll owned by the shared coordinator. It
+  reads the shared interval setting and dispatches the selected engine (IP or
+  Cloud) through the coordinator; scheduling must not be engine-specific.
+- Startup registers/resumes polling without an unconditional sync. On its first
+  poll, dispatch at most one run if the active engine's valid persisted attempt
+  timestamp shows its interval elapsed while Obsidian was closed. Initialize
+  missing/invalid per-engine timestamps without a run, do not replay multiple
+  missed intervals, and record an attempt before dispatch so a failure cannot
+  retry every poll. This catches up scheduled work without treating plugin load
+  itself as an unconditional sync trigger.
 - Do not overlap or queue runs. Manual runs must not reset automatic cadence.
 - Keep scheduled failures non-blocking and prevent automatic login/modal flows.
-- Test active-engine-only dispatch, cadence, startup initialization, failure
-  behavior, engine switching, and polling while a run is active.
+- Test active-engine-only dispatch, cadence, startup catch-up and timestamp
+  initialization, failure behavior, engine switching, and polling while a run is
+  active, including dispatch to the IP engine.
 
 ### Shared manifest migration and IP compatibility
 

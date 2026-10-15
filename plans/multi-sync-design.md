@@ -526,7 +526,8 @@ cross-engine ownership broker, or continue-after-one-engine-fails policy.
 
 ### Shared scheduler
 
-The plugin owns one scheduler for the active engine.
+The shared coordinator owns one scheduler for the active engine; the plugin
+registers its poll with Obsidian and routes due runs through the coordinator.
 
 - Add a device-local `autoSyncMinutes` setting. `0` disables scheduling.
 - Register one `60,000 ms` poll through `plugin.registerInterval()`.
@@ -534,7 +535,13 @@ The plugin owns one scheduler for the active engine.
   device-local last automatic-attempt timestamp.
 - If due, call the same `coordinator.runActive({ kind: 'scheduled' })` path used
   by the manual command.
-- Do not run an immediate sync during `onload()`.
+- Register/resume polling during `onload()` without unconditionally running a
+  sync. On the first poll, use the active engine's persisted attempt timestamp:
+  if a valid timestamp shows its configured interval elapsed while Obsidian was
+  closed, dispatch one scheduled run through the coordinator. Otherwise, wait
+  until due. This recovers one missed interval without treating plugin load as
+  an independent sync trigger or initiating automatic setup/authentication
+  flows.
 - Persist `lastAutomaticAttemptAt[engineId]` immediately before dispatching a
   scheduled run, including one that later fails, so failures cannot retry every
   minute.
@@ -542,7 +549,8 @@ The plugin owns one scheduler for the active engine.
 - When scheduling is enabled, an engine is selected without a timestamp, or an
   invalid timestamp is loaded, initialize that engine's timestamp to the current
   time without running it. Its first automatic run becomes due after a full
-  interval.
+  interval. Do not replay multiple missed intervals; at most one run is
+  dispatched on startup, and the attempt timestamp is persisted before it.
 - A timer firing during a run skips that poll; it does not queue or overlap a
   second run.
 - Track last automatic-attempt timestamps by engine ID so switching engines does
@@ -917,8 +925,10 @@ and generic command are the product surface.
 
 #### Timers
 
-- One registered `60,000 ms` poll checks the shared interval and active engine.
-- There is no startup sync.
+- One coordinator-owned, registered `60,000 ms` poll checks the shared interval
+  and active engine. On startup, its first poll dispatches at most one run if a
+  valid persisted timestamp shows that engine is overdue; it never runs
+  unconditionally on load.
 - There are no engine-specific scheduler timers.
 
 #### Obsidian hooks

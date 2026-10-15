@@ -133,11 +133,16 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 - The shared sync state has an interval setting but no scheduler currently
   dispatches scheduled runs. Cloud explicitly rejects scheduled triggers.
-- Implement scheduled runs through the shared coordinator for the active engine
-  only, preserving readiness checks and overlap suppression. Keep Cloud network,
-  account, inventory, and local-deletion safeguards identical to manual runs. Do
-  not enable a live scheduled Cloud run without a controlled validation scope
-  and required access approvals.
+- Implement one shared coordinator-owned interval poller for the active engine,
+  whether IP or Cloud. Startup does not unconditionally run sync: the first poll
+  may dispatch one scheduled run when a valid persisted timestamp shows the
+  interval elapsed while Obsidian was closed. Initialize missing/invalid
+  timestamps without running and do not replay multiple missed intervals.
+  Lifecycle and settings changes must not implicitly start reconciliation or
+  automatic Cloud setup/auth flows. Preserve coordinator readiness and overlap
+  checks. Keep Cloud network, account, inventory, and local-deletion safeguards
+  identical to manual runs. Do not enable a live scheduled Cloud run without a
+  controlled validation scope and required access approvals.
 
 ## Validation Gates
 
