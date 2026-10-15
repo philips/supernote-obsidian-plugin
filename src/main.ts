@@ -18,6 +18,7 @@ import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerEleme
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { IpSyncEngine } from './syncEngine';
 import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
+import { reportSyncFailure, reportSyncResult } from './syncReporting';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
 import { CloudSignInModal } from './cloudSync/CloudSignInModal';
@@ -1609,6 +1610,17 @@ export default class SupernotePlugin extends Plugin {
 		}
 	}
 
+	private async reportSyncResult(result: SyncRunResult): Promise<void> {
+		await reportSyncResult(this.app, this.settings.syncFolder, result)
+			.catch((error) => console.error('Failed to write to Supernote sync log:', error));
+		this.showSyncResult(result);
+	}
+
+	private async reportSyncFailure(error: unknown): Promise<void> {
+		await reportSyncFailure(this.app, this.settings.syncFolder, this.getActiveSyncEngineId(), error)
+			.catch((logError) => console.error('Failed to write to Supernote sync log:', logError));
+	}
+
 	private async pollAutomaticSync(): Promise<void> {
 		try {
 			const result = await this.syncCoordinator.pollAutomatic(Date.now(), (engineId, reason) => {
@@ -1621,9 +1633,10 @@ export default class SupernotePlugin extends Plugin {
 				}
 			});
 			if (result) {
-				this.showSyncResult(result);
+				await this.reportSyncResult(result);
 			}
 		} catch (error) {
+			await this.reportSyncFailure(error);
 			if (error instanceof CloudSignInRequiredError) {
 				new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
 			} else if (this.getActiveSyncEngineId() === 'supernote-cloud' && error instanceof Error
@@ -1645,8 +1658,9 @@ export default class SupernotePlugin extends Plugin {
 
 		try {
 			const result = await this.syncCoordinator.runActive({ kind: 'manual', commandId });
-			if (result) this.showSyncResult(result);
+			if (result) await this.reportSyncResult(result);
 		} catch (err) {
+			await this.reportSyncFailure(err);
 			const error = err instanceof Error ? err : new Error(String(err));
 			if (this.getActiveSyncEngineId() === 'ip-device') {
 				new DirectConnectErrorModal(this.app, this.settings, error).open();

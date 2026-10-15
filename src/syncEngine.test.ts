@@ -10,6 +10,8 @@ import type { SupernotePluginSettings } from './settings';
 import { ALL_FILE_EXTENSIONS } from './syncFilters';
 import { ObsidianMirrorManifestStorage } from './cloudSync/obsidianMirrorManifestStorage';
 import { saveMirrorManifest } from './cloudSync/sharedMirrorManifestStore';
+import { reportSyncFailure, reportSyncResult } from './syncReporting';
+import type { SyncRunResult } from './syncAbstraction';
 
 vi.mock('obsidian', () => ({
     // syncEngine only uses TFile at runtime (instanceof checks in
@@ -204,6 +206,66 @@ async function runIpSync(app: App, settings: SupernotePluginSettings) {
 beforeEach(() => {
     vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockReset();
     vi.mocked(fetchFromDevice).mockReset();
+});
+
+describe('shared sync reporting', () => {
+    const result = (engineId: SyncRunResult['engineId'], issues: SyncRunResult['issues'] = []): SyncRunResult => ({
+        engineId, synced: 0, unchanged: 0, excluded: 0, removed: 0, issues,
+    });
+
+    it('creates the IP log on a clean run and appends only once for each reportable run', async () => {
+        const vault = makeVault();
+        const log = `${SYNC_FOLDER}/Sync Log.md`;
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'));
+        expect(vault.readText(log)).toBe('');
+        const append = vi.spyOn(vault.vault, 'append');
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
+            { kind: 'protected', item: 'Mirror/edited.note', message: 'edited' },
+            { kind: 'failure', item: '/failed.note', message: 'timed out' },
+        ]));
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'));
+        expect(append).toHaveBeenCalledTimes(2);
+        expect(vault.readText(log)).toContain('Skipped (edited locally since last sync): `Mirror/edited.note`');
+        expect(vault.readText(log)).toContain('Failed: `/failed.note` — timed out');
+        expect(vault.readText(log)).toContain('Sync failed: connection lost');
+        expect(vault.readText(log).match(/Direct IP connection/g)).toHaveLength(2);
+    });
+
+    it('logs Cloud file paths like IP without persisting raw errors or account secrets', async () => {
+        const vault = makeVault();
+        const protectedPath = `${SYNC_FOLDER}/Note/Temp.jpg`;
+        const failedPath = `${SYNC_FOLDER}/Note/Failed.note`;
+        const secret = 'https://cloud.example/download?token=signed';
+        await reportSyncResult(vault.app, SYNC_FOLDER, {
+            ...result('supernote-cloud', [
+                { kind: 'protected', item: protectedPath, message: 'Vault copy was edited locally' },
+                { kind: 'failure', item: failedPath, message: 'Cloud transfer or vault write failed' },
+                { kind: 'warning', message: 'Cloud inventory changed; deletion skipped' },
+                { kind: 'failure', item: failedPath, message: secret },
+                { kind: 'warning', message: secret },
+            ]), removed: 1,
+        });
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error(secret));
+        const text = vault.readText(`${SYNC_FOLDER}/Sync Log.md`);
+        expect(text).toContain('Supernote Cloud');
+        expect(text).toContain('1 skipped (locally edited), 2 failed, 2 warnings');
+        expect(text).toContain(`Skipped (edited locally since last sync): \`${protectedPath}\``);
+        expect(text).toContain(`Failed: \`${failedPath}\` — Cloud transfer or vault write failed`);
+        expect(text).toContain(`Failed: \`${failedPath}\` — Cloud sync failure`);
+        expect(text).toContain('Warning: Cloud inventory changed; deletion skipped');
+        expect(text).toContain('Warning: Cloud sync warning');
+        expect(text).not.toContain(secret);
+        expect(text.match(/## /g)).toHaveLength(2);
+    });
+
+    it('surfaces log-write failures without altering the underlying sync result', async () => {
+        const vault = makeVault();
+        vault.vault.append = vi.fn().mockRejectedValue(new Error('disk full'));
+        await expect(reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
+            { kind: 'protected', item: 'edited.note', message: 'edited' },
+        ]))).rejects.toThrow('disk full');
+        expect(vault.readText(`${SYNC_FOLDER}/Sync Log.md`)).toBe('');
+    });
 });
 
 // ---------------------------------------------------------------------------

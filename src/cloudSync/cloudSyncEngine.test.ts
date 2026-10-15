@@ -130,4 +130,15 @@ describe('Cloud engine', () => {
         expect(downloadCloudBytes).not.toHaveBeenCalled();
     });
 
+    it('carries protected and failed paths in memory for shared reporting', async () => {
+        vi.mocked(runVerifiedCloudMirror).mockResolvedValue({ synced: 0, unchanged: 0, excluded: 0, removed: 0, removedFolders: 0,
+            protected: ['Mirror/Note/edited.note'], failed: ['Mirror/Note/failed.note'],
+            failureCategories: ['Missing Cloud checksum'], warningCategories: [] });
+        const result = await new CloudSyncEngine(app, settings).run({ kind: 'scheduled' });
+        expect(result.issues).toEqual([
+            { kind: 'protected', item: 'Mirror/Note/edited.note', message: 'Vault copy was edited locally' },
+            { kind: 'failure', item: 'Mirror/Note/failed.note', message: 'Missing Cloud checksum' },
+        ]);
+    });
+
 });

@@ -944,12 +944,16 @@ and generic command are the product surface.
 
 ### Reporting and errors
 
-The coordinator formats the shared completion Notice from `SyncRunResult`.
-Engine-specific durable detail remains separate:
+The plugin formats a shared completion Notice from `SyncRunResult` and reports
+both engines to the append-only `<syncFolder>/Sync Log.md`, labeled by engine.
+Clean IP runs create the log without appending an entry. Both engines log
+protected and failed file paths; Cloud log entries also contain counts and
+allowlisted failure/warning categories, never raw Cloud errors, account data,
+credentials, tokens, or signed URLs. The former proposal for a separate Cloud
+log under `.supernote-sync` is superseded. The shared log and `.supernote-sync`
+are reserved against Cloud writes and cleanup even with a `*` extension
+allowlist.
 
-- IP continues to use `Sync Log.md` and console details.
-- Cloud appends durable run summaries and protected/failure details to
-  `<syncFolder>/.supernote-sync/Sync Log.md`.
 - Manual setup/readiness failures can open the relevant settings or modal.
 - Scheduled failures use non-blocking Notices and durable logs; they never open
   login or direct-connect modals automatically.

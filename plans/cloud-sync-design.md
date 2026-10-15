@@ -149,6 +149,13 @@ pagination, identity stability, transfer-host policy, rate limits, or retries.
 only over HTTPS. Tokens, passwords, verification codes, and full download URLs
 must never be written to plugin logs, notices, diagnostics, or synced settings.
 
+Shared sync reporting writes to `<syncFolder>/Sync Log.md` for both engines.
+Cloud entries persist counts, protected and failed file paths (as IP entries
+do), and allowlisted failure/warning categories. Filenames and vault paths are
+user-owned sync data and may be logged; account data, raw Cloud errors, tokens,
+credentials, and signed URLs must not be logged. This supersedes the separate
+Cloud log location proposed in the multi-sync design.
+
 **Product requirement:** requests belonging to one sign-in attempt share one
 cookie jar and CSRF state. A CSRF refresh must not silently repeat a
 credential-bearing or verification-code request more than once.

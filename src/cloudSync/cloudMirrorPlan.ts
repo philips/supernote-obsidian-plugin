@@ -54,7 +54,8 @@ export function missingManagedCloudPaths(
     return Object.keys(records).filter((path) => {
         if (!path.startsWith(`${root}/`) || present.has(path)) return false;
         const relative = path.slice(root.length);
-        return !relative.startsWith(`/${MIRROR_METADATA_DIRECTORY}/`)
+        return relative.toLowerCase() !== '/sync log.md'
+            && !relative.toLowerCase().startsWith(`/${MIRROR_METADATA_DIRECTORY}/`)
             && matchesAnyPathPattern([relative], pathFilters)
             && matchesFileExtension(relative.split('/').at(-1)!, fileExtensions);
     });
@@ -83,8 +84,11 @@ export function planCloudMirror(
         if (segments[0] !== '' || segments.length < 2 || segments.slice(1).some((segment) => !isSafeSegment(segment))) {
             throw new Error('Unsafe verified Cloud path');
         }
-        if (segments[1] === MIRROR_METADATA_DIRECTORY) {
+        if (segments[1].toLowerCase() === MIRROR_METADATA_DIRECTORY) {
             throw new Error('Cloud path collides with reserved mirror metadata');
+        }
+        if (segments.length === 2 && segments[1].toLowerCase() === 'sync log.md') {
+            throw new Error('Cloud path collides with reserved sync log');
         }
         const vaultPath = `${root}/${segments.slice(1).join('/')}`;
         if (destinations.has(vaultPath)) throw new Error('Cloud inventory contains colliding paths');

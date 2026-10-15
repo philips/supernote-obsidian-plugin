@@ -1,13 +1,13 @@
 # Cloud Sync Implementation Plan
 
 **Status:** Manual and scheduled Cloud mirroring, guarded cleanup, interactive
-Cloud sign-in/sign-out, and session prompts are implemented and synthetically
-tested. The user reports completing live logout/login; scheduled-sync checks,
-including signed-out handling and main-window notices, are user-reported rather
-than independently captured. The read-only username lookup was separately
-validated against the existing session. The explicit Cloud mirror reset workflow
-remains unimplemented and is deferred until after shared sync reporting. Updated
-October 15, 2026.
+Cloud sign-in/sign-out, session prompts, and shared sync reporting are
+implemented and synthetically tested. The user reports completing live
+logout/login; scheduled-sync checks, including signed-out handling and
+main-window notices, are user-reported rather than independently captured. The
+read-only username lookup was separately validated against the existing session.
+The explicit Cloud mirror reset workflow remains unimplemented and is deferred
+until after shared sync reporting. Updated October 15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -89,8 +89,10 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   declarations rather than repeat numeric literals. The required defaults are
   specified in Section 11.1 of the external design.
 - Never persist credentials, tokens, OTP values, signed URLs, raw response
-  bodies, or identifying account/file data in logs, fixtures, or reports. Retain
-  the harness cache unless separately authorized for cleanup.
+  bodies, account data, or raw Cloud errors in logs, fixtures, or reports.
+  Protected and failed file paths may be written to the user-owned sync log, as
+  they are for IP sync. Retain the harness cache unless separately authorized
+  for cleanup.
 
 ## Completed Sprints
 
@@ -186,34 +188,25 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 ## Planned Work
 
-### Next: Shared Sync Protection Reporting and Log
+### Shared Sync Protection Reporting and Log (implemented)
 
-- Use the existing shared `SyncRunResult`/`SyncIssue` contract to carry
-  protected items and sanitized failure categories from both engines to one
-  reporting path. Cloud currently drops protected paths when mapping its mirror
-  result; keep the detail available in memory without automatically persisting
-  it.
-- Move the append-only `Sync Log.md` writer and formatter out of the IP engine
-  into shared reporting infrastructure. Keep the existing log under the shared
-  destination root for IP compatibility, with engine-labeled entries. Preserve
-  the IP behavior of creating the log for a clean run but appending only
-  reportable events, at most once per run. Route manual and scheduled results
-  through the same summary/log path without duplicate IP entries. Keep
-  engine-specific modal and readiness handling separate.
-- Resolve the existing design conflict before persisting Cloud detail: the
-  multi-sync design proposes a Cloud log under `.supernote-sync`, while the
-  Cloud plan forbids identifying file data in logs and reports. Default to
-  secret-free counts and failure categories in the shared log; do not persist
-  Cloud paths, account data, raw errors, signed URLs, or credentials without an
-  explicit privacy decision and corresponding design update. Exclude the log and
-  mirror metadata from cleanup even when `*` allows every extension.
-- Test issue mapping, reporting for both engines and triggers, no duplicate log
-  entries, existing IP clean-run log behavior, log-write failures, and Cloud
-  redaction. Preserve the manifest, account binding, local-edit guards,
-  two-inventory deletion gate, and current behavior of protecting locally edited
-  files.
+- Both engines map protected and failed items into `SyncIssue`. Manual and
+  scheduled results use one reporting path. IP creates the shared log on clean
+  runs, appends at most once per reportable run, and retains its manual error
+  modal. Log-write failures do not mask sync results.
+- `<syncFolder>/Sync Log.md` is shared, append-only, and engine-labeled. Cloud
+  entries persist counts, protected/failed file paths, and allowlisted
+  categories, but not account data, signed URLs, or raw errors. The separate
+  Cloud log proposal was superseded in the design. Cloud planning and deletion
+  exclude the log and `.supernote-sync` even under the `*` extension allowlist.
+- Focused reporting tests and the full suite (453 tests), build, and lint passed
+  on October 15, 2026. The Cloud per-file logging revision also passed the
+  focused and full suites, build, and lint on that date. Lint reported 12
+  warnings and zero errors. The final `git diff --check` remains blocked by one
+  trailing blank line in `src/deviceSync.ts`; no live Cloud session, OTP, or
+  destructive validation was used.
 
-### Following Sprint: Explicit Cloud Mirror Reset
+### Next: Explicit Cloud Mirror Reset
 
 - Implement the separately confirmed destructive account/device-binding reset
   after the shared reporting sprint. Retain its existing scope and safety

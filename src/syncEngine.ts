@@ -9,9 +9,6 @@ import {
     decideWrite,
     buildSyncRecord,
     parsePathFilters,
-    syncLogPath,
-    formatSyncLogEntry,
-    formatSyncFailureLogEntry,
     hashBytes,
 } from './deviceSync';
 import type { SyncEngine, SyncRunResult, SyncTrigger } from './syncAbstraction';
@@ -51,30 +48,6 @@ async function writeBinaryAt(app: App, path: string, buffer: ArrayBuffer): Promi
     }
 }
 
-// Creates "Sync Log.md" (see deviceSync.ts) with just a heading if it
-// doesn't exist yet, otherwise returns the existing file untouched — called
-// unconditionally at the end of every sync run (see runDeviceSync) so the
-// file is discoverable right after the first sync, even a clean one with
-// nothing to actually log.
-async function ensureSyncLogFile(app: App, syncFolder: string): Promise<TFile> {
-    const logPath = syncLogPath(syncFolder);
-    const parentFolder = logPath.includes('/') ? logPath.slice(0, logPath.lastIndexOf('/')) : '';
-    await ensureFolder(app, parentFolder);
-
-    const existing = app.vault.getAbstractFileByPath(logPath);
-    if (existing instanceof TFile) return existing;
-    return app.vault.create(logPath, '');
-}
-
-// Appends one pre-formatted entry to "Sync Log.md". Uses Vault.append rather
-// than read-modify-write so this can't clobber anything a user has since
-// added to the log themselves, and so two sync runs racing can't stomp on
-// each other's entries.
-export async function appendSyncLogEntry(app: App, syncFolder: string, entry: string): Promise<void> {
-    const file = await ensureSyncLogFile(app, syncFolder);
-    await app.vault.append(file, entry);
-}
-
 export interface DeviceSyncResult {
     synced: number;
     unchanged: number;
@@ -112,10 +85,7 @@ export class IpSyncEngine implements SyncEngine {
             }
             result = await runDeviceSync(this.app, this.settings, this.saveSettings);
         } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            await appendSyncLogEntry(this.app, this.settings.syncFolder, formatSyncFailureLogEntry(error.message))
-                .catch((logErr) => console.error('Failed to write to Supernote sync log:', logErr));
-            throw error;
+            throw err instanceof Error ? err : new Error(String(err));
         }
         return {
             engineId: this.id,
@@ -287,16 +257,6 @@ export async function runDeviceSync(
     }
 
     await saveSettings();
-
-    const logEntry = formatSyncLogEntry(result);
-    if (logEntry) {
-        await appendSyncLogEntry(app, settings.syncFolder, logEntry);
-    } else {
-        // Nothing worth logging this run, but still make sure the log file
-        // itself exists — otherwise a run (or several) with nothing to
-        // report leaves no trace that sync ever ran at all.
-        await ensureSyncLogFile(app, settings.syncFolder);
-    }
 
     return result;
 }

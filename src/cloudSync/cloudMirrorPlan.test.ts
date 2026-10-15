@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_FILE_EXTENSION_ALLOWLIST } from '../syncFilters';
+import { DEFAULT_FILE_EXTENSION_ALLOWLIST, parseFileExtensionAllowlist } from '../syncFilters';
 import { CloudInventoryItem } from './cloudInventory';
 import { bindVerifiedCloudPaths, missingManagedCloudPaths, planCloudMirror, VerifiedCloudFile } from './cloudMirrorPlan';
 
@@ -97,5 +97,11 @@ describe('Cloud mirror planning boundary', () => {
             .toThrow('colliding paths');
         expect(() => plan([file('/.supernote-sync/history.note', '3')]))
             .toThrow('reserved mirror metadata');
+        expect(() => planCloudMirror([file('/Sync Log.md', '4')], 'Mirror', {}, {}, [], parseFileExtensionAllowlist('*')))
+            .toThrow('reserved sync log');
+        expect(missingManagedCloudPaths([], 'Mirror', {
+            'Mirror/Sync Log.md': { contentHash: 'hash' },
+            'Mirror/.supernote-sync/history.note': { contentHash: 'hash' },
+        }, [], parseFileExtensionAllowlist('*'))).toEqual([]);
     });
 });
