@@ -12,5 +12,5 @@
 3. Verify that file and folder Trash behavior remains guarded. Do not mutate
    Cloud contents or expand the fixture scope without explicit authorization.
    Record only non-sensitive observations in
-   [`cloud-sync-plan.md`](cloud-sync-plan.md), separating observed behavior
-   from synthetic test results.
+   [`cloud-sync-plan.md`](cloud-sync-plan.md), separating observed behavior from
+   synthetic test results.

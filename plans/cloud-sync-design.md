@@ -489,14 +489,13 @@ compatible error-code evidence.
 
 - The minimum supported Obsidian version was raised to 1.11.5 from 1.8.7 with
   approval on October 13, 2026 and is now 1.13.0 per `manifest.json`.
-  SecretStorage became available to plugins in
-  1.11.4, and desktop 1.11.5 added OS-backed encryption at rest. This avoids
-  storing Cloud tokens in plugin settings or vault files, at the cost of
-  dropping support for older Obsidian installations. The tested Windows desktop
-  executable reports 1.10.6, but the downloaded runtime package on October 13 is
-  `obsidian-1.14.4.asar`; confirm the active runtime has SecretStorage before
-  attempting an import rather than treating the installer version as the running
-  application version.
+  SecretStorage became available to plugins in 1.11.4, and desktop 1.11.5 added
+  OS-backed encryption at rest. This avoids storing Cloud tokens in plugin
+  settings or vault files, at the cost of dropping support for older Obsidian
+  installations. The tested Windows desktop executable reports 1.10.6, but the
+  downloaded runtime package on October 13 is `obsidian-1.14.4.asar`; confirm
+  the active runtime has SecretStorage before attempting an import rather than
+  treating the installer version as the running application version.
 - A session token is device-local and is never added to synced plugin settings.
 - The raw account ID is stored securely with the token only to protect the
   shared mirror from cross-account reconciliation. Synced mirror metadata
@@ -509,8 +508,8 @@ compatible error-code evidence.
   because its meaning is unknown.
 - Signing out removes the local token, retains shared sync history, and prevents
   future Cloud runs until a user signs in.
-- Obsidian's public SecretStorage API exposes `setSecret` and `getSecret`, but no
-  deletion operation. Local sign-out overwrites the token and account ID with
+- Obsidian's public SecretStorage API exposes `setSecret` and `getSecret`, but
+  no deletion operation. Local sign-out overwrites the token and account ID with
   empty values, which the plugin treats as signed out; it cannot remove their
   secret IDs through the public API. Remote logout is best effort after local
   invalidation.

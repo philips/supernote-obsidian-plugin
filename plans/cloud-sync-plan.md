@@ -206,11 +206,12 @@ The interval-control follow-up passed `npm test` (430 passing), `npm run build`,
 and `npm run lint` (0 errors, 2 existing warnings). It was not exercised in a
 live scheduled Cloud run.
 
-Sprint 6 passed focused synthetic tests, `npm test` (439 passing), `npm run
-build`, `npm run lint` (0 errors; warnings include new UI sentence-case and
-settings fallback notices), and `git diff --check` on October 15, 2026.
-The UI was not visually exercised in Obsidian; the repository's headless
-Obsidian scripts target Fedora/RHEL rather than this Windows workspace.
+Sprint 6 passed focused synthetic tests, `npm test` (439 passing),
+`npm run
+build`, `npm run lint` (0 errors; warnings include new UI sentence-case
+and settings fallback notices), and `git diff --check` on October 15, 2026. The
+UI was not visually exercised in Obsidian; the repository's headless Obsidian
+scripts target Fedora/RHEL rather than this Windows workspace.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol
