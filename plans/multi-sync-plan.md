@@ -106,6 +106,36 @@ criteria for both engines and root changes live in
   gating, and failed logging. No live interruption was performed. Final
   verification: `npm test` (514 passing), `npm run build`, `npm run lint` (0
   errors, 14 existing warnings), and `git diff --check`.
+- In the disposable Marie vault, staged a synthetic pending overwrite on a
+  uniquely named test file. The first pre-write restart retained the intent;
+  calling the recovery hook after Obsidian finished loading cleared it. Changed
+  startup recovery reads to use the vault adapter rather than the file index. A
+  second staged after-write/before-record-commit intent then reconciled on
+  normal startup: the latest manifest had no pending intent and recorded the new
+  bytes. Removed the test file and its record under the coordinator lock; all
+  five pre-existing records matched before and after cleanup. Terminating the
+  renderer made the Obsidian app unresponsive, so this did not validate a
+  reliable crash-interruption workflow or live adoption/Trash recovery.
+  Adapter-only startup reads have a regression test for an unindexed file.
+  Verification after the fix: `npm test` (515 passing), `npm run build`,
+  `npm run lint` (0 errors, 14 existing warnings), and `git diff --check`.
+- Exercised recovery attention in Marie without stopping the renderer or
+  starting a Cloud transfer: committed a synthetic pending write for a unique
+  `.txt` path whose actual bytes matched neither expected hash, then invoked the
+  coordinator's manual run. Recovery stopped before the engine ran, wrote the
+  path-specific hash mismatch and next step to `Sync Log.md`, and left the
+  intent pending. Cleared only that intent and deleted its fixture under the
+  coordinator lock. Final live check found no pending intent or test file or
+  record, five original records, an idle ready Cloud engine, and auto-sync still
+  off. The test log entry remains as history, not an active failure. This was
+  not an interruption inside an actual engine operation.
+- Replaced ambiguous-byte and uncertain-Trash advice to "inspect this file" with
+  an actionable backup-first step: move the file outside the sync folder to keep
+  a backup, then run a manual sync. This preserves unexpected local bytes while
+  the missing-path recovery checks a fresh source inventory. The historical
+  Marie log entry retains the older wording. The focused recovery tests (7
+  passing), build, lint (0 errors, 14 existing warnings), and `git diff --check`
+  passed after the change.
 
 ## Outstanding
 
@@ -113,14 +143,16 @@ criteria for both engines and root changes live in
 
 The intent-first per-file executor, coordinator restart reconciliation,
 path-specific attention logging, and history/root-change gates are implemented.
-Live interruption validation still requires a separately approved controlled
-fixture; do not simulate a crash in a user's sync.
+Live adoption and uncertain Trash validation still require controlled
+replaceable fixtures. Do not terminate the Obsidian renderer for testing: it
+made the Marie app unresponsive. Use a controlled fault at the operation
+boundary without killing a renderer or changing a user's real sync.
 
 ### Remaining validation
 
-- Live interrupted-operation recovery remains untested. Do not force an
-  interruption during a user's real sync; a controlled replaceable fixture and
-  separate approval are required for that test.
+- End-to-end live interruptions within real engine operations, adoption, and
+  uncertain Trash remain untested. Use replaceable fixtures and a controlled
+  fault mechanism, not renderer termination or a user's real sync.
 - Live Cloud account-switch validation still needs a consenting volunteer with a
   second account. The Marie checks did not switch accounts.
 - The real-device IP smoke test still needs a dedicated device test directory

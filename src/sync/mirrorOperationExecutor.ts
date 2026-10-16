@@ -40,8 +40,8 @@ export async function recoverMirrorOperation(service: MirrorManifestService, loa
         record = null;
     } else {
         throw new MirrorRecoveryAttentionError(pending.path,
-            pending.kind === 'trash' ? `Trash outcome is uncertain (vault hash ${hash}); inspect this file before retrying`
-                : `vault hash ${hash} does not match the old or new version; inspect this file before retrying`);
+            pending.kind === 'trash' ? `Trash outcome is uncertain (vault hash ${hash}); move this file out of the sync folder to keep a backup, then run a manual sync`
+                : `vault hash ${hash} does not match the old or new version; move this file out of the sync folder to keep a backup, then run a manual sync`);
     }
     const records = { ...loaded.manifest.records };
     if (record) records[pending.path] = record;

@@ -2,6 +2,13 @@ import { App } from 'obsidian';
 import { MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
 import { MirrorManifestSlot, MirrorManifestStorage } from './sharedMirrorManifestStore';
 
+export async function readMirrorRecoveryBytes(app: App, path: string): Promise<Uint8Array | null> {
+    const entry = await app.vault.adapter.stat(path);
+    if (entry === null) return null;
+    if (entry.type !== 'file') throw new Error('Mirror recovery path is not a file');
+    return new Uint8Array(await app.vault.adapter.readBinary(path));
+}
+
 // This adapter owns only the two manifest files. It deliberately does not
 // delete, rename, or overwrite unrelated vault entries in the reserved folder.
 export class ObsidianMirrorManifestStorage implements MirrorManifestStorage {

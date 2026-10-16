@@ -749,15 +749,18 @@ inspect any pending operation under the coordinator lock. If the vault file
 still matches the expected old state, safely abandon the intent and let a fresh
 run decide what to do; if it matches the expected new state, finish the
 corresponding manifest commit. An existing file with unexpected bytes stays
-untouched and blocks further sync until the user restores a known state. Never
-repeat an uncertain Trash. A missing vault file is a warning, not a permanent
-block: on the next manual sync, require a fresh, complete source check (and
-Cloud's matching deletion inventories before treating it as remotely absent). If
-the source file exists, clear the pending intent and download through the normal
-guarded path; if it is confirmed absent, clear the intent and retire its record.
-If source availability cannot be established, retain the intent and report a
-retryable failure. This recovery-only retirement does not change IP's ordinary
-additive policy for device files missing from an unrelated scan.
+untouched and blocks further sync. The user can move it outside the sync folder
+to keep a backup, then run a manual sync; recovery checks a fresh source
+inventory before clearing the intent, and a normal sync may then restore the
+source copy. This does not merge the backed-up edits. Never repeat an uncertain
+Trash. A missing vault file is a warning, not a permanent block: on the next
+manual sync, require a fresh, complete source check (and Cloud's matching
+deletion inventories before treating it as remotely absent). If the source file
+exists, clear the pending intent and download through the normal guarded path;
+if it is confirmed absent, clear the intent and retire its record. If source
+availability cannot be established, retain the intent and report a retryable
+failure. This recovery-only retirement does not change IP's ordinary additive
+policy for device files missing from an unrelated scan.
 
 When recovery needs attention, disable automatic sync persistently so it does
 not keep retrying. Report the affected path, operation, observed state, and a
@@ -769,7 +772,8 @@ refuse to clear a pending intent: it is not an escape hatch for uncertain
 ownership. After recovery clears the intent, it keeps its existing meaning of
 forgetting both engines' file records while preserving vault files and Cloud
 account binding. No separate recheck command or automatic user-file repair is
-needed; the next manual sync rechecks the pending path.
+needed; the next manual sync rechecks the pending path. Startup recovery reads
+through the vault adapter because the file index may not yet contain the path.
 
 ### Shared path and file-type allowlists
 

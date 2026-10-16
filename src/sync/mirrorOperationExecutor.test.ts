@@ -84,14 +84,20 @@ describe('ordinary mirror operation recovery', () => {
         await fixture.service.commit(loaded, { ...loaded.manifest, pendingOperation: pending });
         fixture.files.set(path, new TextEncoder().encode('edited'));
         await expect(recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read))
-            .rejects.toBeInstanceOf(MirrorRecoveryAttentionError);
+            .rejects.toThrow('move this file out of the sync folder to keep a backup, then run a manual sync');
         expect((await fixture.load()).manifest.pendingOperation).toEqual(pending);
+        fixture.files.delete(path);
+        await recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read,
+            async () => 'present');
+        expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
+        expect((await fixture.load()).manifest.records[path]).toBeUndefined();
         const current = await fixture.load();
         await fixture.service.commit(current, { ...current.manifest,
+            records: { [path]: { ...record, contentHash: hashBytes(before) } },
             pendingOperation: { ...pending, kind: 'trash', after: null } });
         fixture.files.set(path, before);
         await expect(recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read))
-            .rejects.toThrow('Trash outcome is uncertain');
+            .rejects.toThrow('move this file out of the sync folder to keep a backup, then run a manual sync');
     });
 
     it('reports attention when a proved state cannot be committed', async () => {

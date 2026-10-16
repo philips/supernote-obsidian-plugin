@@ -19,7 +19,7 @@ import { replaceTextWithCustomDictionary } from './customDictionary';
 import { IpSyncEngine } from './sync/directIP/syncEngine';
 import { ChangeSyncFolderModal } from './sync/ChangeSyncFolderModal';
 import { SyncRootChange } from './sync/changeSyncRoot';
-import { ObsidianMirrorManifestStorage } from './sync/obsidianMirrorManifestStorage';
+import { ObsidianMirrorManifestStorage, readMirrorRecoveryBytes } from './sync/obsidianMirrorManifestStorage';
 import { RootMirrorManifestService } from './sync/sharedMirrorManifestStore';
 import { MirrorRecoveryAttentionError } from './sync/mirrorOperationExecutor';
 import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngine, SyncEngineId, SyncRunResult } from './sync/syncAbstraction';
@@ -1214,10 +1214,7 @@ export default class SupernotePlugin extends Plugin {
 			() => this.syncRootChange.assertReady(),
 			{
 				root: () => this.settings.syncFolder,
-				read: async (path) => {
-					const file = this.app.vault.getAbstractFileByPath(path);
-					return file instanceof TFile ? new Uint8Array(await this.app.vault.readBinary(file)) : null;
-				},
+				read: (path) => readMirrorRecoveryBytes(this.app, path),
 				attention: async (error) => {
 					let logged = false;
 					if (this.settings.syncLogEnabled) {

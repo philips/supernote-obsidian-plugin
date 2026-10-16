@@ -1,6 +1,6 @@
 import { App } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
-import { ObsidianMirrorManifestStorage } from './obsidianMirrorManifestStorage';
+import { ObsidianMirrorManifestStorage, readMirrorRecoveryBytes } from './obsidianMirrorManifestStorage';
 import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
 
 function fakeVault() {
@@ -9,6 +9,7 @@ function fakeVault() {
         stat: vi.fn(async (path: string) => !entries.has(path) ? null
             : { type: entries.get(path) === null ? 'folder' : 'file' }),
         read: vi.fn(async (path: string) => entries.get(path)!),
+        readBinary: vi.fn(async (path: string) => new TextEncoder().encode(entries.get(path)!).buffer),
         mkdir: vi.fn(async (path: string) => { entries.set(path, null); }),
         write: vi.fn(async (path: string, contents: string) => { entries.set(path, contents); }),
     };
@@ -17,6 +18,18 @@ function fakeVault() {
 }
 
 describe('Obsidian mirror manifest storage', () => {
+    it('reads recovery bytes before a file appears in the vault index', async () => {
+        const { app, adapter, entries, vault } = fakeVault();
+        entries.set('Mirror/test.note', 'fixture');
+        expect(new TextDecoder().decode(await readMirrorRecoveryBytes(app, 'Mirror/test.note') ?? undefined))
+            .toBe('fixture');
+        expect(vault.getAbstractFileByPath).not.toHaveBeenCalled();
+        expect(adapter.readBinary).toHaveBeenCalledExactlyOnceWith('Mirror/test.note');
+        expect(await readMirrorRecoveryBytes(app, 'Mirror/missing.note')).toBeNull();
+        entries.set('Mirror/folder', null);
+        await expect(readMirrorRecoveryBytes(app, 'Mirror/folder')).rejects.toThrow('not a file');
+    });
+
     it('creates its reserved folder and alternates the two manifest files', async () => {
         const { app, adapter, vault, entries } = fakeVault();
         const storage = new ObsidianMirrorManifestStorage(app, 'Mirror');
