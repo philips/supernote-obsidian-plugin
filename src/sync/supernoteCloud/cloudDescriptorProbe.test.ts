@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { inspectCloudDescriptorHost, probeCloudDownloadDescriptor, verifyCloudFixtureDownload } from '../../scripts/cloudDescriptorProbe';
+import { inspectCloudDescriptorHost, probeCloudDownloadDescriptor, verifyCloudFixtureDownload } from '../../../scripts/cloudDescriptorProbe';
 import { md5 } from '@noble/hashes/legacy.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { CloudControlPlaneTransport } from './cloudProtocol';

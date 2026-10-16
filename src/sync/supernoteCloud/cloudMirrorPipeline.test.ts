@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { hashBytes } from '../deviceSync';
+import { hashBytes } from '../directIP/deviceSync';
 import { DEFAULT_FILE_EXTENSION_ALLOWLIST } from '../syncFilters';
 import { CloudInventoryItem } from './cloudInventory';
 import { planVerifiedCloudInventory, runVerifiedCloudMirror } from './cloudMirrorPipeline';
-import { SharedMirrorManifest } from './sharedMirrorManifest';
-import { loadMirrorManifest, MirrorManifestSlot, saveMirrorManifest } from './sharedMirrorManifestStore';
+import { SharedMirrorManifest } from '../sharedMirrorManifest';
+import { loadMirrorManifest, MirrorManifestSlot, saveMirrorManifest } from '../sharedMirrorManifestStore';
 
 const md5 = '0123456789abcdef0123456789abcdef';
 

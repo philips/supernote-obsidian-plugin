@@ -8,7 +8,7 @@ import {
     saveCloudProtocolSession,
     savePendingCloudProtocolToken,
     validateCloudProtocolSession,
-} from '../../scripts/cloudProtocolSession';
+} from '../../../scripts/cloudProtocolSession';
 import { CloudControlPlaneTransport } from './cloudProtocol';
 
 const temporaryDirectories: string[] = [];

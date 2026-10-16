@@ -5,7 +5,7 @@
     "types": ["node"]
   },
   "include": [
-    "src/cloudSync/**/*.ts",
+    "src/sync/supernoteCloud/**/*.ts",
     "scripts/cloudProtocolTransport.ts",
     "scripts/cloudProtocolSession.ts",
     "scripts/secretPrompt.ts",

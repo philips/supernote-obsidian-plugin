@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSyncRecord } from '../deviceSync';
+import { buildSyncRecord } from './directIP/deviceSync';
 import { MirrorManifestSlot, loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
 
 function storage() {

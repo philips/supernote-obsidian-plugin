@@ -1,6 +1,6 @@
 import { matchesAnyPathPattern, matchesFileExtension, FileExtensionAllowlist } from '../syncFilters';
 import { CloudInventoryItem, CloudInventoryPass } from './cloudInventory';
-import { MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
+import { MIRROR_METADATA_DIRECTORY } from '../sharedMirrorManifest';
 
 // A Cloud listing's parent-derived path is intentionally insufficient here;
 // this value must come from the separately verified path-query boundary.

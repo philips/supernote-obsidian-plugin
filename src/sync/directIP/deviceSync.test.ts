@@ -6,7 +6,7 @@ import {
     parseFileExtensionAllowlist,
     parsePathFilters,
     validateFileExtensionAllowlist,
-} from './syncFilters';
+} from '../syncFilters';
 import {
     matchesAnyPattern,
     classifyChange,
@@ -19,8 +19,8 @@ import {
     SyncManifest,
     SyncedNoteRecord,
 } from './deviceSync';
-import { syncLogPath, formatSyncLogEntry, formatSyncFailureLogEntry } from './syncReporting';
-import type { SyncRunResult } from './syncAbstraction';
+import { syncLogPath, formatSyncLogEntry, formatSyncFailureLogEntry } from '../syncReporting';
+import type { SyncRunResult } from '../syncAbstraction';
 
 function bytesOf(text: string): Uint8Array {
     return new TextEncoder().encode(text);

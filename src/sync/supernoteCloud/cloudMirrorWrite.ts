@@ -1,6 +1,6 @@
-import { hashBytes } from '../deviceSync';
+import { hashBytes } from '../directIP/deviceSync';
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
-import { requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
+import { requireBoundCloudAccount, SharedMirrorManifest } from '../sharedMirrorManifest';
 
 // These ports keep protocol/download and Obsidian details out of the safety
 // decision, allowing byte integrity and overwrite behavior to be tested with

@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
-import { SyncManifest } from '../deviceSync';
-import { CloudMirrorRecord } from './cloudMirrorPlan';
+import { SyncManifest } from './directIP/deviceSync';
+import { CloudMirrorRecord } from './supernoteCloud/cloudMirrorPlan';
 
 // Kept below the shared sync root so IP and Cloud reserve the same location;
 // remote paths using this first segment must not shadow plugin metadata.

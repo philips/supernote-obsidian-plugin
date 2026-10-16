@@ -1,5 +1,5 @@
 import { App, TFile } from 'obsidian';
-import { SupernotePluginSettings } from './settings';
+import { SupernotePluginSettings } from '../../settings';
 import { scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
@@ -11,10 +11,10 @@ import {
     parsePathFilters,
     hashBytes,
 } from './deviceSync';
-import type { SyncEngine, SyncRunResult, SyncTrigger } from './syncAbstraction';
-import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from './syncFilters';
-import { ObsidianMirrorManifestStorage } from './cloudSync/obsidianMirrorManifestStorage';
-import { loadMirrorManifest } from './cloudSync/sharedMirrorManifestStore';
+import type { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
+import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
+import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
+import { loadMirrorManifest } from '../sharedMirrorManifestStore';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
 // concurrent creator (createFolder throwing because another call already

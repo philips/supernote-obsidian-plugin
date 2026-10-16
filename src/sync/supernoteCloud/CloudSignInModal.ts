@@ -1,5 +1,5 @@
 import { App, Modal, Notice } from 'obsidian';
-import type { SupernotePluginSettings } from '../settings';
+import type { SupernotePluginSettings } from '../../settings';
 import { signInCloud } from './cloudSessionActions';
 
 export class CloudSignInModal extends Modal {

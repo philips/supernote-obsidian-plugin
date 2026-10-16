@@ -1,10 +1,10 @@
-import { hashBytes, SyncManifest } from '../deviceSync';
+import { hashBytes, SyncManifest } from '../directIP/deviceSync';
 import { FileExtensionAllowlist, matchesAnyPathPattern, matchesFileExtension } from '../syncFilters';
 import { cloudInventoryFingerprint, CloudInventoryPass } from './cloudInventory';
 import { bindVerifiedCloudPaths, CloudMirrorPlan, missingManagedCloudPaths, planCloudMirror } from './cloudMirrorPlan';
 import { applyCloudDownload, CloudMirrorTransfer, CloudMirrorVault } from './cloudMirrorWrite';
-import { cloudPlanningRecords, MIRROR_METADATA_DIRECTORY, requireBoundCloudAccount, SharedMirrorManifest } from './sharedMirrorManifest';
-import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from './sharedMirrorManifestStore';
+import { cloudPlanningRecords, MIRROR_METADATA_DIRECTORY, requireBoundCloudAccount, SharedMirrorManifest } from '../sharedMirrorManifest';
+import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from '../sharedMirrorManifestStore';
 
 // Keep inventory binding and vault inspection separate from network transport.
 // Only planned in-scope destinations are read; canonical-path or account

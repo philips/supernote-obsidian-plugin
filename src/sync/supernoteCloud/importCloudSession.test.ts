@@ -1,13 +1,13 @@
 import type { App } from 'obsidian';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { importCloudSession } from './importCloudSession';
-import { validateCloudProtocolSession } from '../../scripts/cloudProtocolSession';
+import { validateCloudProtocolSession } from '../../../scripts/cloudProtocolSession';
 
 vi.mock('obsidian', () => ({ requestUrl: vi.fn() }));
-vi.mock('../../scripts/cloudProtocolSession', () => ({
+vi.mock('../../../scripts/cloudProtocolSession', () => ({
     validateCloudProtocolSession: vi.fn(),
 }));
-vi.mock('../../scripts/cloudProtocolTransport', () => ({
+vi.mock('../../../scripts/cloudProtocolTransport', () => ({
     CloudRequestBudget: class CloudRequestBudget {}, NodeCloudProtocolTransport: class NodeCloudProtocolTransport {},
 }));
 

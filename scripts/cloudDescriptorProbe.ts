@@ -1,9 +1,9 @@
 import { md5 } from '@noble/hashes/legacy.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import type { RequestUrlParam, RequestUrlResponse } from 'obsidian';
-import { CloudControlPlaneTransport, CloudProtocolError, CloudRawResponse, parseCloudObject, requireCloudSuccess, requireNonEmptyString } from '../src/cloudSync/cloudProtocol';
-import { CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/cloudSync/cloudPolicy';
-import { downloadCloudBytes } from '../src/cloudSync/cloudDownload';
+import { CloudControlPlaneTransport, CloudProtocolError, CloudRawResponse, parseCloudObject, requireCloudSuccess, requireNonEmptyString } from '../src/sync/supernoteCloud/cloudProtocol';
+import { CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/sync/supernoteCloud/cloudPolicy';
+import { downloadCloudBytes } from '../src/sync/supernoteCloud/cloudDownload';
 
 export async function probeCloudDownloadDescriptor(
     transport: CloudControlPlaneTransport,

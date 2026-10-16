@@ -201,10 +201,12 @@ Already fixed rather than argued with:
     zoom, text layer, find-in-note), PDF/image export.
   - `settings.ts` / `customDictionary.ts` — settings tab and the custom
     dictionary sub-UI.
-  - `FileListModal.ts` / `ImportTodayModal.ts` — device browse/upload/ download
-    and today's-notes import modals.
-  - `deviceFetch.ts` / `deviceDate.ts` — device HTTP client and date parsing,
-    each with a co-located `*.test.ts`.
+  - `sync/` — engine-neutral coordinator, execution state, filters, reporting,
+    and shared mirror manifest storage, with co-located tests.
+  - `sync/directIP/` — direct-IP sync engine, device browse/import modals, HTTP
+    client, path and date parsing, with co-located tests.
+  - `sync/supernoteCloud/` — Supernote Cloud sync engine, protocol, and session
+    UI, with co-located tests.
   - `rasterize.worker.ts` / `pdfBuild.worker.ts` — two separate Web Workers
     (bundled via `esbuild-plugin-inline-worker`), split so the standalone web
     component's bundle (`src/webcomponent/`) doesn't pull in pdf-lib just for

@@ -1,4 +1,4 @@
-import { hashBytes, SyncManifest } from '../deviceSync';
+import { hashBytes, SyncManifest } from './directIP/deviceSync';
 import { fromIpSyncManifest, MIRROR_METADATA_DIRECTORY, SharedMirrorManifest } from './sharedMirrorManifest';
 
 export type MirrorManifestSlot = 'primary' | 'backup';

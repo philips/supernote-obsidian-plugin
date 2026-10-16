@@ -2,8 +2,8 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { env as processEnvironment } from 'node:process';
-import { queryCloudAccountIdentity } from '../src/cloudSync/cloudAuth';
-import { CloudControlPlaneTransport, CloudProtocolError } from '../src/cloudSync/cloudProtocol';
+import { queryCloudAccountIdentity } from '../src/sync/supernoteCloud/cloudAuth';
+import { CloudControlPlaneTransport, CloudProtocolError } from '../src/sync/supernoteCloud/cloudProtocol';
 
 const SESSION_VERSION = 1;
 const SESSION_DIRECTORY = 'obsidian-supernote-companion';

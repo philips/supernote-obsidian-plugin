@@ -1,7 +1,7 @@
 import type { Setting } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, SupernoteSettingTab } from './settings';
-import { trimSyncLog } from './syncReporting';
+import { trimSyncLog } from './sync/syncReporting';
 
 vi.mock('obsidian', () => ({ PluginSettingTab: class PluginSettingTab {
     app: unknown;
@@ -9,7 +9,7 @@ vi.mock('obsidian', () => ({ PluginSettingTab: class PluginSettingTab {
 }, Setting: class Setting {} }));
 vi.mock('./main', () => ({ default: class SupernotePlugin {} }));
 vi.mock('./customDictionary', () => ({ CUSTOM_DICTIONARY_DEFAULT_SETTINGS: {} }));
-vi.mock('./syncReporting', () => ({ trimSyncLog: vi.fn(async () => {}) }));
+vi.mock('./sync/syncReporting', () => ({ trimSyncLog: vi.fn(async () => {}) }));
 
 const engines = [
     { id: 'ip-device', name: 'Direct IP' },

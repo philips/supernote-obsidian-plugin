@@ -1,11 +1,11 @@
 import { App, Notice, Platform } from 'obsidian';
 import { md5 } from '@noble/hashes/legacy.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { validateCloudProtocolSession } from '../../scripts/cloudProtocolSession';
-import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
+import { validateCloudProtocolSession } from '../../../scripts/cloudProtocolSession';
+import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../../scripts/cloudProtocolTransport';
 import { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
 import { parsePathFilters, parseFileExtensionAllowlist } from '../syncFilters';
-import { SupernotePluginSettings } from '../settings';
+import { SupernotePluginSettings } from '../../settings';
 import { downloadCloudBytes } from './cloudDownload';
 import { collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
@@ -15,9 +15,9 @@ import { CLOUD_DELETION_STABILITY_DELAY_MS, CLOUD_MAX_DESKTOP_FILE_BYTES, CLOUD_
 import { CloudSessionStorage } from './cloudSessionStorage';
 import { ObsidianCloudMirrorVault } from './obsidianCloudMirrorVault';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';
-import { ObsidianMirrorManifestStorage } from './obsidianMirrorManifestStorage';
-import { cloudAccountFingerprint, requireBoundCloudAccount } from './sharedMirrorManifest';
-import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
+import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
+import { cloudAccountFingerprint, requireBoundCloudAccount } from '../sharedMirrorManifest';
+import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
 
 export class CloudSignInRequiredError extends Error {
     constructor() { super('Sign in to Supernote Cloud in settings to resume sync'); }

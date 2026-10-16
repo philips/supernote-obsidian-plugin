@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { hashBytes } from '../deviceSync';
+import { hashBytes } from '../directIP/deviceSync';
 import { CLOUD_MAX_MOBILE_FILE_BYTES } from './cloudPolicy';
 import { CloudInventoryItem } from './cloudInventory';
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
 import { applyCloudDownload } from './cloudMirrorWrite';
-import { SharedMirrorManifest } from './sharedMirrorManifest';
+import { SharedMirrorManifest } from '../sharedMirrorManifest';
 
 const content = new Uint8Array([0, 255, 1]);
 const md5 = '0123456789abcdef0123456789abcdef';

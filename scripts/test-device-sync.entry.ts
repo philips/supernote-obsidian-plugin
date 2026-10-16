@@ -12,8 +12,8 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { App, TFile } from 'obsidian';
 import { fetchSupernoteDirectory, scanDeviceSupernoteTree } from '../src/FileListModal';
-import { buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS, fetchFromDevice } from '../src/deviceFetch';
-import { runDeviceSync } from '../src/syncEngine';
+import { buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS, fetchFromDevice } from '../src/sync/directIP/deviceFetch';
+import { runDeviceSync } from '../src/sync/directIP/syncEngine';
 import type { SupernotePluginSettings } from '../src/settings';
 
 const ip = process.env.SUPERNOTE_DEVICE_IP;
@@ -105,7 +105,7 @@ for (const filename of namingCases) {
     }
 
     const { body, contentType } = buildMultipartBody('file', filename, 'application/octet-stream', fixtureBuffer);
-    console.log(`Uploading ${filename} (${fixture.length} bytes) through src/deviceFetch.ts…`);
+    console.log(`Uploading ${filename} (${fixture.length} bytes) through src/sync/directIP/deviceFetch.ts…`);
     const uploadResponse = await fetchFromDevice(ip, testDirectory, `Failed to upload ${filename}`, {
         method: 'POST',
         body,
@@ -165,7 +165,7 @@ const settings = {
     noteSyncState: {},
 } as SupernotePluginSettings;
 let saves = 0;
-console.log('Running src/syncEngine.ts against the device…');
+console.log('Running src/sync/directIP/syncEngine.ts against the device…');
 const result = await runDeviceSync(app, settings, async () => { saves++; });
 if (result.synced !== deviceFiles.length || result.failed.length !== 0 || saves !== 1) {
     throw new Error(`Unexpected sync result: ${JSON.stringify({ result, saves })}`);

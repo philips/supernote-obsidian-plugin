@@ -5,14 +5,14 @@ import {
     CloudProtocolError,
     CloudRawResponse,
     parseCloudObject,
-} from '../src/cloudSync/cloudProtocol';
-import { CloudFieldEvidence, CloudObservedJsonType, CloudRequestEvidence } from '../src/cloudSync/cloudProtocolEvidence';
+} from '../src/sync/supernoteCloud/cloudProtocol';
+import { CloudFieldEvidence, CloudObservedJsonType, CloudRequestEvidence } from '../src/sync/supernoteCloud/cloudProtocolEvidence';
 import {
     CLOUD_AUTH_IDENTITY_REQUEST_LIMIT,
     CLOUD_CONTROL_PLANE_TIMEOUT_MS,
     CLOUD_PRODUCTION_ORIGIN,
     CLOUD_ROUTES,
-} from '../src/cloudSync/cloudPolicy';
+} from '../src/sync/supernoteCloud/cloudPolicy';
 
 const AUTH_IDENTITY_ROUTES = new Set<string>([
     CLOUD_ROUTES.csrf,

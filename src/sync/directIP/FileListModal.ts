@@ -1,15 +1,15 @@
 import { App, SuggestModal, Notice, MarkdownView, TFile } from 'obsidian';
-import SupernotePlugin from './main';
-import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from './settings';
+import SupernotePlugin from '../../main';
+import { SupernotePluginSettings, IP_VALIDATION_PATTERN, FileBrowserSortOrder } from '../../settings';
 import { parseDeviceDate } from './deviceDate';
 import { fetchFromDevice, buildMultipartBody, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { decodeDeviceFormPathSegment, decodeDevicePathSegment, normalizeDeviceFileName } from './devicePath';
-import { ErrorModal } from './ErrorModal';
+import { ErrorModal } from '../../ErrorModal';
 import {
     DEFAULT_FILE_EXTENSION_ALLOWLIST,
     FileExtensionAllowlist,
     matchesFileExtension,
-} from './syncFilters';
+} from '../syncFilters';
 
 export interface SupernoteFile {
     name: string;

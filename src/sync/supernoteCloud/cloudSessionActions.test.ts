@@ -1,17 +1,17 @@
 import type { App } from 'obsidian';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SupernotePluginSettings } from '../settings';
+import type { SupernotePluginSettings } from '../../settings';
 import { authenticateCloudPassword } from './cloudAuth';
 import { CLOUD_ROUTES } from './cloudPolicy';
 import { signInCloud, signOutCloud } from './cloudSessionActions';
 import { CloudSessionStorage } from './cloudSessionStorage';
-import { cloudAccountFingerprint } from './sharedMirrorManifest';
-import { loadMirrorManifest } from './sharedMirrorManifestStore';
+import { cloudAccountFingerprint } from '../sharedMirrorManifest';
+import { loadMirrorManifest } from '../sharedMirrorManifestStore';
 import { changeCloudMirrorAccount } from './cloudAccountChange';
 
 vi.mock('obsidian', () => ({ TFile: class TFile {} }));
 vi.mock('./cloudAuth', () => ({ authenticateCloudPassword: vi.fn() }));
-vi.mock('./sharedMirrorManifestStore', () => ({ loadMirrorManifest: vi.fn() }));
+vi.mock('../sharedMirrorManifestStore', () => ({ loadMirrorManifest: vi.fn() }));
 vi.mock('./cloudAccountChange', () => ({ changeCloudMirrorAccount: vi.fn() }));
 
 const secrets = new Map<string, string>();

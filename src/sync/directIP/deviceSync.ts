@@ -4,8 +4,8 @@ import {
     FileExtensionAllowlist,
     matchesAnyPathPattern,
     matchesFileExtension,
-} from './syncFilters';
-export { globToRegExp, parsePathFilters } from './syncFilters';
+} from '../syncFilters';
+export { globToRegExp, parsePathFilters } from '../syncFilters';
 
 // Pure planning/decision logic for mirroring .note/.spd files from a
 // Supernote device (over "Browse and Access") into the vault, unmodified —

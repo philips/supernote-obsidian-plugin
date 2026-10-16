@@ -2,8 +2,8 @@ import process from 'node:process';
 import { inspectCloudDescriptorHost, probeCloudDownloadDescriptor, verifyCloudFixtureDownload } from './cloudDescriptorProbe';
 import { loadCloudProtocolSession, validateCloudProtocolSession } from './cloudProtocolSession';
 import { CloudRequestBudget, NodeCloudProtocolTransport } from './cloudProtocolTransport';
-import { CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/cloudSync/cloudPolicy';
-import { CloudProtocolError } from '../src/cloudSync/cloudProtocol';
+import { CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/sync/supernoteCloud/cloudPolicy';
+import { CloudProtocolError } from '../src/sync/supernoteCloud/cloudProtocol';
 
 // No mode logs in or persists responses; only fixture-transfer fetches bytes.
 const hostReview = process.argv[2] === 'host-review';

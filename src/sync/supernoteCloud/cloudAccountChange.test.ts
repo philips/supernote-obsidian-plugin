@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { hashBytes } from '../deviceSync';
+import { hashBytes } from '../directIP/deviceSync';
 import { parseFileExtensionAllowlist } from '../syncFilters';
 import { changeCloudMirrorAccount } from './cloudAccountChange';
 import { CloudMirrorVault } from './cloudMirrorWrite';
-import { SharedMirrorManifest } from './sharedMirrorManifest';
-import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from './sharedMirrorManifestStore';
+import { SharedMirrorManifest } from '../sharedMirrorManifest';
+import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from '../sharedMirrorManifestStore';
 
 const bytes = new TextEncoder().encode('original');
 const edited = new TextEncoder().encode('edited');

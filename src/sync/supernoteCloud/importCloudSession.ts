@@ -1,6 +1,6 @@
 import type { App } from 'obsidian';
-import { validateCloudProtocolSession } from '../../scripts/cloudProtocolSession';
-import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
+import { validateCloudProtocolSession } from '../../../scripts/cloudProtocolSession';
+import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../../scripts/cloudProtocolTransport';
 import { CLOUD_PRODUCTION_ORIGIN } from './cloudPolicy';
 import { CloudSessionStorage } from './cloudSessionStorage';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';

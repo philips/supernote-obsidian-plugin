@@ -6,12 +6,12 @@ import { scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice } from './deviceFetch';
 import { buildSyncRecord, hashBytes } from './deviceSync';
 import type { DeviceNoteListing, SyncManifest, SyncedNoteRecord } from './deviceSync';
-import type { SupernotePluginSettings } from './settings';
-import { ALL_FILE_EXTENSIONS } from './syncFilters';
-import { ObsidianMirrorManifestStorage } from './cloudSync/obsidianMirrorManifestStorage';
-import { saveMirrorManifest } from './cloudSync/sharedMirrorManifestStore';
-import { reportSyncFailure, reportSyncResult, retainSyncLogEntries, trimSyncLog } from './syncReporting';
-import type { SyncRunResult } from './syncAbstraction';
+import type { SupernotePluginSettings } from '../../settings';
+import { ALL_FILE_EXTENSIONS } from '../syncFilters';
+import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
+import { saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { reportSyncFailure, reportSyncResult, retainSyncLogEntries, trimSyncLog } from '../syncReporting';
+import type { SyncRunResult } from '../syncAbstraction';
 
 vi.mock('obsidian', () => ({
     // syncEngine only uses TFile at runtime (instanceof checks in

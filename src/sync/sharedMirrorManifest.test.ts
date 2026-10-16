@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSyncRecord } from '../deviceSync';
+import { buildSyncRecord } from './directIP/deviceSync';
 import { cloudAccountFingerprint, cloudPlanningRecords, fromIpSyncManifest, MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
 
 describe('shared mirror manifest', () => {

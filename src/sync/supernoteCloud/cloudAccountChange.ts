@@ -1,8 +1,8 @@
-import { hashBytes } from '../deviceSync';
+import { hashBytes } from '../directIP/deviceSync';
 import { CloudMirrorVault } from './cloudMirrorWrite';
-import { LoadedMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from './sharedMirrorManifestStore';
+import { LoadedMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from '../sharedMirrorManifestStore';
 import { matchesAnyPathPattern, matchesFileExtension, FileExtensionAllowlist } from '../syncFilters';
-import { MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
+import { MIRROR_METADATA_DIRECTORY } from '../sharedMirrorManifest';
 
 export async function changeCloudMirrorAccount(
     storage: MirrorManifestStorage,

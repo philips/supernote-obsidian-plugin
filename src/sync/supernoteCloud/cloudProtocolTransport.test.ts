@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { authenticateCloudPassword } from './cloudAuth';
 import { formatCloudAuthIdentityObservation, formatCloudInventoryObservation } from './cloudProtocolEvidence';
-import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
+import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../../scripts/cloudProtocolTransport';
 
 describe('Node Cloud protocol transport', () => {
     it('retains cookies, refreshes CSRF once, and records only structural evidence', async () => {

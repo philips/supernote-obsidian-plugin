@@ -1,20 +1,20 @@
 import type { App } from 'obsidian';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SupernotePluginSettings } from '../settings';
-import { validateCloudProtocolSession } from '../../scripts/cloudProtocolSession';
+import type { SupernotePluginSettings } from '../../settings';
+import { validateCloudProtocolSession } from '../../../scripts/cloudProtocolSession';
 import { collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
 import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { downloadCloudBytes } from './cloudDownload';
-import { cloudAccountFingerprint } from './sharedMirrorManifest';
-import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
+import { cloudAccountFingerprint } from '../sharedMirrorManifest';
+import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
 import { CloudSignInRequiredError, CloudSyncEngine } from './cloudSyncEngine';
 
 const post = vi.hoisted(() => vi.fn());
 const notice = vi.hoisted(() => vi.fn());
 vi.mock('obsidian', () => ({ Platform: { isDesktop: true }, Notice: notice,
     requestUrl: vi.fn(), TFile: class TFile {} }));
-vi.mock('../../scripts/cloudProtocolSession', () => ({ validateCloudProtocolSession: vi.fn() }));
-vi.mock('../../scripts/cloudProtocolTransport', () => ({
+vi.mock('../../../scripts/cloudProtocolSession', () => ({ validateCloudProtocolSession: vi.fn() }));
+vi.mock('../../../scripts/cloudProtocolTransport', () => ({
     CloudRequestBudget: class CloudRequestBudget {},
     NodeCloudProtocolTransport: class NodeCloudProtocolTransport { post = post; },
 }));
@@ -23,7 +23,7 @@ vi.mock('./cloudInventory', () => ({
 }));
 vi.mock('./cloudMirrorPipeline', () => ({ runVerifiedCloudMirror: vi.fn() }));
 vi.mock('./cloudDownload', () => ({ downloadCloudBytes: vi.fn() }));
-vi.mock('./sharedMirrorManifestStore', () => ({ loadMirrorManifest: vi.fn(), saveMirrorManifest: vi.fn() }));
+vi.mock('../sharedMirrorManifestStore', () => ({ loadMirrorManifest: vi.fn(), saveMirrorManifest: vi.fn() }));
 
 const item = {
     id: '123', fileName: 'Test.note', directoryId: '0', isFolder: false,

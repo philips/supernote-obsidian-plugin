@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
-import { authenticateCloudPassword } from '../src/cloudSync/cloudAuth';
-import { collectCloudInventory, CloudInventoryItem, CloudPathResult, queryCloudPath, verifyCloudInventoryPaths } from '../src/cloudSync/cloudInventory';
-import { CloudProtocolError } from '../src/cloudSync/cloudProtocol';
-import { formatCloudInventoryObservation } from '../src/cloudSync/cloudProtocolEvidence';
-import { CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/cloudSync/cloudPolicy';
+import { authenticateCloudPassword } from '../src/sync/supernoteCloud/cloudAuth';
+import { collectCloudInventory, CloudInventoryItem, CloudPathResult, queryCloudPath, verifyCloudInventoryPaths } from '../src/sync/supernoteCloud/cloudInventory';
+import { CloudProtocolError } from '../src/sync/supernoteCloud/cloudProtocol';
+import { formatCloudInventoryObservation } from '../src/sync/supernoteCloud/cloudProtocolEvidence';
+import { CLOUD_PRODUCTION_ORIGIN, CLOUD_ROUTES } from '../src/sync/supernoteCloud/cloudPolicy';
 import { CloudRequestBudget, NodeCloudProtocolTransport } from './cloudProtocolTransport';
 import {
     getCloudProtocolSessionPath,

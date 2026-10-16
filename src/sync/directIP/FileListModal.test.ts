@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { scanDeviceSupernoteTree, scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice } from './deviceFetch';
-import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from './syncFilters';
+import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
 
 vi.mock('obsidian', () => ({
     // FileListModal (extends SuggestModal) and its transitive imports

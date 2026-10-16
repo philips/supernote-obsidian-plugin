@@ -2,10 +2,10 @@ import { createCustomDictionarySettingsUI, createDictionaryTableUI, CUSTOM_DICTI
 import SupernotePlugin from "./main";
 import * as Obsidian from 'obsidian';
 import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'obsidian';
-import { SyncManifest } from './deviceSync';
-import { SyncEngineId } from './syncAbstraction';
-import { validateFileExtensionAllowlist } from './syncFilters';
-import { trimSyncLog } from './syncReporting';
+import { SyncManifest } from './sync/directIP/deviceSync';
+import { SyncEngineId } from './sync/syncAbstraction';
+import { validateFileExtensionAllowlist } from './sync/syncFilters';
+import { trimSyncLog } from './sync/syncReporting';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
