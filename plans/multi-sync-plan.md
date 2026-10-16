@@ -3,14 +3,16 @@
 **Status:** Core single-active-engine coordination, manual Cloud mirroring,
 shared automatic scheduling, and Cloud cleanup are implemented. The confirmed
 Cloud account-change flow is implemented; live account-switch validation remains
-pending. IP migration to the coordinator-owned shared manifest and the
-destination-root move workflow remain outstanding. Updated October 16, 2026.
+pending. IP migration to the coordinator-owned shared manifest and an explicit
+shared sync-folder change workflow remain outstanding. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
 user-observable requirements are defined in
 [`cloud-sync-design.md`](cloud-sync-design.md). This file tracks implementation
-progress and verification.
+progress and verification. The focused strategy, staged work, and acceptance
+criteria for both engines and root changes live in
+[`shared-manifest-plan.md`](shared-manifest-plan.md).
 
 ## Completed
 
@@ -40,51 +42,43 @@ progress and verification.
 
 ## Outstanding
 
-### Coordinator-owned shared manifest for IP and Cloud (next sprint)
+### Shared manifest and sync-folder change (next work block)
 
-- Make the coordinator the common owner and entry point for the shared manifest
-  lifecycle used by both engines, rather than having Cloud use the shared store
-  while IP continues to use `noteSyncState`.
-- Migrate existing `noteSyncState` records into the shared vault manifest and
-  remove the legacy settings field only after migration is verified and
-  recoverable.
-- Route IP reads and writes through the shared manifest, preserving device
-  date/size change detection, byte hashes, local-edit protection, restoration
-  behavior, and IP's additive/update-only semantics.
-- Make the shared history action operate on manifest records for both engines;
-  preserve Cloud account binding and ensure an IP run cannot overwrite a
-  Cloud-managed destination.
-- Add focused tests for migration, interrupted migration, shared history
-  behavior, and switching between engines without losing protection. Keep this
-  sprint limited to common manifest ownership and IP integration; do not assume
-  that general per-file crash recovery is included.
-
-### Shared destination-root move
-
-- Implement the confirmed root-rename workflow from the design: reject moves
-  during a run or unsafe source/destination conditions, persist a pending move,
-  rename the root, update manifest paths/settings, then clear the pending
-  record.
-- Recover only the supported old-root-only and new-root-only states; stop with a
-  protected error if both or neither root exists.
-- Test interrupted moves and preservation of user-created and locally edited
-  files. Do not replace this with per-file copying.
+- Follow [`shared-manifest-plan.md`](shared-manifest-plan.md) for the
+  coordinator-owned lifecycle, safe `noteSyncState` migration, IP and Cloud
+  integration, common history clearing, and regression gates.
+- Replace immediate text-setting changes with a folder selection and an explicit
+  choice: move the entire existing mirror and update its paths, or leave the old
+  files untouched/unmanaged and start with an empty manifest at the new root. Do
+  not archive or automatically reuse old history.
+- The root-change operation is shared by both engines. Implement and verify its
+  confirmation, conflict checks, and interrupted-change handling separately from
+  ordinary per-file crash recovery.
 
 ### Open scope decisions
 
-- General recovery for ordinary sync operations is not part of the account-
-  change checkpointing already implemented. Decide whether to schedule a durable
-  recovery record for routine downloads, overwrites, moves, and Trash operations
-  as its own sprint, or retain the current fail-closed behavior.
-- Cross-device manifest reconciliation and the destination-root move workflow
-  remain separate design proposals, not part of the next shared-manifest sprint.
-  Decide whether both are still wanted and whether they should be separate
-  future sprints. See the design's concurrent-update and destination sections
-  for the detailed behavior under consideration.
+- **Ordinary-operation crash recovery (deferred Multi-Sync decision):** the
+  account-change checkpoint covers only confirmed account changes, and the next
+  shared-manifest block does not make file mutations atomic with manifest
+  commits. An interruption after a new file is written can leave it untracked;
+  after an overwrite, the new bytes can look like a local edit against the old
+  hash; after Cloud Trash, the old record can still claim a missing file. Decide
+  in a separate sprint whether to persist a before/after checkpoint for creates,
+  overwrites, safe adoptions or moves, and Cloud Trash, or retain the current
+  protect/stop-and-resolve behavior. If approved, test interruption at each
+  file/manifest boundary and restart with mutation not started, completed, and
+  ambiguous; recover only when hashes and paths prove the outcome, never
+  overwrite a user edit or repeat an uncertain Trash. Small file size and cheap
+  retransfer alone do not resolve these ownership ambiguities.
+- Automatic cross-device manifest reconciliation remains a separate proposal.
+  The shared-manifest work retains stale-revision rejection instead of silently
+  merging concurrent changes from multiple machines.
 
 The standalone Cloud reset is not outstanding: confirmed account change occurs
-during interactive sign-in. Its controlled-vault/live account-switch validation
-remains pending separate approval, as recorded in
+during interactive sign-in. Live account-switch validation remains unresolved
+until a volunteer with a second Cloud account can test it with explicit consent;
+the current user has no second account. This does not block work on the
+shared-manifest block. The Cloud validation record is in
 [`cloud-sync-next-steps.md`](cloud-sync-next-steps.md).
 
 ## Verification

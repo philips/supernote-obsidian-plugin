@@ -1,14 +1,16 @@
 # Cloud Sync Implementation Plan
 
-**Status:** Manual and scheduled Cloud mirroring, guarded cleanup, interactive
-Cloud sign-in/sign-out, session prompts, and shared sync reporting are
-implemented and synthetically tested. The user reports completing live
-logout/login; scheduled-sync checks, including signed-out handling and
-main-window notices, are user-reported rather than independently captured. The
-read-only username lookup was separately validated against the existing session.
-Confirmed Cloud account change and guarded cleanup are implemented and
-synthetically tested; live account switching and destructive vault validation
-remain unverified. Updated October 15, 2026.
+**Status:** Cloud implementation work is complete: manual and scheduled
+mirroring, guarded cleanup, interactive sign-in/sign-out, shared reporting, and
+confirmed account change are implemented and synthetically tested. Live
+logout/login and scheduled-sync checks are user-reported; the read-only username
+lookup was separately validated with an existing session. Live different-account
+switching and its destructive cleanup remain **unresolved**, not validated: the
+current user has no second Cloud account (one cannot be created without another
+device). Testing is deferred until a community volunteer with another account
+can assist with explicit approval. See
+[`cloud-sync-next-steps.md`](cloud-sync-next-steps.md). Updated October
+16, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -230,7 +232,7 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   build, and lint (zero errors, 12 existing warnings) passed October 15, 2026.
   No live Cloud login, OTP, mutation, or destructive vault validation was used.
 
-### Confirmed Cloud Account Change (implemented; live validation pending)
+### Confirmed Cloud Account Change (implemented; live validation unresolved)
 
 - Verified Cloud `userId` drives the fingerprint comparison; the display-only
   username does not. Same-account re-entry preserves the manifest. A different
@@ -250,7 +252,11 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   history, pending-file recovery, and failure after Trash before manifest
   commit. No live login, OTP, Cloud mutation, or destructive vault check was
   performed. The account-change trigger is not a standalone reset button;
-  non-destructive history forgetting remains distinct.
+  non-destructive history forgetting remains distinct. A real account switch
+  cannot be tested with the current user's single Cloud account; leave this
+  validation explicitly unresolved until an authorized volunteer has a second
+  account. No second account or live destructive test is implied by synthetic
+  coverage.
 
 ### Sprint 7: User-Reported Scheduled Sync Validation
 
@@ -260,6 +266,21 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 - Record this as user-reported validation, not an automated test run or an
   independently captured diagnostic. The existing synthetic scheduler tests
   remain the reproducible automated evidence.
+- On October 16, 2026, the user additionally confirmed that scheduled sync did
+  not open a login dialog. This supports the no-background-login behavior; it
+  does not exercise the account-change confirmation, which only arises during
+  interactive sign-in with a different verified account.
+
+## Implementation Closeout
+
+No further Cloud feature sprint is planned here. Ordinary download/write and
+remote-deletion Trash crash recovery is tracked as a deferred Multi-Sync scope
+decision in [`multi-sync-plan.md`](multi-sync-plan.md), not as incomplete Cloud
+implementation and not as a promise of the next shared-manifest sprint. Other
+unobserved hosted-service cases remain documented as unknowns with fail-closed
+behavior in [`cloud-sync-design.md`](cloud-sync-design.md); they do not by
+themselves call for another Cloud sprint. Live account-switch validation remains
+the separate unresolved evidence gap above, not a completed release gate.
 
 ## Validation Gates
 

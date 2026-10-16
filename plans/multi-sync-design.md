@@ -625,7 +625,7 @@ then engine selection, then engine-specific settings:
 - One shared `Forget sync history` control.
 - An IP configuration section with the existing IP controls.
 - A Cloud configuration section with sign in/sign out, connection status, Cloud
-  account state, and reset controls.
+  account state, and interactive account-change confirmation during sign-in.
 
 Inactive-engine settings remain editable so a user can configure an engine
 before switching to it, but inactive engines cannot be run by their settings
@@ -633,27 +633,34 @@ buttons. Setup-only actions such as Cloud sign-in/sign-out, connection tests,
 and editing masks are allowed while Cloud is inactive. They never change
 `activeSyncEngine`; the user must select Cloud explicitly.
 
-The shared destination remains editable. Once sync manages files, changing it
-invokes one coordinator-owned, confirmed root-move workflow rather than merely
-saving a new string:
+The shared destination is changed only by an explicit **Change sync folder**
+action under the coordinator's in-flight guard, not by saving text as it is
+typed. Stage an in-vault folder selection, then ask whether to move the mirror
+or leave its files behind; cancellation preserves settings, files, and history.
+Obsidian 1.13 provides a built-in vault-folder suggester for declarative
+settings, but its ordinary control saves the chosen path directly. Use a staged
+picker instead, using Obsidian vault folders rather than the existing Supernote
+device HTTP file browser. For a new destination path, select an existing parent
+and supply a new child-folder name.
 
-1. Require that no sync is running, the source root exists, and the destination
-   does not exist.
-2. Persist one small pending-move record containing the old and new roots.
-3. Rename the complete shared root once through the Obsidian Vault API.
-4. Rewrite destination paths in the shared manifest plus the shared setting,
-   then clear the pending record.
+- **Move:** require a safe, absent destination. Rename the entire sync root with
+  its managed, edited, and user-created contents. Update manifest paths and
+  `syncFolder` while retaining hashes and the Cloud account binding. Checkpoint
+  the operation so interrupted moves can be resumed only when the folder state
+  is unambiguous; otherwise block sync for manual resolution.
+- **Leave behind and start fresh:** do not move, delete, or trash old content.
+  Explain that old files become unmanaged and in-scope remote files will be
+  downloaded to the new root. Retire the old root's plugin manifest slots
+  instead of archiving them or automatically restoring them when that folder is
+  selected again. Begin with an empty manifest at the new root, retaining the
+  Cloud account binding but not old per-file records. Reject an occupied
+  destination rather than adopting or overwriting it automatically. Handle
+  interrupted root/metadata transitions conservatively before allowing sync.
 
-On startup, a pending move has only three supported states: old root only means
-the rename did not happen; new root only means finalize the metadata update;
-both or neither roots means stop sync with a protected error. There is no
-per-file migration protocol, content copying, or general-purpose move framework
-in the first implementation. Moving the root as a unit preserves locally edited
-managed files and user-created content inside it. This also replaces the IP
-engine's current behavior, where changing `syncFolder` can gradually split one
-mirror across old and new roots.
+Both engines follow the same root-change operation. Do not automatically infer
+either choice from a path edit. The work sequence and validation cases are in
+[shared-manifest-plan.md](shared-manifest-plan.md).
 
-preserve and report locally edited files, clear the shared manifest, and remove
 Changing Cloud accounts is handled only from the interactive sign-in flow; there
 is no standalone destructive reset control. When a verified sign-in returns a
 different account ID from the account bound to the shared manifest, the user is
@@ -743,8 +750,8 @@ rewrite.
   its filename and path-validation boundary.
 - Preserve additive/update-only semantics, local-edit protection, restoration of
   locally deleted managed files, `Sync Log.md`, and request timeouts.
-- Replace direct `syncFolder` reassignment after the engine owns files with the
-  shared destination-root rename workflow.
+- Replace direct `syncFolder` reassignment with the coordinator-owned, explicit
+  move-or-leave destination change workflow.
 - Move plugin-level validation/result formatting from `runSync()` into the
   wrapper or coordinator so both manual and scheduled triggers share one path.
 - Map `DeviceSyncResult` to the common result with `removed: 0`.
@@ -816,12 +823,11 @@ types. Suggested files:
    to the new deterministic path. If the old local file was edited or the new
    destination cannot be adopted safely, preserve it and report a protected item
    rather than creating or deleting ambiguous duplicates.
-9. Before each create, overwrite, move, adoption, or cleanup, persist a pending
-   operation record containing its previous manifest entry, intended entry,
-   affected paths, and expected before/after hashes. Perform the vault mutation,
-   atomically checkpoint the intended shared manifest, then clear the pending
-   record. Isolate ordinary per-file transfer failures so other files continue,
-   but stop the run if the shared manifest cannot be advanced safely.
+9. Check the local hash immediately before any vault mutation. Commit the
+   resulting manifest entry after a successful mutation; stop if the manifest
+   cannot be advanced safely. Isolate ordinary per-file transfer failures, but
+   do not infer recovery from an ambiguous file/manifest mismatch. A general
+   per-file pending-operation journal is a separate future proposal.
 10. Only after a complete inventory, find every managed in-scope shared entry
     absent from Cloud, including entries last observed through IP. Move an
     unchanged local copy to Obsidian Trash and remove its manifest entry.
@@ -834,8 +840,11 @@ The Cloud engine never uploads or modifies remote content.
 #### Shared mirror manifest
 
 Store the shared manifest in a reserved hidden directory below the destination
-root, for example `<syncFolder>/.supernote-sync/`. Its versioned header binds
-the mirror to the configured root and, after Cloud is used, to one account:
+root, for example `<syncFolder>/.supernote-sync/`. The following illustrates the
+intended logical entry model, not the current on-disk schema: today's manifest
+is keyed by destination path and stores a Cloud account fingerprint, but has no
+`destinationRoot` header (the containing folder supplies the root). Only a
+separately approved migration may add persisted header fields:
 
 ```ts
 interface SharedSyncManifest {
@@ -880,51 +889,40 @@ different source file follows the active engine's normal local-edit guard before
 overwrite. Thus the first run after switching engines may perform more downloads
 but needs no ownership migration.
 
-Each manifest or pending-operation checkpoint writes a sibling temporary file,
-validates the complete JSON, and atomically replaces its primary file where the
-adapter supports it. A pending operation is durable before its vault mutation.
-On startup, recover it by comparing actual paths/hashes with its before/after
-states: commit the intended entry when the mutation completed, restore the
-previous entry when it did not start, and stop with a protected error when the
-state is ambiguous. This applies to creates, overwrites, moves, adoptions, and
-Trash cleanup; recovery is not limited to previously unowned files. A later run
-may adopt an unowned file only after downloading or hashing the expected bytes
-and proving them identical; a non-identical existing file is protected. This is
-the full per-file durability model for the first implementation.
+General pending-operation records for ordinary creates, overwrites, moves,
+adoptions, and Trash cleanup remain a separate future proposal. The existing
+two-slot store validates and readback-checks manifest revisions but does not
+make a vault mutation and its manifest update atomic. Account-change cleanup has
+its own narrower checkpoint; the explicit sync-root change requires its own
+recoverable transition. Until a general per-file recovery design is approved,
+ambiguous file/manifest states must be protected or stop sync rather than
+inferred as safe. An unowned file is adopted only after verified incoming bytes
+prove it identical; a non-identical existing file is protected.
 
 #### Concurrent manifest updates
 
 The coordinator serializes runs within one plugin instance, but the same vault
-may be open on more than one device. The manifest therefore does not contain an
-owner-device ID and does not enforce an exclusive writer. Manifest persistence
-uses an independently implemented revision-aware transaction:
+may be open on more than one device. The current shared store compares the
+loaded revision with the latest visible revision and refuses stale commits; this
+detects, but does not merge, changes by a second instance. Retain that
+fail-closed behavior for the shared-manifest integration. A later, separately
+approved design could three-way merge a run's baseline, intended changes, and
+newest manifest by path, preserving independent edits and stopping on
+incompatible changes to the same record. That is not a distributed lock: two
+offline devices can act before either sees the other's changes. Neither this
+merge nor general per-file recovery is assumed by the next work block.
 
-- Serialize writes within one plugin instance.
-- Retain the baseline manifest and its vault revision when a run begins.
-- Before commit, read the latest visible manifest when its revision changed.
-- Three-way merge the baseline, this run's result, and the latest visible
-  manifest by normalized vault path.
-- Preserve latest fields that this run did not change and preserve this run's
-  fields when the latest manifest still matches the baseline.
-- If both sides changed the same managed entry incompatibly, stop with a
-  protected conflict instead of choosing a winner or performing further cleanup.
-
-This is reconciliation, not a distributed lock. Two offline devices can act
-before either sees the other's changes. Local-content hashes, pending-operation
-recovery, complete-inventory deletion gates, and protected conflicts remain the
-safety boundary when later synchronization exposes an ambiguous state.
-
-The shared `Forget sync history` action deletes shared entries and pending
-operation files only after confirming no run is active. It retains the
-destination/account header, vault files, durable logs, authentication, and
-last-run display state. The next run may re-adopt byte-identical files and
-protects non-identical files. Because history establishes which files are
-sync-managed, Cloud performs no deletion of pre-existing local files until they
-have been adopted into the new manifest. Changing Cloud accounts is instead the
-confirmed sign-in flow defined above; it cleans only unchanged, in-scope Cloud
-records, preserves IP history and all protected/out-of-scope items, and binds
-the verified target account when cleanup is complete. Current implementation
-retains per-engine last-run display state through this change.
+The shared `Forget sync history` action clears shared entries only after
+confirming no run is active. It retains the destination/account header, vault
+files, durable logs, authentication, and last-run display state. The next run
+may re-adopt byte-identical files and protects non-identical files. Because
+history establishes which files are sync-managed, Cloud performs no deletion of
+pre-existing local files until they have been adopted into the new manifest.
+Changing Cloud accounts is instead the confirmed sign-in flow defined above; it
+cleans only unchanged, in-scope Cloud records, preserves IP history and all
+protected/out-of-scope items, and binds the verified target account when cleanup
+is complete. Current implementation retains per-engine last-run display state
+through this change.
 
 All Cloud-controlled paths must be normalized and proven to remain descendants
 of `syncFolder`. Reject absolute paths, empty/`.`/`..` segments, embedded

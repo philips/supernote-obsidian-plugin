@@ -1,20 +1,31 @@
-# Cloud Sync Sprint Hand-Off
+# Cloud Sync Validation Hand-Off
 
-## Remaining Validation
+Cloud implementation is complete; live different-account switching remains
+**unresolved**. The current user has one Supernote Cloud account and cannot
+create a second without another device. Do not treat synthetic tests as a live
+account-switch check or hold up Multi-Sync implementation while waiting for a
+community volunteer with another account.
 
-1. With separate approval and replaceable synthetic fixtures, verify the
-   account-change confirmation and cancellation in a test vault. Check Trash
-   placement and retained edited, out-of-scope, unmanaged, and IP-managed files.
-   No live login/OTP or destructive vault validation is authorized by this
-   handoff alone.
-2. Verify interrupted account-change recovery in the same controlled setting if
-   a non-destructive interruption can be staged. Review the preserved-file
-   report and confirm scheduled sync never opens a confirmation dialog.
-3. Keep the non-destructive history workflow separate. Follow up on broader
-   manifest pending-operation recovery for ordinary Cloud downloads and
-   remote-deletion cleanup, which is not part of this account-change change.
+## Deferred Account-Change Validation
+
+When a volunteer with a second account is available, obtain separate explicit
+approval and use replaceable test-vault fixtures to check the different-account
+confirmation and cancellation, Trash placement, preserved edited/out-of-scope/
+unmanaged/IP-managed files, and the preserved-file report. If safely stageable,
+also check interrupted cleanup recovery. This handoff does not authorize live
+login/OTP, account switching, or destructive vault validation.
+
+The user confirmed on October 16, 2026 that scheduled sync did not open a login
+dialog. This supports no background sign-in; it does not test whether a
+different-account confirmation could appear, since that flow requires an
+interactive sign-in to a second verified account. Synthetic tests cover that
+branch, but live confirmation behavior remains unverified.
+
+General recovery for ordinary downloads, overwrites, and remote-deletion Trash
+is a separate deferred decision in [`multi-sync-plan.md`](multi-sync-plan.md),
+not remaining Cloud implementation. Non-destructive history clearing remains
+distinct from account change.
 
 See [`cloud-sync-plan.md`](cloud-sync-plan.md) for implementation status and
-[`multi-sync-design.md`](multi-sync-design.md) for the existing reset safety
-requirements; the account-change trigger above supersedes its standalone-reset
-UI proposal.
+[`cloud-sync-design.md`](cloud-sync-design.md) for Cloud behavior and residual
+service unknowns.
