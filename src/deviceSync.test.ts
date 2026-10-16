@@ -498,14 +498,14 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
     });
 
     it('returns null for a clean run with no conflicts or failures', () => {
-        expect(formatSyncLogEntry(ipResult([]), now)).toBeNull();
+        expect(formatSyncLogEntry(ipResult([]), 'Direct IP', now)).toBeNull();
     });
 
     it('lists each skipped conflict on its own line under a timestamp heading', () => {
         const entry = formatSyncLogEntry(ipResult([
             { kind: 'protected', item: 'Supernote sync/Diary/a.note', message: 'edited' },
             { kind: 'protected', item: 'Supernote sync/Diary/b.note', message: 'edited' },
-        ]), now);
+        ]), 'Direct IP', now);
         expect(entry).toBe(
             '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/Diary/a.note`\n'
@@ -517,7 +517,7 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
     it('lists each failure with its error message', () => {
         const entry = formatSyncLogEntry(ipResult([
             { kind: 'failure', item: '/Diary/broken.note', message: 'Supernote responded with status 500' },
-        ]), now);
+        ]), 'Direct IP', now);
         expect(entry).toBe(
             '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Failed: `/Diary/broken.note` — Supernote responded with status 500\n'
@@ -529,7 +529,7 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
         const entry = formatSyncLogEntry(ipResult([
             { kind: 'protected', item: 'Supernote sync/a.note', message: 'edited' },
             { kind: 'failure', item: '/b.note', message: 'timed out' },
-        ]), now);
+        ]), 'Direct IP', now);
         expect(entry).toBe(
             '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/a.note`\n'
@@ -540,7 +540,7 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
 
     it('defaults to the current time when no date is passed', () => {
         const before = Date.now();
-        const entry = formatSyncLogEntry(ipResult([{ kind: 'protected', item: 'x', message: 'edited' }]));
+        const entry = formatSyncLogEntry(ipResult([{ kind: 'protected', item: 'x', message: 'edited' }]), 'Direct IP');
         const after = Date.now();
         const heading = entry?.split('\n')[0] ?? '';
         const ts = new Date(heading.slice(3, 22).replace(' ', 'T') + 'Z').getTime();
@@ -552,12 +552,23 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
 describe('formatSyncFailureLogEntry', () => {
     it('formats a single whole-run failure line under a timestamp heading', () => {
         const now = new Date('2026-07-27T11:15:32.000Z');
-        expect(formatSyncFailureLogEntry('ip-device', 'Supernote at 192.168.1.50 did not respond', now)).toBe(
+        expect(formatSyncFailureLogEntry('ip-device', 'Supernote at 192.168.1.50 did not respond', 'Direct IP', now)).toBe(
             '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Sync failed: Supernote at 192.168.1.50 did not respond\n'
             + '\n',
         );
     });
+});
+
+it('uses the registered engine name for result and failure headings', () => {
+    const now = new Date('2026-07-27T11:15:32.000Z');
+    const result: SyncRunResult = {
+        engineId: 'supernote-cloud', synced: 0, unchanged: 0, excluded: 0, removed: 0,
+        issues: [{ kind: 'warning', message: 'Cloud inventory changed; deletion skipped' }],
+    };
+    expect(formatSyncLogEntry(result, 'Renamed cloud', now)).toContain('## 2026-07-27 11:15:32 (Renamed cloud)');
+    expect(formatSyncFailureLogEntry('ip-device', 'offline', 'Renamed IP', now))
+        .toContain('## 2026-07-27 11:15:32 (Renamed IP)');
 });
 
 describe('end-to-end scenario: several sync runs in a row', () => {

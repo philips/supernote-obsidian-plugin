@@ -58,7 +58,7 @@ export interface DeviceSyncResult {
 
 export class IpSyncEngine implements SyncEngine {
     readonly id = 'ip-device' as const;
-    readonly name = 'Direct IP connection';
+    readonly name = 'Direct IP';
 
     constructor(
         private readonly app: App,

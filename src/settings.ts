@@ -35,11 +35,6 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
     svg: 'SVG',
 };
 
-export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
-    'ip-device': 'Direct IP',
-    'supernote-cloud': 'Supernote cloud',
-};
-
 function validateSyncMinutes(value: string): string | undefined {
     if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
         return 'Enter a positive whole number of minutes';
@@ -167,6 +162,10 @@ export class SupernoteSettingTab extends PluginSettingTab {
     constructor(app: App, plugin: SupernotePlugin) {
         super(app, plugin);
         this.plugin = plugin;
+    }
+
+    private syncEngineLabels(): Record<string, string> {
+        return Object.fromEntries(this.plugin.getSyncEngines().map((engine) => [engine.id, engine.name]));
     }
 
     private renderSyncInterval(setting: Setting): void {
@@ -497,7 +496,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                                 .setDesc('Choose which sync engine is used for manual and scheduled sync.')
                                 .addDropdown((dropdown) => {
                                     dropdown
-                                        .addOptions(SYNC_ENGINE_LABELS)
+                                        .addOptions(this.syncEngineLabels())
                                         .setValue(this.plugin.getActiveSyncEngineId())
                                         .onChange(async (value) => {
                                             await this.plugin.setActiveSyncEngine(value as SyncEngineId);
@@ -510,7 +509,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
             },
             {
                 type: 'group',
-                heading: 'Direct IP',
+                heading: this.plugin.getSyncEngine('ip-device').name,
                 visible: () => this.plugin.getActiveSyncEngineId() === 'ip-device',
                 items: [
                     {
@@ -540,7 +539,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
             },
             {
                 type: 'group',
-                heading: 'Supernote cloud',
+                heading: this.plugin.getSyncEngine('supernote-cloud').name,
                 visible: () => this.plugin.getActiveSyncEngineId() === 'supernote-cloud',
                 items: [{ name: 'Cloud session', render: (setting) => this.renderCloudSession(setting) }],
             },
@@ -760,7 +759,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
             .setName('Sync engine')
             .setDesc('Choose which sync engine is used for manual and scheduled sync.')
             .addDropdown(dropdown => dropdown
-                .addOptions(SYNC_ENGINE_LABELS)
+                .addOptions(this.syncEngineLabels())
                 .setValue(this.plugin.getActiveSyncEngineId())
                 .onChange(async (value) => {
                     await this.plugin.setActiveSyncEngine(value as SyncEngineId);
@@ -768,7 +767,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        sectionEl = createEngineSection('Direct IP', this.plugin.getActiveSyncEngineId() === 'ip-device');
+        sectionEl = createEngineSection(this.plugin.getSyncEngine('ip-device').name, this.plugin.getActiveSyncEngineId() === 'ip-device');
 
         new Setting(sectionEl)
             .setName('Supernote IP address')
@@ -807,7 +806,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 })
             );
 
-        sectionEl = createEngineSection('Supernote cloud', this.plugin.getActiveSyncEngineId() === 'supernote-cloud');
+        sectionEl = createEngineSection(this.plugin.getSyncEngine('supernote-cloud').name, this.plugin.getActiveSyncEngineId() === 'supernote-cloud');
         this.renderCloudSession(new Setting(sectionEl));
 
     }

@@ -19,10 +19,9 @@ export function syncLogPath(syncFolder: string): string {
     return cleanRoot ? `${cleanRoot}/Sync Log.md` : 'Sync Log.md';
 }
 
-function renderLogEntry(engineId: SyncEngineId, now: Date, lines: string[]): string {
+function renderLogEntry(engineName: string, now: Date, lines: string[]): string {
     const timestamp = now.toISOString().replace('T', ' ').slice(0, 19);
-    const engine = engineId === 'ip-device' ? 'Direct IP' : 'Supernote cloud';
-    return `## ${timestamp} (${engine})\n${lines.map((line) => `- ${line}`).join('\n')}\n\n`;
+    return `## ${timestamp} (${engineName})\n${lines.map((line) => `- ${line}`).join('\n')}\n\n`;
 }
 
 export function retainSyncLogEntries(text: string, historyCount: number): string {
@@ -32,7 +31,7 @@ export function retainSyncLogEntries(text: string, historyCount: number): string
     return text.slice(0, headings[0]) + text.slice(headings[headings.length - historyCount]);
 }
 
-export function formatSyncLogEntry(result: SyncRunResult, now: Date = new Date()): string | null {
+export function formatSyncLogEntry(result: SyncRunResult, engineName: string, now: Date = new Date()): string | null {
     const protectedIssues = result.issues.filter((issue) => issue.kind === 'protected');
     const failures = result.issues.filter((issue) => issue.kind === 'failure');
     const warnings = result.issues.filter((issue) => issue.kind === 'warning');
@@ -49,18 +48,18 @@ export function formatSyncLogEntry(result: SyncRunResult, now: Date = new Date()
             }),
             ...warnings.map((issue) => `Warning: ${CLOUD_LOG_CATEGORIES.has(issue.message) ? issue.message : 'Cloud sync warning'}`),
         ];
-        return renderLogEntry(result.engineId, now, lines);
+        return renderLogEntry(engineName, now, lines);
     }
-    return renderLogEntry(result.engineId, now, [
+    return renderLogEntry(engineName, now, [
         ...protectedIssues.map((issue) => `Skipped (edited locally since last sync): \`${issue.item}\``),
         ...failures.map((issue) => `Failed: \`${issue.item}\` — ${issue.message}`),
         ...warnings.map((issue) => `Warning: ${issue.message}`),
     ]);
 }
 
-export function formatSyncFailureLogEntry(engineId: SyncEngineId, message: string, now: Date = new Date()): string {
+export function formatSyncFailureLogEntry(engineId: SyncEngineId, message: string, engineName: string, now: Date = new Date()): string {
     const category = engineId === 'ip-device' ? message : 'Cloud sync failed';
-    return renderLogEntry(engineId, now, [`Sync failed: ${category}`]);
+    return renderLogEntry(engineName, now, [`Sync failed: ${category}`]);
 }
 
 async function ensureSyncLogFile(app: App, syncFolder: string): Promise<TFile> {
@@ -103,15 +102,15 @@ async function appendSyncLogEntry(app: App, syncFolder: string, entry: string, h
     }
 }
 
-export async function reportSyncResult(app: App, syncFolder: string, result: SyncRunResult, historyCount = 8, enabled = true): Promise<void> {
+export async function reportSyncResult(app: App, syncFolder: string, result: SyncRunResult, engineName: string, historyCount = 8, enabled = true): Promise<void> {
     if (!enabled) return;
-    const entry = formatSyncLogEntry(result);
+    const entry = formatSyncLogEntry(result, engineName);
     if (entry) await appendSyncLogEntry(app, syncFolder, entry, historyCount);
     else if (result.engineId === 'ip-device') await ensureSyncLogFile(app, syncFolder);
 }
 
-export async function reportSyncFailure(app: App, syncFolder: string, engineId: SyncEngineId, error: unknown, historyCount = 8, enabled = true): Promise<void> {
+export async function reportSyncFailure(app: App, syncFolder: string, engineId: SyncEngineId, error: unknown, engineName: string, historyCount = 8, enabled = true): Promise<void> {
     if (!enabled) return;
     const message = engineId === 'ip-device' ? (error instanceof Error ? error.message : String(error)) : '';
-    await appendSyncLogEntry(app, syncFolder, formatSyncFailureLogEntry(engineId, message), historyCount);
+    await appendSyncLogEntry(app, syncFolder, formatSyncFailureLogEntry(engineId, message, engineName), historyCount);
 }

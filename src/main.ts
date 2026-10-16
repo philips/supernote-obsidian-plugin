@@ -17,7 +17,7 @@ import './webcomponent/SupernoteViewerElement';
 import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { IpSyncEngine } from './syncEngine';
-import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngineId, SyncRunResult } from './syncAbstraction';
+import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngine, SyncEngineId, SyncRunResult } from './syncAbstraction';
 import { reportSyncFailure, reportSyncResult } from './syncReporting';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import { CloudSessionImportModal } from './cloudSync/CloudSessionImportModal';
@@ -1530,6 +1530,14 @@ export default class SupernotePlugin extends Plugin {
 		return this.syncCoordinator.getActiveEngineId();
 	}
 
+	getSyncEngines(): SyncEngine[] {
+		return this.syncCoordinator.getSyncEngines();
+	}
+
+	getSyncEngine(engineId: SyncEngineId): SyncEngine {
+		return this.syncCoordinator.getSyncEngine(engineId);
+	}
+
 	isNoteViewerReloadRequired(): boolean {
 		return this.settings.noteViewerEnabled !== this.noteViewerRegistered;
 	}
@@ -1611,13 +1619,14 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	private async reportSyncResult(result: SyncRunResult): Promise<void> {
-		await reportSyncResult(this.app, this.settings.syncFolder, result, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
+		await reportSyncResult(this.app, this.settings.syncFolder, result, this.getSyncEngine(result.engineId).name, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
 			.catch((error) => console.error('Failed to write to Supernote sync log:', error));
 		this.showSyncResult(result);
 	}
 
 	private async reportSyncFailure(error: unknown): Promise<void> {
-		await reportSyncFailure(this.app, this.settings.syncFolder, this.getActiveSyncEngineId(), error, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
+		const engine = this.syncCoordinator.getActiveEngine();
+		await reportSyncFailure(this.app, this.settings.syncFolder, engine.id, error, engine.name, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
 			.catch((logError) => console.error('Failed to write to Supernote sync log:', logError));
 	}
 

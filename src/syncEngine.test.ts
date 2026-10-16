@@ -223,14 +223,14 @@ describe('shared sync reporting', () => {
     it('creates the IP log on a clean run and appends only once for each reportable run', async () => {
         const vault = makeVault();
         const log = `${SYNC_FOLDER}/Sync Log.md`;
-        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'));
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 'Direct IP');
         expect(vault.readText(log)).toBe('');
         const append = vi.spyOn(vault.vault, 'append');
         await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
             { kind: 'protected', item: 'Mirror/edited.note', message: 'edited' },
             { kind: 'failure', item: '/failed.note', message: 'timed out' },
-        ]));
-        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'));
+        ]), 'Direct IP');
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'), 'Direct IP');
         expect(append).toHaveBeenCalledTimes(2);
         expect(vault.readText(log)).toContain('Skipped (edited locally since last sync): `Mirror/edited.note`');
         expect(vault.readText(log)).toContain('Failed: `/failed.note` — timed out');
@@ -251,8 +251,8 @@ describe('shared sync reporting', () => {
                 { kind: 'failure', item: failedPath, message: secret },
                 { kind: 'warning', message: secret },
             ]), removed: 1,
-        });
-        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error(secret));
+        }, 'Supernote cloud');
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error(secret), 'Supernote cloud');
         const text = vault.readText(`${SYNC_FOLDER}/Sync Log.md`);
         expect(text).toContain('(Supernote cloud)');
         expect(text).toContain('1 skipped (locally edited), 2 failed, 2 warnings');
@@ -270,7 +270,7 @@ describe('shared sync reporting', () => {
         vault.vault.append = vi.fn().mockRejectedValue(new Error('disk full'));
         await expect(reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
             { kind: 'protected', item: 'edited.note', message: 'edited' },
-        ]))).rejects.toThrow('disk full');
+        ]), 'Direct IP')).rejects.toThrow('disk full');
         expect(vault.readText(`${SYNC_FOLDER}/Sync Log.md`)).toBe('');
     });
 
@@ -278,13 +278,13 @@ describe('shared sync reporting', () => {
         const vault = makeVault();
         const log = `${SYNC_FOLDER}/Sync Log.md`;
         vault.seedFile(log, '# Notes\nKeep this preamble.\n\n## older IP\nold\n\n## user heading\nuser text\n\n');
-        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 2);
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 'Direct IP', 2);
         expect(vault.readText(log)).toContain('## older IP');
         await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
             { kind: 'protected', item: 'edited.note', message: 'edited' },
-        ]), 2);
+        ]), 'Direct IP', 2);
         expect(vault.readText(log)).not.toContain('## older IP');
-        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('secret'), 2);
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('secret'), 'Supernote cloud', 2);
         expect(vault.readText(log)).toMatch(/^# Notes\nKeep this preamble\.\n\n## 20/);
         expect(vault.readText(log)).not.toContain('## user heading');
         expect(vault.readText(log)).toContain('edited.note');
@@ -307,14 +307,14 @@ describe('shared sync reporting', () => {
     it('does not create or write a log while disabled for either engine or failure path', async () => {
         const vault = makeVault();
         const log = `${SYNC_FOLDER}/Sync Log.md`;
-        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 8, false);
-        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('failed'), 8, false);
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 'Direct IP', 8, false);
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('failed'), 'Supernote cloud', 8, false);
         await reportSyncResult(vault.app, SYNC_FOLDER, result('supernote-cloud', [
             { kind: 'protected', item: 'edited.note', message: 'edited' },
-        ]), 8, false);
+        ]), 'Supernote cloud', 8, false);
         expect(vault.exists(log)).toBe(false);
         vault.seedFile(log, '## existing\nRetain me.\n');
-        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('failed'), 8, false);
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('failed'), 'Direct IP', 8, false);
         expect(vault.readText(log)).toBe('## existing\nRetain me.\n');
     });
 
@@ -328,7 +328,7 @@ describe('shared sync reporting', () => {
         const log = `${SYNC_FOLDER}/Sync Log.md`;
         vault.seedFile(log, '## first\nA\n## second\nB\n');
         vault.vault.process = vi.fn().mockRejectedValue(new Error('disk full'));
-        await expect(reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'), 2))
+        await expect(reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'), 'Direct IP', 2))
             .rejects.toThrow('disk full');
         expect(vault.readText(log)).toBe('## first\nA\n## second\nB\n');
     });

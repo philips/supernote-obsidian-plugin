@@ -25,7 +25,7 @@ export class CloudSignInRequiredError extends Error {
 
 export class CloudSyncEngine implements SyncEngine {
     readonly id = 'supernote-cloud' as const;
-    readonly name = 'Supernote Cloud';
+    readonly name = 'Supernote cloud';
 
     constructor(
         private readonly app: App,

@@ -5,6 +5,7 @@ import {
     formatSyncSummary,
     SingleEngineSyncCoordinator,
     SyncEngine,
+    SyncEngineId,
     SyncExecutionState,
     SyncExecutionStateStore,
     SyncRunResult,
@@ -241,6 +242,18 @@ describe('SingleEngineSyncCoordinator', () => {
         expect(cloud.run).toHaveBeenCalledOnce();
         expect(ip.run).not.toHaveBeenCalled();
         expect(syncResult?.engineId).toBe('supernote-cloud');
+    });
+
+    it('lists registered engines and looks them up without changing the active engine', () => {
+        const ip = engine('ip-device');
+        const cloud = engine('supernote-cloud');
+        const coordinator = new SingleEngineSyncCoordinator(
+            { 'ip-device': ip, 'supernote-cloud': cloud }, stateStore().store,
+        );
+        expect(coordinator.getSyncEngines()).toEqual([ip, cloud]);
+        expect(coordinator.getSyncEngine('supernote-cloud')).toBe(cloud);
+        expect(coordinator.getActiveEngine()).toBe(ip);
+        expect(() => coordinator.getSyncEngine('missing' as SyncEngineId)).toThrow('Sync engine is unavailable: missing');
     });
 
     it('rejects an unready engine before dispatch', async () => {

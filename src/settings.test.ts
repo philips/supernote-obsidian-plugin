@@ -1,6 +1,6 @@
 import type { Setting } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_SETTINGS, SupernoteSettingTab, SYNC_ENGINE_LABELS } from './settings';
+import { DEFAULT_SETTINGS, SupernoteSettingTab } from './settings';
 import { trimSyncLog } from './syncReporting';
 
 vi.mock('obsidian', () => ({ PluginSettingTab: class PluginSettingTab {
@@ -11,12 +11,49 @@ vi.mock('./main', () => ({ default: class SupernotePlugin {} }));
 vi.mock('./customDictionary', () => ({ CUSTOM_DICTIONARY_DEFAULT_SETTINGS: {} }));
 vi.mock('./syncReporting', () => ({ trimSyncLog: vi.fn(async () => {}) }));
 
+const engines = [
+    { id: 'ip-device', name: 'Direct IP' },
+    { id: 'supernote-cloud', name: 'Supernote cloud' },
+] as const;
+const engineRegistry = {
+    getSyncEngines: () => engines,
+    getSyncEngine: (id: string) => engines.find((engine) => engine.id === id),
+};
+
+describe('sync engine settings', () => {
+    it('uses registered names for the dropdown and engine sections', () => {
+        const renamed = [
+            { id: 'ip-device', name: 'Renamed IP' },
+            { id: 'supernote-cloud', name: 'Renamed cloud' },
+        ];
+        const tab = new SupernoteSettingTab({} as never, {
+            getSyncEngines: () => renamed,
+            getSyncEngine: (id: string) => renamed.find((engine) => engine.id === id),
+            getActiveSyncEngineId: () => 'ip-device',
+        } as never);
+        const groups = tab.getSettingDefinitions().filter((item) => 'heading' in item);
+        expect(groups.map((group) => 'heading' in group && group.heading)).toContain('Renamed IP');
+        expect(groups.map((group) => 'heading' in group && group.heading)).toContain('Renamed cloud');
+        const sync = groups.find((item) => 'heading' in item && item.heading === 'Sync');
+        if (!sync || !('items' in sync)) throw new Error('Sync group missing');
+        const engineSetting = sync.items.find((item) => 'name' in item && item.name === 'Sync engine');
+        if (!engineSetting || !('render' in engineSetting)) throw new Error('Sync engine setting missing');
+        const dropdown = { addOptions: vi.fn().mockReturnThis(), setValue: vi.fn().mockReturnThis(), onChange: vi.fn() };
+        engineSetting.render({
+            setDesc: vi.fn().mockReturnThis(),
+            addDropdown: (configure: (component: typeof dropdown) => void) => configure(dropdown),
+        } as unknown as Setting);
+        expect(dropdown.addOptions).toHaveBeenCalledWith({ 'ip-device': 'Renamed IP', 'supernote-cloud': 'Renamed cloud' });
+        expect(dropdown.setValue).toHaveBeenCalledWith('ip-device');
+    });
+});
+
 describe('sync log settings', () => {
     it('defaults on, preserves the count while disabled, and trims on resumption and count changes', async () => {
         const settings = { ...DEFAULT_SETTINGS };
         const saveSettings = vi.fn(async () => {});
         const app = {} as never;
-        const tab = new SupernoteSettingTab(app, { settings, saveSettings } as never);
+        const tab = new SupernoteSettingTab(app, { settings, saveSettings, ...engineRegistry } as never);
         const update = vi.fn();
         Object.assign(tab, { update });
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Sync');
@@ -78,7 +115,7 @@ describe('note viewer settings', () => {
         const saveSettings = vi.fn(async () => {});
         const loadedViewerEnabled = settings.noteViewerEnabled;
         const tab = new SupernoteSettingTab({} as never, {
-            settings, saveSettings,
+            settings, saveSettings, ...engineRegistry,
             isNoteViewerReloadRequired: () => settings.noteViewerEnabled !== loadedViewerEnabled,
         } as never);
         const update = vi.fn();
@@ -86,7 +123,6 @@ describe('note viewer settings', () => {
         const definitions = tab.getSettingDefinitions();
         const group = definitions.find((item) => 'heading' in item && item.heading === 'Note viewer');
         if (!group || !('items' in group)) throw new Error('Note viewer group missing');
-        expect(SYNC_ENGINE_LABELS).toMatchObject({ 'ip-device': 'Direct IP', 'supernote-cloud': 'Supernote cloud' });
         expect(definitions.some((item) => 'heading' in item && item.heading === 'Supernote cloud')).toBe(true);
 
         expect(group.items.map((item) => 'name' in item ? item.name : '')).toEqual([
@@ -139,7 +175,7 @@ describe('Cloud session settings', () => {
     ])('shows the appropriate actions for %s', async (status, expectedButtons) => {
         const cloudSessionUsername = vi.fn(async () => 'Example user');
         const tab = new SupernoteSettingTab({} as never, {
-            cloudSessionStatus: () => status,
+            ...engineRegistry, cloudSessionStatus: () => status,
             cloudSessionUsername,
         } as never);
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Supernote cloud');
@@ -177,7 +213,7 @@ describe('Cloud session settings', () => {
         const cloudSessionUsername = vi.fn(() => new Promise<string>((resolve) => { resolveUsername = resolve; }));
         let status = 'Signed in';
         const tab = new SupernoteSettingTab({} as never, {
-            cloudSessionStatus: () => status, cloudSessionUsername,
+            ...engineRegistry, cloudSessionStatus: () => status, cloudSessionUsername,
         } as never);
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Supernote cloud');
         if (!group || !('items' in group)) throw new Error('Supernote cloud group missing');

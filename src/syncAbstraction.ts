@@ -76,6 +76,8 @@ export interface SyncExecutionStateStore {
 }
 
 export interface SyncCoordinator {
+    getSyncEngines(): SyncEngine[];
+    getSyncEngine(engineId: SyncEngineId): SyncEngine;
     getActiveEngine(): SyncEngine;
     getActiveEngineId(): SyncEngineId;
     setActiveEngine(engineId: SyncEngineId): Promise<void>;
@@ -104,12 +106,20 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
         }
     }
 
-    getActiveEngine(): SyncEngine {
-        const engine = this.engines[this.executionState.activeSyncEngine];
+    getSyncEngines(): SyncEngine[] {
+        return Object.values(this.engines).filter((engine): engine is SyncEngine => engine !== undefined);
+    }
+
+    getSyncEngine(engineId: SyncEngineId): SyncEngine {
+        const engine = this.engines[engineId];
         if (!engine) {
-            throw new Error(`Sync engine is unavailable: ${this.executionState.activeSyncEngine}`);
+            throw new Error(`Sync engine is unavailable: ${engineId}`);
         }
         return engine;
+    }
+
+    getActiveEngine(): SyncEngine {
+        return this.getSyncEngine(this.executionState.activeSyncEngine);
     }
 
     getActiveEngineId(): SyncEngineId {
