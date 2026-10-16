@@ -4,7 +4,9 @@
 shared automatic scheduling, and Cloud cleanup are implemented. The confirmed
 Cloud account-change flow is implemented; live account-switch validation remains
 pending. IP migration to the coordinator-owned shared manifest and an explicit
-shared sync-folder change workflow remain outstanding. Updated October 16, 2026.
+shared sync-folder change workflow remain outstanding. Sync implementation files
+are now organized under `src/sync/`, with shared, `directIP/`, and
+`supernoteCloud/` modules. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -39,10 +41,13 @@ criteria for both engines and root changes live in
   [`cloud-sync-plan.md`](cloud-sync-plan.md).
 - Kept automatic sync disabled by default. The coordinator supports scheduled
   triggers through a shared interval poller.
+- Organized sync implementation and co-located tests under `src/sync/`,
+  separating shared coordination and manifest code from `directIP/` and
+  `supernoteCloud/` engine code.
 
 ## Outstanding
 
-### Shared manifest and sync-folder change (next work block)
+### Shared manifest and sync-folder change (recommended next sprint)
 
 - Follow [`shared-manifest-plan.md`](shared-manifest-plan.md) for the
   coordinator-owned lifecycle, safe `noteSyncState` migration, IP and Cloud
@@ -54,6 +59,8 @@ criteria for both engines and root changes live in
 - The root-change operation is shared by both engines. Implement and verify its
   confirmation, conflict checks, and interrupted-change handling separately from
   ordinary per-file crash recovery.
+- The sprint handoff and ordered acceptance checklist are in
+  [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
 
 ### Open scope decisions
 

@@ -14,7 +14,8 @@ import {
 import type { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
 import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
 import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
-import { loadMirrorManifest } from '../sharedMirrorManifestStore';
+import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { mergeIpSyncManifest, SharedMirrorManifest, toIpSyncManifest } from '../sharedMirrorManifest';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
 // concurrent creator (createFolder throwing because another call already
@@ -74,17 +75,21 @@ export class IpSyncEngine implements SyncEngine {
 
     async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
         let result: DeviceSyncResult;
+        const legacyManifest = this.settings.noteSyncState;
         try {
             const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
-            if (await storage.read('primary') !== null || await storage.read('backup') !== null) {
-                const loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);
-                if (loaded.manifest.records && Object.values(loaded.manifest.records)
-                    .some((record) => record.source.engineId === 'supernote-cloud')) {
-                    throw new Error('IP sync cannot run over Cloud-owned mirror files until shared IP history is integrated');
-                }
+            const loaded = await loadMirrorManifest(storage, legacyManifest);
+            if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before sync');
+            this.settings.noteSyncState = toIpSyncManifest(loaded.manifest);
+            result = await runDeviceSync(this.app, this.settings, loaded.manifest);
+            const merged = mergeIpSyncManifest(loaded.manifest, this.settings.noteSyncState);
+            if (JSON.stringify(merged) !== JSON.stringify(loaded.manifest)) {
+                await saveMirrorManifest(storage, loaded, merged);
             }
-            result = await runDeviceSync(this.app, this.settings, this.saveSettings);
+            this.settings.noteSyncState = {};
+            await this.saveSettings();
         } catch (err) {
+            this.settings.noteSyncState = legacyManifest;
             throw err instanceof Error ? err : new Error(String(err));
         }
         return {
@@ -136,7 +141,7 @@ async function currentHash(app: App, vaultPath: string): Promise<string | null> 
 export async function runDeviceSync(
     app: App,
     settings: SupernotePluginSettings,
-    saveSettings: () => Promise<void>,
+    sharedManifest: SharedMirrorManifest,
 ): Promise<DeviceSyncResult> {
     const ip = settings.directConnectIP;
     if (!ip) {
@@ -212,16 +217,19 @@ export async function runDeviceSync(
             const buffer = await response.arrayBuffer();
             const newHash = hashBytes(new Uint8Array(buffer));
 
-            const decision = decideWrite(await currentHash(app, vaultPath), settings.noteSyncState[listing.uri], newHash);
+            const existingHash = await currentHash(app, vaultPath);
+            const decision = decideWrite(existingHash, sharedManifest.records[vaultPath], newHash);
 
             if (decision === 'skip-conflict') {
                 result.skippedConflicts.push(vaultPath);
                 continue;
             }
 
-            const parentFolder = vaultPath.includes('/') ? vaultPath.slice(0, vaultPath.lastIndexOf('/')) : '';
-            await ensureFolder(app, parentFolder);
-            await writeBinaryAt(app, vaultPath, buffer);
+            if (existingHash !== newHash) {
+                const parentFolder = vaultPath.includes('/') ? vaultPath.slice(0, vaultPath.lastIndexOf('/')) : '';
+                await ensureFolder(app, parentFolder);
+                await writeBinaryAt(app, vaultPath, buffer);
+            }
 
             settings.noteSyncState[listing.uri] = buildSyncRecord(listing, vaultPath, newHash);
             result.synced++;
@@ -255,8 +263,6 @@ export async function runDeviceSync(
             console.error(`Failed to check ${record.vaultPath} for local edits:`, err);
         }
     }
-
-    await saveSettings();
 
     return result;
 }

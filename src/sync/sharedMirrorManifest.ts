@@ -60,6 +60,38 @@ export function fromIpSyncManifest(legacy: SyncManifest): SharedMirrorManifest {
     return { version: 1, cloudAccountFingerprint: null, records };
 }
 
+export function toIpSyncManifest(manifest: SharedMirrorManifest): SyncManifest {
+    const records: SyncManifest = {};
+    for (const [vaultPath, record] of Object.entries(manifest.records)) {
+        if (record.source.engineId !== 'ip-device') continue;
+        if (Object.hasOwn(records, record.source.deviceUri)) {
+            throw new Error('Shared mirror manifest contains duplicate IP sources');
+        }
+        records[record.source.deviceUri] = {
+            deviceUri: record.source.deviceUri,
+            deviceDate: record.source.deviceDate,
+            deviceSize: record.source.deviceSize,
+            vaultPath,
+            contentHash: record.contentHash,
+            lastSyncedAt: '',
+        };
+    }
+    return records;
+}
+
+export function mergeIpSyncManifest(
+    manifest: SharedMirrorManifest,
+    ipManifest: SyncManifest,
+): SharedMirrorManifest {
+    const updatedIp = fromIpSyncManifest(ipManifest);
+    const records = Object.fromEntries(Object.entries(manifest.records)
+        .filter(([, record]) => record.source.engineId !== 'ip-device'));
+    for (const [path, record] of Object.entries(updatedIp.records)) {
+        records[path] = record;
+    }
+    return { ...manifest, records };
+}
+
 export function cloudPlanningRecords(manifest: SharedMirrorManifest): Record<string, CloudMirrorRecord> {
     return Object.fromEntries(Object.entries(manifest.records).map(([path, record]) => [
         path,

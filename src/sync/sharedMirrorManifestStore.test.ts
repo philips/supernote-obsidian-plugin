@@ -28,6 +28,46 @@ describe('shared mirror manifest persistence', () => {
             .rejects.toThrow('changed since it was loaded');
     });
 
+    it('adds non-conflicting legacy IP history without replacing shared records or Cloud binding', async () => {
+        const store = storage();
+        const current = await loadMirrorManifest(store, {});
+        const cloudRecord = {
+            contentHash: 'cloud-hash',
+            source: { engineId: 'supernote-cloud' as const, md5: '0123456789abcdef0123456789abcdef' },
+        };
+        const bound = await saveMirrorManifest(store, current, {
+            ...current.manifest,
+            cloudAccountFingerprint: 'v1:synthetic',
+            records: { 'Mirror/shared.note': cloudRecord },
+        });
+        const legacyRecord = buildSyncRecord({ uri: '/Legacy.note', date: 'today', size: 3 },
+            'Mirror/legacy.note', 'ip-hash');
+
+        const migrated = await loadMirrorManifest(store, {
+            [legacyRecord.deviceUri]: legacyRecord,
+            '/Collision.note': buildSyncRecord({ uri: '/Collision.note', date: 'today', size: 4 },
+                'Mirror/shared.note', 'legacy-hash'),
+        });
+
+        expect(migrated.manifest.cloudAccountFingerprint).toBe('v1:synthetic');
+        expect(migrated.manifest.records['Mirror/shared.note']).toEqual(cloudRecord);
+        expect(migrated.manifest.records['Mirror/legacy.note'].source).toMatchObject({ engineId: 'ip-device' });
+        expect(migrated.revision).toBe(bound.revision + 1);
+    });
+
+    it('does not migrate legacy history during pending Cloud account recovery', async () => {
+        const store = storage();
+        const pending = {
+            version: 1 as const, cloudAccountFingerprint: 'v1:synthetic', records: {},
+            accountChange: { targetFingerprint: `v1:${'a'.repeat(64)}`, pendingPath: null, protectedPaths: [] },
+        };
+        const saved = await saveMirrorManifest(store, null, pending);
+        const legacy = buildSyncRecord({ uri: '/Legacy.note', date: 'today', size: 3 }, 'Mirror/Legacy.note', 'hash');
+
+        expect(await loadMirrorManifest(store, { [legacy.deviceUri]: legacy })).toEqual(saved);
+        expect(await loadMirrorManifest(store, {})).toEqual(saved);
+    });
+
     it('recovers the last valid revision when a later slot write is torn', async () => {
         const store = storage();
         const first = await loadMirrorManifest(store, {});

@@ -100,7 +100,7 @@ The command ID is a compatibility surface because users can bind hotkeys to it.
 A refactor should preserve `sync-notes-from-device` even if the visible command
 name or internal controller changes.
 
-#### `src/syncEngine.ts`
+#### `src/sync/directIP/syncEngine.ts`
 
 This is the Obsidian-facing orchestration for one IP sync run.
 
@@ -127,7 +127,7 @@ the rest of the run. Failures that occur before a per-file result can be
 produced, such as an unreachable device during the initial tree scan, escape to
 `main.ts` for top-level reporting.
 
-#### `src/deviceSync.ts`
+#### `src/sync/directIP/deviceSync.ts`
 
 This file owns the pure, transport-independent policy for the current engine.
 
@@ -151,7 +151,7 @@ Keeping this policy independent of Obsidian is valuable and should be preserved.
 It allows the safety and change-detection rules to be tested without a vault or
 UI.
 
-#### `src/FileListModal.ts`
+#### `src/sync/directIP/FileListModal.ts`
 
 The sync engine reuses device browsing functions from this file:
 
@@ -169,7 +169,7 @@ The sync engine reuses device browsing functions from this file:
 The modal classes in this file are not themselves part of sync. Only the
 exported listing and scan functions are shared with the engine.
 
-#### `src/deviceFetch.ts`
+#### `src/sync/directIP/deviceFetch.ts`
 
 This file implements the IP transport used by the engine and other device
 features.
@@ -185,7 +185,7 @@ features.
 This transport is shared infrastructure rather than sync policy. A future non-IP
 engine should not be required to depend on it.
 
-#### `src/devicePath.ts`
+#### `src/sync/directIP/devicePath.ts`
 
 This file normalizes, decodes, and encodes device path segments. It handles
 percent-encoding, Unicode normalization, non-breaking spaces, and the Supernote
@@ -290,14 +290,15 @@ initially; changing its persistence boundary is separate hardening work.
 
 ### Tests and verification surfaces
 
-- `src/deviceSync.test.ts` tests filters, planning, deterministic paths,
-  hashing, overwrite safety, manifest records, and log formatting.
-- `src/syncEngine.test.ts` tests orchestration against an in-memory vault,
-  including restoration of locally deleted files, local-edit conflicts, mixed
-  result buckets, and per-file fault isolation.
-- `src/FileListModal.test.ts`, `src/deviceFetch.test.ts`, and
-  `src/devicePath.test.ts` cover listing trust, transport behavior, request-path
-  security, and path normalization.
+- `src/sync/directIP/deviceSync.test.ts` tests filters, planning, deterministic
+  paths, hashing, overwrite safety, manifest records, and log formatting.
+- `src/sync/directIP/syncEngine.test.ts` tests orchestration against an
+  in-memory vault, including restoration of locally deleted files, local-edit
+  conflicts, mixed result buckets, and per-file fault isolation.
+- `src/sync/directIP/FileListModal.test.ts`,
+  `src/sync/directIP/deviceFetch.test.ts`, and
+  `src/sync/directIP/devicePath.test.ts` cover listing trust, transport
+  behavior, request-path security, and path normalization.
 - `scripts/test-device-sync.mjs` and `scripts/test-device-sync.entry.ts` provide
   a real-device smoke test that exercises upload, listing, filtering, download,
   and byte-for-byte mirroring through the actual implementation.
@@ -688,8 +689,8 @@ account change remains a product decision; current implementation retains it.
 
 ### Shared path and file-type allowlists
 
-Move the transport-neutral filter logic from `src/deviceSync.ts` into a shared
-module such as `src/sync/pathFilters.ts`:
+Move the transport-neutral filter logic from `src/sync/directIP/deviceSync.ts`
+into a shared module such as `src/sync/pathFilters.ts`:
 
 - `parsePathFilters(raw)` keeps comma/newline input.
 - `*` matches within one path segment.
@@ -771,18 +772,19 @@ only when `ip-device` is active. A new transport-neutral command such as
 The Cloud engine is implemented inside this repository with its own names and
 types. Suggested files:
 
-- `src/cloudSync/cloudAuth.ts` - login, verification, logout, and local token
-  state.
-- `src/cloudSync/cloudClient.ts` - the minimum read-only Supernote Cloud HTTP
-  operations: authenticate, list directories, obtain download metadata, and
-  download bytes.
-- `src/cloudSync/cloudTypes.ts` - independently defined response and domain
-  types.
+- `src/sync/supernoteCloud/cloudAuth.ts` - login, verification, logout, and
+  local token state.
+- `src/sync/supernoteCloud/cloudClient.ts` - the minimum read-only Supernote
+  Cloud HTTP operations: authenticate, list directories, obtain download
+  metadata, and download bytes.
+- `src/sync/supernoteCloud/cloudTypes.ts` - independently defined response and
+  domain types.
 - `src/sync/syncManifest.ts` - shared versioned manifest, serialized writes, and
   transaction/recovery behavior used by both engines.
-- `src/cloudSync/cloudSyncEngine.ts` - recursive inventory, filtering, planning,
-  download, safe cleanup, and normalized results.
-- `src/cloudSync/cloudSyncEngine.test.ts` and focused client/manifest tests.
+- `src/sync/supernoteCloud/cloudSyncEngine.ts` - recursive inventory, filtering,
+  planning, download, safe cleanup, and normalized results.
+- `src/sync/supernoteCloud/cloudSyncEngine.test.ts` and focused client/manifest
+  tests.
 
 #### Authentication workflow
 

@@ -9,7 +9,7 @@ import type { DeviceNoteListing, SyncManifest, SyncedNoteRecord } from './device
 import type { SupernotePluginSettings } from '../../settings';
 import { ALL_FILE_EXTENSIONS } from '../syncFilters';
 import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
-import { saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
 import { reportSyncFailure, reportSyncResult, retainSyncLogEntries, trimSyncLog } from '../syncReporting';
 import type { SyncRunResult } from '../syncAbstraction';
 
@@ -77,7 +77,10 @@ function makeVault() {
         },
         async modifyBinary(file: TFile, buffer: ArrayBuffer) {
             const entry = entries.get(file.path);
-            if (entry?.kind === 'file') entry.bytes = new Uint8Array(buffer);
+            if (entry?.kind === 'file') {
+                entry.bytes = new Uint8Array(buffer);
+                entry.text = decoder.decode(entry.bytes);
+            }
         },
         async readBinary(file: TFile) {
             const entry = entries.get(file.path);
@@ -167,21 +170,145 @@ function vaultPathFor(name: string): string {
     return `${SYNC_FOLDER}/${name}`;
 }
 
-it('blocks an IP run before device scanning when Cloud owns a shared destination', async () => {
-    const { app } = makeVault();
+it('syncs IP files alongside Cloud history and replaces an unchanged Cloud-owned destination', async () => {
+    const vault = makeVault();
+    const cloudPath = vaultPathFor('shared.note');
+    const cloudBytes = 'cloud version';
+    const cloudHash = hashBytes(new TextEncoder().encode(cloudBytes));
+    const cloudOnlyPath = vaultPathFor('cloud-only.note');
     const settings = settingsWith({});
-    await saveMirrorManifest(new ObsidianMirrorManifestStorage(app, settings.syncFolder), null, {
+    vault.seedFile(cloudPath, cloudBytes);
+    const storage = new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder);
+    await saveMirrorManifest(storage, null, {
         version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
-            [`${SYNC_FOLDER}/Note/Test.note`]: {
-                contentHash: 'synthetic-hash',
+            [cloudPath]: {
+                contentHash: cloudHash,
                 source: { engineId: 'supernote-cloud', md5: '0'.repeat(32) },
+            },
+            [cloudOnlyPath]: {
+                contentHash: 'cloud-only-hash',
+                source: { engineId: 'supernote-cloud', md5: '1'.repeat(32) },
             },
         },
     });
+    const shared = deviceFile('shared.note', 'device version');
+    const fresh = deviceFile('fresh.note', 'new device file');
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([shared, fresh]);
+    mockDeviceContents(new Map([
+        ['/shared.note', 'device version'],
+        ['/fresh.note', 'new device file'],
+    ]));
+
+    const result = await new IpSyncEngine(vault.app, settings, async () => {}).run({
+        kind: 'manual', commandId: 'sync-now',
+    });
+    const manifest = (await loadMirrorManifest(storage, {})).manifest;
+
+    expect(result.synced).toBe(2);
+    expect(result.issues).toEqual([]);
+    expect(vault.readText(cloudPath)).toBe('device version');
+    expect(vault.readText(vaultPathFor('fresh.note'))).toBe('new device file');
+    expect(manifest.cloudAccountFingerprint).toBe('v1:synthetic');
+    expect(manifest.records[cloudPath]).toMatchObject({
+        contentHash: hashBytes(new TextEncoder().encode('device version')),
+        source: { engineId: 'ip-device', deviceUri: '/shared.note' },
+    });
+    expect(manifest.records[cloudOnlyPath].source.engineId).toBe('supernote-cloud');
+    expect(manifest.records[vaultPathFor('fresh.note')].source.engineId).toBe('ip-device');
+    expect(settings.noteSyncState).toEqual({});
+});
+
+it('restores a missing Cloud-owned file with IP bytes and records the new baseline', async () => {
+    const vault = makeVault();
+    const path = vaultPathFor('shared.note');
+    const settings = settingsWith({});
+    const storage = new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder);
+    await saveMirrorManifest(storage, null, {
+        version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
+            [path]: { contentHash: 'old-cloud-hash', source: { engineId: 'supernote-cloud', md5: '0'.repeat(32) } },
+        },
+    });
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([deviceFile('shared.note', 'device version')]);
+    mockDeviceContents(new Map([['/shared.note', 'device version']]));
+
+    const result = await runIpSync(vault.app, settings);
+    const manifest = (await loadMirrorManifest(storage, {})).manifest;
+
+    expect(result.synced).toBe(1);
+    expect(vault.readText(path)).toBe('device version');
+    expect(manifest.records[path]).toMatchObject({
+        contentHash: hashBytes(new TextEncoder().encode('device version')),
+        source: { engineId: 'ip-device', deviceUri: '/shared.note' },
+    });
+    expect(manifest.cloudAccountFingerprint).toBe('v1:synthetic');
+});
+
+it('adopts identical Cloud-owned bytes as an IP source without rewriting the vault file', async () => {
+    const vault = makeVault();
+    const path = vaultPathFor('shared.note');
+    const bytes = 'shared version';
+    const settings = settingsWith({});
+    vault.seedFile(path, bytes);
+    const storage = new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder);
+    await saveMirrorManifest(storage, null, {
+        version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
+            [path]: { contentHash: hashBytes(new TextEncoder().encode(bytes)),
+                source: { engineId: 'supernote-cloud', md5: '0'.repeat(32) } },
+        },
+    });
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([deviceFile('shared.note', bytes)]);
+    mockDeviceContents(new Map([['/shared.note', bytes]]));
+    const modifyBinary = vi.spyOn(vault.vault, 'modifyBinary');
+
+    const result = await runIpSync(vault.app, settings);
+
+    expect(result.issues).toEqual([]);
+    expect(modifyBinary).not.toHaveBeenCalled();
+    expect((await loadMirrorManifest(storage, {})).manifest.records[path].source).toMatchObject({
+        engineId: 'ip-device', deviceUri: '/shared.note',
+    });
+});
+
+it('protects a locally edited Cloud-owned destination from IP writes', async () => {
+    const vault = makeVault();
+    const path = vaultPathFor('shared.note');
+    const settings = settingsWith({});
+    vault.seedFile(path, 'local edit');
+    const storage = new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder);
+    await saveMirrorManifest(storage, null, {
+        version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
+            [path]: { contentHash: hashBytes(new TextEncoder().encode('old cloud bytes')),
+                source: { engineId: 'supernote-cloud', md5: '0'.repeat(32) } },
+        },
+    });
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([deviceFile('shared.note', 'device version')]);
+    mockDeviceContents(new Map([['/shared.note', 'device version']]));
+
+    const result = await runIpSync(vault.app, settings);
+
+    expect(result.issues).toContainEqual({
+        kind: 'protected', item: path, message: 'Skipped because the vault copy was edited locally',
+    });
+    expect(vault.readText(path)).toBe('local edit');
+    expect((await loadMirrorManifest(storage, {})).manifest.records[path].source.engineId).toBe('supernote-cloud');
+});
+
+it('does not scan or change files while a Cloud account change is pending', async () => {
+    const vault = makeVault();
+    const legacy = manifestRecord(deviceFile('legacy.note', 'legacy'), vaultPathFor('legacy.note'), 'legacy');
+    const settings = settingsWith({ [legacy.deviceUri]: legacy });
+    const storage = new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder);
+    const pending = {
+        version: 1 as const, cloudAccountFingerprint: 'v1:synthetic', records: {},
+        accountChange: { targetFingerprint: `v1:${'a'.repeat(64)}`, pendingPath: null, protectedPaths: [] },
+    };
+    await saveMirrorManifest(storage, null, pending);
     vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockClear();
-    await expect(new IpSyncEngine(app, settings, vi.fn()).run({ kind: 'manual', commandId: 'sync-now' }))
-        .rejects.toThrow('Cloud-owned mirror files');
+
+    await expect(runIpSync(vault.app, settings)).rejects.toThrow('Cloud account change must finish before sync');
     expect(scanDeviceSupernoteTreeWithExtensions).not.toHaveBeenCalled();
+    expect((await loadMirrorManifest(storage, {})).manifest).toEqual(pending);
+    expect(settings.noteSyncState).toEqual({ [legacy.deviceUri]: legacy });
 });
 
 /** Makes fetchFromDevice hand out per-URI content and records requested URIs. */
@@ -370,7 +497,11 @@ describe('runDeviceSync: restoring locally deleted files (PR #258)', () => {
         expect(vault.readText(vaultPathFor('foo.note'))).toBe('device content');
         expect(result.synced).toBe(1);
         expect(result.unchanged).toBe(0);
-        expect(settings.noteSyncState['/foo.note'].contentHash).toBe(hashBytes(new TextEncoder().encode('device content')));
+        const manifest = (await loadMirrorManifest(
+            new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder), {},
+        )).manifest;
+        expect(manifest.records[vaultPathFor('foo.note')].contentHash)
+            .toBe(hashBytes(new TextEncoder().encode('device content')));
     });
 
     it('recreates missing parent folders when restoring a nested deleted file', async () => {

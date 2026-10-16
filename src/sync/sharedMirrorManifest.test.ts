@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildSyncRecord } from './directIP/deviceSync';
-import { cloudAccountFingerprint, cloudPlanningRecords, fromIpSyncManifest, MIRROR_METADATA_DIRECTORY } from './sharedMirrorManifest';
+import {
+    cloudAccountFingerprint,
+    cloudPlanningRecords,
+    fromIpSyncManifest,
+    mergeIpSyncManifest,
+    MIRROR_METADATA_DIRECTORY,
+    toIpSyncManifest,
+} from './sharedMirrorManifest';
 
 describe('shared mirror manifest', () => {
     it('derives a stable versioned account fingerprint without exposing the raw ID', () => {
@@ -27,7 +34,38 @@ describe('shared mirror manifest', () => {
         });
         expect(cloudPlanningRecords(manifest)['Mirror/Note/Sample.note'])
             .toEqual({ contentHash: 'written-hash', cloudMd5: undefined });
+        expect(toIpSyncManifest(manifest)['/Note/Sample.note']).toMatchObject({
+            deviceDate: '2026-10-13', deviceSize: 4, vaultPath: 'Mirror/Note/Sample.note',
+            contentHash: 'written-hash',
+        });
         expect(MIRROR_METADATA_DIRECTORY).toBe('.supernote-sync');
+    });
+
+    it('merges successful IP updates while retaining Cloud binding and unrelated Cloud records', () => {
+        const ipRecord = buildSyncRecord({ uri: '/Note/Sample.note', date: 'today', size: 4 },
+            'Mirror/Note/Sample.note', 'ip-hash');
+        const manifest = {
+            version: 1 as const,
+            cloudAccountFingerprint: 'v1:synthetic',
+            records: {
+                'Mirror/Note/Sample.note': {
+                    contentHash: 'cloud-hash',
+                    source: { engineId: 'supernote-cloud' as const, md5: '0'.repeat(32) },
+                },
+                'Mirror/Cloud.note': {
+                    contentHash: 'cloud-only',
+                    source: { engineId: 'supernote-cloud' as const, md5: '1'.repeat(32) },
+                },
+            },
+        };
+
+        const merged = mergeIpSyncManifest(manifest, { [ipRecord.deviceUri]: ipRecord });
+
+        expect(merged.cloudAccountFingerprint).toBe('v1:synthetic');
+        expect(merged.records['Mirror/Note/Sample.note']).toMatchObject({
+            contentHash: 'ip-hash', source: { engineId: 'ip-device', deviceUri: '/Note/Sample.note' },
+        });
+        expect(merged.records['Mirror/Cloud.note']).toEqual(manifest.records['Mirror/Cloud.note']);
     });
 
     it('refuses to merge two IP sources into one destination', () => {

@@ -215,7 +215,7 @@ export type WriteDecision = 'create' | 'overwrite' | 'skip-conflict';
 //     re-mirror.
 export function decideWrite(
     existingContentHash: string | null,
-    record: SyncedNoteRecord | undefined,
+    record: Pick<SyncedNoteRecord, 'contentHash'> | undefined,
     incomingContentHash?: string,
 ): WriteDecision {
     if (existingContentHash === null) return 'create';

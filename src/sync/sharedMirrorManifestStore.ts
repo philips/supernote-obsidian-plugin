@@ -102,10 +102,22 @@ export async function loadMirrorManifest(
     storage: MirrorManifestStorage,
     legacy: SyncManifest,
 ): Promise<LoadedMirrorManifest> {
-    // Legacy settings remain untouched during migration; removal belongs to a
-    // later engine integration once its new manifest commit is durable.
+    // Merge only destinations not already managed by the shared manifest.
+    // Keeping the shared entry on collision protects newer Cloud history and
+    // its account binding; legacy settings remain untouched until integration
+    // can remove them after a verified commit.
     const current = await readLatest(storage);
-    if (current) return current;
+    if (current?.manifest.accountChange) return current;
+    if (current) {
+        const migrated = fromIpSyncManifest(legacy);
+        const additions = Object.fromEntries(Object.entries(migrated.records)
+            .filter(([path]) => !Object.hasOwn(current.manifest.records, path)));
+        if (Object.keys(additions).length === 0) return current;
+        return saveMirrorManifest(storage, current, {
+            ...current.manifest,
+            records: { ...current.manifest.records, ...additions },
+        });
+    }
     return saveMirrorManifest(storage, null, fromIpSyncManifest(legacy));
 }
 
