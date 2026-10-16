@@ -21,8 +21,8 @@ contains only work remaining after synthetic and Marie-vault validation.
 - Keep the real-device IP smoke test for a dedicated device test directory. Do
   not run `npm run test:device-sync` without explicit approval: it uploads a
   fixture that the device API cannot remove. Live Cloud account-switch
-  validation awaits a consenting volunteer with a second account. Neither is
-  a prerequisite for the bounded Marie checks above.
+  validation awaits a consenting volunteer with a second account. Neither is a
+  prerequisite for the bounded Marie checks above.
 
 ## Separate Decisions
 

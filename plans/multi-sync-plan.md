@@ -74,20 +74,20 @@ criteria for both engines and root changes live in
 - Fixed the live move failure caused by Obsidian not indexing the hidden
   `.supernote-sync` directory: the adapter renames that directory while indexed
   entries still use the Vault API. Checkpoint recovery covers the hidden entry.
-  Verification: `npm test` (504 passing), `npm run build`, `npm run lint`
-  (0 errors, 14 existing warnings), and `git diff --check`.
-- Validated the settings move/leave choices in the disposable Marie vault:
-  moved the old root's contents to a pre-created empty B folder, leaving the
-  original folder; verified nine files including both manifest slots and a
-  current manifest with five paths rewritten to B. A manual Cloud sync from B
-  returned five unchanged and no reported issues. Returned to the original
-  empty folder with **Leave files and start fresh**; B retained seven user
-  files, its old manifest slots were retired, and the new bound manifest began
-  with zero records. A second manual Cloud sync downloaded five files with no
-  reported issues and committed five records under the original root. An
-  earlier generic `Cloud sync failed` log entry was not diagnosed; the later
-  successful runs do not explain it. Cancel and restart recovery were covered
-  synthetically but were not exercised in the live vault.
+  Verification: `npm test` (504 passing), `npm run build`, `npm run lint` (0
+  errors, 14 existing warnings), and `git diff --check`.
+- Validated the settings move/leave choices in the disposable Marie vault: moved
+  the old root's contents to a pre-created empty B folder, leaving the original
+  folder; verified nine files including both manifest slots and a current
+  manifest with five paths rewritten to B. A manual Cloud sync from B returned
+  five unchanged and no reported issues. Returned to the original empty folder
+  with **Leave files and start fresh**; B retained seven user files, its old
+  manifest slots were retired, and the new bound manifest began with zero
+  records. A second manual Cloud sync downloaded five files with no reported
+  issues and committed five records under the original root. An earlier generic
+  `Cloud sync failed` log entry was not diagnosed; the later successful runs do
+  not explain it. Cancel and restart recovery were covered synthetically but
+  were not exercised in the live vault.
 
 ## Outstanding
 
