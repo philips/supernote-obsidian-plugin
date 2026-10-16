@@ -7,7 +7,7 @@ logout/login; scheduled-sync checks, including signed-out handling and
 main-window notices, are user-reported rather than independently captured. The
 read-only username lookup was separately validated against the existing session.
 The explicit Cloud mirror reset workflow remains unimplemented and is deferred
-until after shared sync reporting. Updated October 15, 2026.
+until after shared sync log retention. Updated October 15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -203,15 +203,35 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   on October 15, 2026. The Cloud per-file logging revision also passed the
   focused and full suites, build, and lint on that date. Lint reported 12
   warnings and zero errors. The final `git diff --check` remains blocked by one
-  trailing blank line in `src/deviceSync.ts`; no live Cloud session, OTP, or
-  destructive validation was used.
+  trailing blank line in `src/deviceSync.ts` at that checkpoint; no live Cloud
+  session, OTP, or destructive validation was used. The later log-retention
+  sprint's `git diff --check` was clean.
+
+### Shared Sync Log Retention (implemented)
+
+- In the Sync settings group, added `Sync log` (on by default) and configurable
+  `History count` (positive integer, default `8`) with the short description
+  "Number of sync log entries to keep." Show `History count` only when
+  `Sync log` is enabled, retaining its saved value when hidden. Count H2
+  sections in the shared log, including older entries from both engines;
+  preserve content before the first H2 but do not specially protect user-written
+  H2 sections. Disabling logging stops creation and writes, but preserves any
+  existing log and all Notices.
+- Shared reporting retains newest H2 sections when appending; settings trim
+  existing logs on resumption and limit changes. Clean IP runs still create a
+  log when enabled but do not append an entry. The manual and scheduled paths
+  share the same reporting calls and preserve Notices when logging is off.
+  Focused tests cover mixed engines, pre-existing logs, count changes,
+  enable/disable, missing logs, and write failures. Full tests (459), build, and
+  lint (zero errors, 12 existing warnings) passed October 15, 2026. No live
+  Cloud login, OTP, mutation, or destructive vault validation was used.
 
 ### Next: Explicit Cloud Mirror Reset
 
 - Implement the separately confirmed destructive account/device-binding reset
-  after the shared reporting sprint. Retain its existing scope and safety
+  after the log retention sprint. Retain its existing scope and safety
   requirements in [`multi-sync-design.md`](multi-sync-design.md); do not change
-  binding or reset history as part of reporting work.
+  binding or reset history as part of log retention work.
 
 ### Sprint 7: User-Reported Scheduled Sync Validation
 

@@ -507,7 +507,7 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
             { kind: 'protected', item: 'Supernote sync/Diary/b.note', message: 'edited' },
         ]), now);
         expect(entry).toBe(
-            '## 2026-07-27 11:15:32 (Direct IP connection)\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/Diary/a.note`\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/Diary/b.note`\n'
             + '\n',
@@ -519,7 +519,7 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
             { kind: 'failure', item: '/Diary/broken.note', message: 'Supernote responded with status 500' },
         ]), now);
         expect(entry).toBe(
-            '## 2026-07-27 11:15:32 (Direct IP connection)\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Failed: `/Diary/broken.note` — Supernote responded with status 500\n'
             + '\n',
         );
@@ -531,7 +531,7 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
             { kind: 'failure', item: '/b.note', message: 'timed out' },
         ]), now);
         expect(entry).toBe(
-            '## 2026-07-27 11:15:32 (Direct IP connection)\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/a.note`\n'
             + '- Failed: `/b.note` — timed out\n'
             + '\n',
@@ -553,7 +553,7 @@ describe('formatSyncFailureLogEntry', () => {
     it('formats a single whole-run failure line under a timestamp heading', () => {
         const now = new Date('2026-07-27T11:15:32.000Z');
         expect(formatSyncFailureLogEntry('ip-device', 'Supernote at 192.168.1.50 did not respond', now)).toBe(
-            '## 2026-07-27 11:15:32 (Direct IP connection)\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Sync failed: Supernote at 192.168.1.50 did not respond\n'
             + '\n',
         );

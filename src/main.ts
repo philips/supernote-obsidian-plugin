@@ -1611,13 +1611,13 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	private async reportSyncResult(result: SyncRunResult): Promise<void> {
-		await reportSyncResult(this.app, this.settings.syncFolder, result)
+		await reportSyncResult(this.app, this.settings.syncFolder, result, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
 			.catch((error) => console.error('Failed to write to Supernote sync log:', error));
 		this.showSyncResult(result);
 	}
 
 	private async reportSyncFailure(error: unknown): Promise<void> {
-		await reportSyncFailure(this.app, this.settings.syncFolder, this.getActiveSyncEngineId(), error)
+		await reportSyncFailure(this.app, this.settings.syncFolder, this.getActiveSyncEngineId(), error, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
 			.catch((logError) => console.error('Failed to write to Supernote sync log:', logError));
 	}
 

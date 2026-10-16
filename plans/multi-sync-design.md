@@ -945,14 +945,14 @@ and generic command are the product surface.
 ### Reporting and errors
 
 The plugin formats a shared completion Notice from `SyncRunResult` and reports
-both engines to the append-only `<syncFolder>/Sync Log.md`, labeled by engine.
-Clean IP runs create the log without appending an entry. Both engines log
-protected and failed file paths; Cloud log entries also contain counts and
-allowlisted failure/warning categories, never raw Cloud errors, account data,
-credentials, tokens, or signed URLs. The former proposal for a separate Cloud
-log under `.supernote-sync` is superseded. The shared log and `.supernote-sync`
-are reserved against Cloud writes and cleanup even with a `*` extension
-allowlist.
+both engines to `<syncFolder>/Sync Log.md`, labeled by engine and bounded by the
+configured history count. Clean IP runs create the log without appending an
+entry. Both engines log protected and failed file paths; Cloud log entries also
+contain counts and allowlisted failure/warning categories, never raw Cloud
+errors, account data, credentials, tokens, or signed URLs. The former proposal
+for a separate Cloud log under `.supernote-sync` is superseded. The shared log
+and `.supernote-sync` are reserved against Cloud writes and cleanup even with a
+`*` extension allowlist.
 
 - Manual setup/readiness failures can open the relevant settings or modal.
 - Scheduled failures use non-blocking Notices and durable logs; they never open
@@ -961,6 +961,29 @@ allowlist.
 
 A full Activity subsystem is out of scope until ordinary Notices and durable
 logs prove insufficient.
+
+#### Shared sync log retention (implemented)
+
+- In the Sync settings group, add shared `Sync log` (on by default) and
+  `History count` (configurable positive integer, default `8`) controls for both
+  engines. Describe the latter: "Number of sync log entries to keep." Display
+  `History count` only while `Sync log` is enabled, preserving its saved value
+  when hidden. Turning logging off prevents log creation and writes, including
+  whole-run failures, but does not delete an existing log or suppress Notices.
+  Turning it back on resumes at the existing shared log.
+- A history entry is an H2 section in the shared log, normally one reportable
+  run or whole-run failure, not an individual file line or a clean run. Keep the
+  newest eight H2 sections by default across both engines, including older IP
+  entries. Preserve content before the first H2; user-written H2 sections count
+  toward the limit and may be trimmed. Retention applies when logging resumes,
+  the limit changes, or a new entry is appended. Runs needing no pruning remain
+  append-only. A malformed or unwritable log must not change the sync result or
+  bypass protected-file safeguards.
+- Automatic sync remains off by default, with its existing 15-minute default
+  interval. Do not overwrite a user's saved 5-minute (or other valid) choice.
+  Eight entries spaced 15 minutes apart span 105 minutes from oldest to newest;
+  at 5-minute spacing they span 35 minutes. Clean runs do not consume log
+  entries, so the limit is not a time guarantee.
 
 ### Manifest and safety invariants
 

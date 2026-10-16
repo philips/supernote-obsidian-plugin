@@ -21,8 +21,15 @@ export function syncLogPath(syncFolder: string): string {
 
 function renderLogEntry(engineId: SyncEngineId, now: Date, lines: string[]): string {
     const timestamp = now.toISOString().replace('T', ' ').slice(0, 19);
-    const engine = engineId === 'ip-device' ? 'Direct IP connection' : 'Supernote Cloud';
+    const engine = engineId === 'ip-device' ? 'Direct IP' : 'Supernote cloud';
     return `## ${timestamp} (${engine})\n${lines.map((line) => `- ${line}`).join('\n')}\n\n`;
+}
+
+export function retainSyncLogEntries(text: string, historyCount: number): string {
+    if (!Number.isSafeInteger(historyCount) || historyCount < 1) historyCount = 8;
+    const headings = [...text.matchAll(/^##(?:[ \t]+|$)/gm)].map((match) => match.index);
+    if (headings.length <= historyCount) return text;
+    return text.slice(0, headings[0]) + text.slice(headings[headings.length - historyCount]);
 }
 
 export function formatSyncLogEntry(result: SyncRunResult, now: Date = new Date()): string | null {
@@ -76,13 +83,35 @@ async function ensureSyncLogFile(app: App, syncFolder: string): Promise<TFile> {
     return app.vault.create(logPath, '');
 }
 
-export async function reportSyncResult(app: App, syncFolder: string, result: SyncRunResult): Promise<void> {
+export async function trimSyncLog(app: App, syncFolder: string, historyCount: number): Promise<void> {
+    const existing = app.vault.getAbstractFileByPath(syncLogPath(syncFolder));
+    if (existing instanceof TFile) {
+        const text = await app.vault.read(existing);
+        if (retainSyncLogEntries(text, historyCount) !== text) {
+            await app.vault.process(existing, (current) => retainSyncLogEntries(current, historyCount));
+        }
+    }
+}
+
+async function appendSyncLogEntry(app: App, syncFolder: string, entry: string, historyCount: number): Promise<void> {
+    const file = await ensureSyncLogFile(app, syncFolder);
+    const text = await app.vault.read(file);
+    if (retainSyncLogEntries(text + entry, historyCount) === text + entry) {
+        await app.vault.append(file, entry);
+    } else {
+        await app.vault.process(file, (current) => retainSyncLogEntries(current + entry, historyCount));
+    }
+}
+
+export async function reportSyncResult(app: App, syncFolder: string, result: SyncRunResult, historyCount = 8, enabled = true): Promise<void> {
+    if (!enabled) return;
     const entry = formatSyncLogEntry(result);
-    if (entry) await app.vault.append(await ensureSyncLogFile(app, syncFolder), entry);
+    if (entry) await appendSyncLogEntry(app, syncFolder, entry, historyCount);
     else if (result.engineId === 'ip-device') await ensureSyncLogFile(app, syncFolder);
 }
 
-export async function reportSyncFailure(app: App, syncFolder: string, engineId: SyncEngineId, error: unknown): Promise<void> {
+export async function reportSyncFailure(app: App, syncFolder: string, engineId: SyncEngineId, error: unknown, historyCount = 8, enabled = true): Promise<void> {
+    if (!enabled) return;
     const message = engineId === 'ip-device' ? (error instanceof Error ? error.message : String(error)) : '';
-    await app.vault.append(await ensureSyncLogFile(app, syncFolder), formatSyncFailureLogEntry(engineId, message));
+    await appendSyncLogEntry(app, syncFolder, formatSyncFailureLogEntry(engineId, message), historyCount);
 }

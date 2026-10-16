@@ -1,10 +1,76 @@
 import type { Setting } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, SupernoteSettingTab, SYNC_ENGINE_LABELS } from './settings';
+import { trimSyncLog } from './syncReporting';
 
-vi.mock('obsidian', () => ({ PluginSettingTab: class PluginSettingTab {}, Setting: class Setting {} }));
+vi.mock('obsidian', () => ({ PluginSettingTab: class PluginSettingTab {
+    app: unknown;
+    constructor(app: unknown) { this.app = app; }
+}, Setting: class Setting {} }));
 vi.mock('./main', () => ({ default: class SupernotePlugin {} }));
 vi.mock('./customDictionary', () => ({ CUSTOM_DICTIONARY_DEFAULT_SETTINGS: {} }));
+vi.mock('./syncReporting', () => ({ trimSyncLog: vi.fn(async () => {}) }));
+
+describe('sync log settings', () => {
+    it('defaults on, preserves the count while disabled, and trims on resumption and count changes', async () => {
+        const settings = { ...DEFAULT_SETTINGS };
+        const saveSettings = vi.fn(async () => {});
+        const app = {} as never;
+        const tab = new SupernoteSettingTab(app, { settings, saveSettings } as never);
+        const update = vi.fn();
+        Object.assign(tab, { update });
+        const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Sync');
+        if (!group || !('items' in group)) throw new Error('Sync group missing');
+        const toggle = group.items.find((item) => 'name' in item && item.name === 'Sync log');
+        const count = group.items.find((item) => 'name' in item && item.name === 'History count');
+        if (!toggle || !('render' in toggle) || !count || !('render' in count)) throw new Error('Log controls missing');
+        expect(settings.syncLogEnabled).toBe(true);
+        expect(settings.syncLogHistoryCount).toBe(8);
+
+        let changeEnabled: (enabled: boolean) => Promise<void> = async () => {};
+        const toggleComponent = {
+            setValue: vi.fn().mockReturnThis(),
+            onChange: vi.fn((callback: typeof changeEnabled) => { changeEnabled = callback; }),
+        };
+        toggle.render({
+            setDesc: vi.fn().mockReturnThis(),
+            addToggle: (configure: (component: typeof toggleComponent) => void) => configure(toggleComponent),
+        } as unknown as Setting);
+        expect(toggleComponent.setValue).toHaveBeenCalledWith(true);
+        await changeEnabled(false);
+        expect(settings.syncLogHistoryCount).toBe(8);
+        expect('visible' in count && count.visible?.()).toBe(false);
+        expect(trimSyncLog).not.toHaveBeenCalled();
+        await changeEnabled(true);
+        expect(trimSyncLog).toHaveBeenCalledWith(app, settings.syncFolder, 8);
+        expect('visible' in count && count.visible?.()).toBe(true);
+
+        let changeCount: (value: string) => Promise<void> = async () => {};
+        const input = { type: '', min: '', max: '', step: '' };
+        const validation = { hidden: false, setText: vi.fn() };
+        const textComponent = {
+            inputEl: input,
+            setValue: vi.fn().mockReturnThis(),
+            onChange: vi.fn((callback: typeof changeCount) => { changeCount = callback; }),
+        };
+        count.render({
+            setName: vi.fn().mockReturnThis(),
+            setDesc: vi.fn().mockReturnThis(),
+            descEl: { createDiv: () => validation },
+            addText: (configure: (component: typeof textComponent) => void) => configure(textComponent),
+        } as unknown as Setting);
+        expect(textComponent.setValue).toHaveBeenCalledWith('8');
+        await changeCount('0');
+        expect(validation.hidden).toBe(false);
+        expect(settings.syncLogHistoryCount).toBe(8);
+        await changeCount('3');
+        expect(validation.hidden).toBe(true);
+        expect(settings.syncLogHistoryCount).toBe(3);
+        expect(trimSyncLog).toHaveBeenLastCalledWith(app, settings.syncFolder, 3);
+        expect(saveSettings).toHaveBeenCalledTimes(3);
+        expect(update).toHaveBeenCalledTimes(2);
+    });
+});
 
 describe('note viewer settings', () => {
     it('keeps the toggle first and hides the other viewer controls when disabled', async () => {

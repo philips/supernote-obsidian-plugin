@@ -5,6 +5,7 @@ import { App, ExtraButtonComponent, Notice, PluginSettingTab, Setting } from 'ob
 import { SyncManifest } from './deviceSync';
 import { SyncEngineId } from './syncAbstraction';
 import { validateFileExtensionAllowlist } from './syncFilters';
+import { trimSyncLog } from './syncReporting';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
@@ -42,6 +43,12 @@ export const SYNC_ENGINE_LABELS: Partial<Record<SyncEngineId, string>> = {
 function validateSyncMinutes(value: string): string | undefined {
     if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
         return 'Enter a positive whole number of minutes';
+    }
+}
+
+function validateHistoryCount(value: string): string | undefined {
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        return 'Enter a positive whole number of entries';
     }
 }
 
@@ -117,6 +124,8 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     pageExportImageFormat: PageExportImageFormat;
     /** Shared vault destination root used by the active sync engine. */
     syncFolder: string;
+    syncLogEnabled: boolean;
+    syncLogHistoryCount: number;
     /**
      * Device path glob patterns (comma/newline separated) scoping which
      * notes sync considers. Empty = sync everything. A single text field
@@ -144,6 +153,8 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     importFormat: 'images-text',
     pageExportImageFormat: 'png',
     syncFolder: 'Supernote sync',
+    syncLogEnabled: true,
+    syncLogHistoryCount: 8,
     syncPathFiltersRaw: '',
     syncFileExtensionsRaw: '.note, .spd',
     noteSyncState: {},
@@ -189,6 +200,35 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     warningEl.hidden = minutes >= 5;
                 });
             });
+    }
+
+    private renderSyncLogHistoryCount(setting: Setting): void {
+        setting.setName('History count').setDesc('Number of sync log entries to keep.');
+        const validationEl = setting.descEl.createDiv();
+        validationEl.hidden = true;
+        setting.addText((text) => {
+            text.inputEl.type = 'number';
+            text.inputEl.min = '1';
+            text.inputEl.max = String(Number.MAX_SAFE_INTEGER);
+            text.inputEl.step = '1';
+            text.setValue(String(this.plugin.settings.syncLogHistoryCount)).onChange(async (value) => {
+                const error = validateHistoryCount(value);
+                validationEl.setText(error ?? '');
+                validationEl.hidden = !error;
+                if (error) return;
+                this.plugin.settings.syncLogHistoryCount = Number(value);
+                await this.plugin.saveSettings();
+                await this.trimExistingSyncLog();
+            });
+        });
+    }
+
+    private async trimExistingSyncLog(): Promise<void> {
+        try {
+            await trimSyncLog(this.app, this.plugin.settings.syncFolder, this.plugin.settings.syncLogHistoryCount);
+        } catch (error) {
+            console.error('Failed to trim Supernote sync log:', error);
+        }
     }
 
     private renderCloudSession(setting: Setting): void {
@@ -431,6 +471,24 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         name: 'Interval',
                         visible: () => this.plugin.isAutoSyncEnabled(),
                         render: (setting) => this.renderSyncInterval(setting),
+                    },
+                    {
+                        name: 'Sync log',
+                        render: (setting) => {
+                            setting.setDesc('Keep a shared log of sync conflicts and failures.')
+                                .addToggle((toggle) => toggle.setValue(this.plugin.settings.syncLogEnabled)
+                                    .onChange(async (enabled) => {
+                                        this.plugin.settings.syncLogEnabled = enabled;
+                                        await this.plugin.saveSettings();
+                                        if (enabled) await this.trimExistingSyncLog();
+                                        (this as PluginSettingTab & { update?: () => void }).update?.();
+                                    }));
+                        },
+                    },
+                    {
+                        name: 'History count',
+                        visible: () => this.plugin.settings.syncLogEnabled,
+                        render: (setting) => this.renderSyncLogHistoryCount(setting),
                     },
                     {
                         name: 'Sync engine',
@@ -682,6 +740,21 @@ export class SupernoteSettingTab extends PluginSettingTab {
         intervalSetting = new Setting(sectionEl);
         this.renderSyncInterval(intervalSetting);
         intervalSetting.settingEl.hidden = !this.plugin.isAutoSyncEnabled();
+
+        let historyCountSetting: Setting;
+        new Setting(sectionEl)
+            .setName('Sync log')
+            .setDesc('Keep a shared log of sync conflicts and failures.')
+            .addToggle((toggle) => toggle.setValue(this.plugin.settings.syncLogEnabled)
+                .onChange(async (enabled) => {
+                    this.plugin.settings.syncLogEnabled = enabled;
+                    await this.plugin.saveSettings();
+                    historyCountSetting.settingEl.hidden = !enabled;
+                    if (enabled) await this.trimExistingSyncLog();
+                }));
+                historyCountSetting = new Setting(sectionEl);
+        this.renderSyncLogHistoryCount(historyCountSetting);
+        historyCountSetting.settingEl.hidden = !this.plugin.settings.syncLogEnabled;
 
         new Setting(sectionEl)
             .setName('Sync engine')

@@ -10,7 +10,7 @@ import type { SupernotePluginSettings } from './settings';
 import { ALL_FILE_EXTENSIONS } from './syncFilters';
 import { ObsidianMirrorManifestStorage } from './cloudSync/obsidianMirrorManifestStorage';
 import { saveMirrorManifest } from './cloudSync/sharedMirrorManifestStore';
-import { reportSyncFailure, reportSyncResult } from './syncReporting';
+import { reportSyncFailure, reportSyncResult, retainSyncLogEntries, trimSyncLog } from './syncReporting';
 import type { SyncRunResult } from './syncAbstraction';
 
 vi.mock('obsidian', () => ({
@@ -100,6 +100,13 @@ function makeVault() {
                 entry.text += text;
                 entry.bytes = new TextEncoder().encode(entry.text);
             }
+        },
+        async process(file: TFile, update: (text: string) => string) {
+            const entry = entries.get(file.path);
+            if (entry?.kind !== 'file') throw new Error(`not a file: ${file.path}`);
+            entry.text = update(entry.text);
+            entry.bytes = new TextEncoder().encode(entry.text);
+            return entry.text;
         },
     };
     return {
@@ -228,7 +235,7 @@ describe('shared sync reporting', () => {
         expect(vault.readText(log)).toContain('Skipped (edited locally since last sync): `Mirror/edited.note`');
         expect(vault.readText(log)).toContain('Failed: `/failed.note` — timed out');
         expect(vault.readText(log)).toContain('Sync failed: connection lost');
-        expect(vault.readText(log).match(/Direct IP connection/g)).toHaveLength(2);
+        expect(vault.readText(log).match(/\(Direct IP\)/g)).toHaveLength(2);
     });
 
     it('logs Cloud file paths like IP without persisting raw errors or account secrets', async () => {
@@ -247,7 +254,7 @@ describe('shared sync reporting', () => {
         });
         await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error(secret));
         const text = vault.readText(`${SYNC_FOLDER}/Sync Log.md`);
-        expect(text).toContain('Supernote Cloud');
+        expect(text).toContain('(Supernote cloud)');
         expect(text).toContain('1 skipped (locally edited), 2 failed, 2 warnings');
         expect(text).toContain(`Skipped (edited locally since last sync): \`${protectedPath}\``);
         expect(text).toContain(`Failed: \`${failedPath}\` — Cloud transfer or vault write failed`);
@@ -265,6 +272,65 @@ describe('shared sync reporting', () => {
             { kind: 'protected', item: 'edited.note', message: 'edited' },
         ]))).rejects.toThrow('disk full');
         expect(vault.readText(`${SYNC_FOLDER}/Sync Log.md`)).toBe('');
+    });
+
+    it('keeps the latest reportable sections across engines while preserving the preamble', async () => {
+        const vault = makeVault();
+        const log = `${SYNC_FOLDER}/Sync Log.md`;
+        vault.seedFile(log, '# Notes\nKeep this preamble.\n\n## older IP\nold\n\n## user heading\nuser text\n\n');
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 2);
+        expect(vault.readText(log)).toContain('## older IP');
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
+            { kind: 'protected', item: 'edited.note', message: 'edited' },
+        ]), 2);
+        expect(vault.readText(log)).not.toContain('## older IP');
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('secret'), 2);
+        expect(vault.readText(log)).toMatch(/^# Notes\nKeep this preamble\.\n\n## 20/);
+        expect(vault.readText(log)).not.toContain('## user heading');
+        expect(vault.readText(log)).toContain('edited.note');
+        expect(vault.readText(log)).toContain('(Supernote cloud)');
+        expect(vault.readText(log).match(/^## /gm)).toHaveLength(2);
+    });
+
+    it('trims existing logs on a limit change or resumption without creating a missing log', async () => {
+        const vault = makeVault();
+        const log = `${SYNC_FOLDER}/Sync Log.md`;
+        await trimSyncLog(vault.app, SYNC_FOLDER, 1);
+        expect(vault.exists(log)).toBe(false);
+        vault.seedFile(log, 'Intro\n## first\nA\n## second\nB\n## third\nC\n');
+        await trimSyncLog(vault.app, SYNC_FOLDER, 2);
+        expect(vault.readText(log)).toBe('Intro\n## second\nB\n## third\nC\n');
+        await trimSyncLog(vault.app, SYNC_FOLDER, 1);
+        expect(vault.readText(log)).toBe('Intro\n## third\nC\n');
+    });
+
+    it('does not create or write a log while disabled for either engine or failure path', async () => {
+        const vault = makeVault();
+        const log = `${SYNC_FOLDER}/Sync Log.md`;
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 8, false);
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('failed'), 8, false);
+        await reportSyncResult(vault.app, SYNC_FOLDER, result('supernote-cloud', [
+            { kind: 'protected', item: 'edited.note', message: 'edited' },
+        ]), 8, false);
+        expect(vault.exists(log)).toBe(false);
+        vault.seedFile(log, '## existing\nRetain me.\n');
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('failed'), 8, false);
+        expect(vault.readText(log)).toBe('## existing\nRetain me.\n');
+    });
+
+    it('retains all lines in a section and ignores non-H2 headings', () => {
+        expect(retainSyncLogEntries('Preamble\n# H1\n## first\n- item\n### child\n## second\n- item\n', 1))
+            .toBe('Preamble\n# H1\n## second\n- item\n');
+    });
+
+    it('does not overwrite a log when pruning fails', async () => {
+        const vault = makeVault();
+        const log = `${SYNC_FOLDER}/Sync Log.md`;
+        vault.seedFile(log, '## first\nA\n## second\nB\n');
+        vault.vault.process = vi.fn().mockRejectedValue(new Error('disk full'));
+        await expect(reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'), 2))
+            .rejects.toThrow('disk full');
+        expect(vault.readText(log)).toBe('## first\nA\n## second\nB\n');
     });
 });
 
