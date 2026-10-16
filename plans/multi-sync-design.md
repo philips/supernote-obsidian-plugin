@@ -722,6 +722,55 @@ management records without moving vault files or changing the Cloud account
 binding. The exact handling of device-local last-run display state during
 account change remains a product decision; current implementation retains it.
 
+### Ordinary sync operation recovery (next sprint)
+
+The shared manifest is the source of truth for one pending ordinary file
+operation at a time. Add a validated `pendingOperation` to the existing two-slot
+manifest, not a separate journal. It identifies the selected root, vault path,
+operation (create, overwrite, byte-identical adoption, or Cloud Trash), source
+identity, and expected old and new content hashes where applicable. Before a
+vault mutation, commit this intent and verify it was saved; then perform the
+operation, commit the resulting per-file record change and clear the intent in
+the same manifest revision. Even with this ordering, a vault mutation and a
+manifest commit are not atomic. The intent makes the gap inspectable, not
+infallible. Do not start another operation while one is pending.
+
+The coordinator supplies both engines with one shared operation executor that
+owns intent persistence, guarded vault mutation, per-file manifest commits, and
+recovery. Engines still own source inventory, transfer verification, and the
+decision to create, overwrite, adopt, or Trash. In particular, IP must commit
+each successful file rather than writing a batch before one end-of-run commit;
+Cloud already commits per item. Keep the existing account-change and root-change
+checkpoints separate. Do not attempt automatic cross-device manifest
+reconciliation or a general rollback mechanism.
+
+Before either manual or scheduled sync, or a folder change or history clear,
+inspect any pending operation under the coordinator lock. If the vault file
+still matches the expected old state, safely abandon the intent and let a fresh
+run decide what to do; if it matches the expected new state, finish the
+corresponding manifest commit. An existing file with unexpected bytes stays
+untouched and blocks further sync until the user restores a known state. Never
+repeat an uncertain Trash. A missing vault file is a warning, not a permanent
+block: on the next manual sync, require a fresh, complete source check (and
+Cloud's matching deletion inventories before treating it as remotely absent). If
+the source file exists, clear the pending intent and download through the normal
+guarded path; if it is confirmed absent, clear the intent and retire its record.
+If source availability cannot be established, retain the intent and report a
+retryable failure. This recovery-only retirement does not change IP's ordinary
+additive policy for device files missing from an unrelated scan.
+
+When recovery needs attention, disable automatic sync persistently so it does
+not keep retrying. Report the affected path, operation, observed state, and a
+short safe next step in `Sync Log.md`; a short notice directs the user there.
+Manual retries may log the same issue again; do not add deduplication or a
+settings-panel recovery UI. If logging is off or the log cannot be written, the
+notice must carry the essential explanation itself. `Forget sync history` must
+refuse to clear a pending intent: it is not an escape hatch for uncertain
+ownership. After recovery clears the intent, it keeps its existing meaning of
+forgetting both engines' file records while preserving vault files and Cloud
+account binding. No separate recheck command or automatic user-file repair is
+needed; the next manual sync rechecks the pending path.
+
 ### Shared path and file-type allowlists
 
 Move the transport-neutral filter logic from `src/sync/directIP/deviceSync.ts`
@@ -879,10 +928,10 @@ types. Suggested files:
    destination cannot be adopted safely, preserve it and report a protected item
    rather than creating or deleting ambiguous duplicates.
 9. Check the local hash immediately before any vault mutation. Commit the
-   resulting manifest entry after a successful mutation; stop if the manifest
-   cannot be advanced safely. Isolate ordinary per-file transfer failures, but
-   do not infer recovery from an ambiguous file/manifest mismatch. A general
-   per-file pending-operation journal is a separate future proposal.
+   pending intent before mutation, then commit the resulting manifest entry and
+   clear the intent after success. Isolate ordinary per-file transfer failures,
+   but stop if the manifest cannot be advanced safely; recover only as specified
+   in the ordinary sync operation recovery section above.
 10. Only after a complete inventory, find every managed in-scope shared entry
     absent from Cloud, including entries last observed through IP. Move an
     unchanged local copy to Obsidian Trash and remove its manifest entry.
@@ -944,15 +993,14 @@ different source file follows the active engine's normal local-edit guard before
 overwrite. Thus the first run after switching engines may perform more downloads
 but needs no ownership migration.
 
-General pending-operation records for ordinary creates, overwrites, moves,
-adoptions, and Trash cleanup remain a separate future proposal. The existing
-two-slot store validates and readback-checks manifest revisions but does not
-make a vault mutation and its manifest update atomic. Account-change cleanup has
-its own narrower checkpoint; the explicit sync-root change requires its own
-recoverable transition. Until a general per-file recovery design is approved,
-ambiguous file/manifest states must be protected or stop sync rather than
-inferred as safe. An unowned file is adopted only after verified incoming bytes
-prove it identical; a non-identical existing file is protected.
+The next sprint adds one pending ordinary create, overwrite, identical-byte
+adoption, or Cloud Trash intent to this manifest as specified above. The
+two-slot store validates and readback-checks revisions but cannot make a vault
+mutation and its manifest update atomic. Account-change and sync-root changes
+retain their separate checkpoints; ordinary file moves and general rollback are
+outside this recovery scope. Ambiguous existing file bytes remain protected. An
+unowned file is adopted only after verified incoming bytes prove it identical; a
+non-identical existing file is protected.
 
 #### Concurrent manifest updates
 

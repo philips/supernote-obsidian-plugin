@@ -4,9 +4,9 @@
 shared non-destructive history clearing, and the explicit sync-folder change
 workflow are implemented with synthetic tests. The move, leave-behind, and
 cancel flows and persistence across a normal restart were validated in the
-disposable Marie vault. Live account-switch and device tests remain pending.
-Sync implementation files are organized under `src/sync/`. Updated October 16,
-2026.
+disposable Marie vault. Minimal ordinary-operation recovery is designed but not
+implemented. Live account-switch and device tests remain pending. Sync
+implementation files are organized under `src/sync/`. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -99,6 +99,38 @@ criteria for both engines and root changes live in
 
 ## Outstanding
 
+### Next implementation: ordinary-operation recovery
+
+1. Extend and validate the existing two-slot shared manifest with one pending
+   create, overwrite, identical-byte adoption, or Cloud Trash intent. Keep its
+   root, path, source identity, and before/after hashes sufficient to compare
+   current bytes with either known state. Reject invalid or stale state; retain
+   the existing root-change and account-change checkpoints separately.
+2. Build one coordinator-supplied operation executor for both engines: commit
+   intent before mutation, guard the vault path, then commit the per-file record
+   and clear intent together. Convert IP from its end-of-run batch commit to
+   per-file commits. Keep inventory and verified transfer decisions within each
+   engine. Cloud's matching-inventory deletion gate remains mandatory.
+3. Resolve pending operations under the coordinator lock before another sync,
+   folder change, or history clear. Reconcile only proved old/new byte states;
+   block on unexpected existing bytes without modifying them or repeating
+   uncertain Trash. For a missing vault file, warn and use a fresh verified
+   source check on manual sync: download normally if present; retire the record
+   if confirmed absent; retain the intent on incomplete or unreachable source.
+   Do not change IP's ordinary additive behavior outside recovery.
+4. Persistently disable automatic sync when recovery needs attention. Log a
+   useful path-specific explanation and next step and show a short notice;
+   provide an informative notice when logging is off or unavailable. Allow
+   repeated manual attempts and log entries without deduplication. Reject
+   `Forget sync history` while an intent is pending. Do not add recovery
+   controls to settings, a recheck command, or an automatic repair UI.
+5. Test synthetic interruption before and after intent, file mutation, and
+   manifest commit for both engines, including adoption, uncertain Trash,
+   unexpected bytes, missing local/source files, incomplete inventory, a failed
+   log write, restart, and history/root-change gating. Run the checks below. Any
+   live interrupted-operation test needs a separate controlled replaceable
+   fixture and approval; do not simulate a crash in a user's sync.
+
 ### Remaining validation
 
 - Live interrupted-operation recovery remains untested. Do not force an
@@ -112,19 +144,6 @@ criteria for both engines and root changes live in
 
 ### Open scope decisions
 
-- **Ordinary-operation crash recovery (deferred Multi-Sync decision):** the
-  account-change checkpoint covers only confirmed account changes, and the next
-  shared-manifest block does not make file mutations atomic with manifest
-  commits. An interruption after a new file is written can leave it untracked;
-  after an overwrite, the new bytes can look like a local edit against the old
-  hash; after Cloud Trash, the old record can still claim a missing file. Decide
-  in a separate sprint whether to persist a before/after checkpoint for creates,
-  overwrites, safe adoptions or moves, and Cloud Trash, or retain the current
-  protect/stop-and-resolve behavior. If approved, test interruption at each
-  file/manifest boundary and restart with mutation not started, completed, and
-  ambiguous; recover only when hashes and paths prove the outcome, never
-  overwrite a user edit or repeat an uncertain Trash. Small file size and cheap
-  retransfer alone do not resolve these ownership ambiguities.
 - Automatic cross-device manifest reconciliation remains a separate proposal.
   The shared-manifest work retains stale-revision rejection instead of silently
   merging concurrent changes from multiple machines.
