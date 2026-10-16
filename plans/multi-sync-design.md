@@ -91,7 +91,7 @@ This is the plugin-level entry point and current sync controller.
 - Implements `runSync()`, which validates that an IP is configured, enforces the
   in-flight guard, invokes `runDeviceSync()`, shows the result notice, and
   writes detailed conflicts/failures to the console.
-- On a top-level failure, appends a failure entry to the sync log on a
+- On a top-level failure, writes a failure entry to the sync log on a
   best-effort basis and opens `DirectConnectErrorModal`.
 - Loads and saves the settings object that contains the engine configuration and
   manifest.
@@ -119,7 +119,7 @@ This is the Obsidian-facing orchestration for one IP sync run.
 - Checks unchanged files for local drift so local edits are reported even when
   the device copy has not changed.
 - Saves settings once after the file-processing passes.
-- Appends conflicts and per-file failures to `Sync Log.md`; a clean run still
+- Writes conflicts and per-file failures to `Sync Log.md`; a clean run still
   creates the log file so sync activity is discoverable.
 
 Per-file download or write failures are isolated in the result and do not abort
@@ -145,8 +145,7 @@ This file owns the pure, transport-independent policy for the current engine.
 - Decides whether a target may be created, overwritten, or skipped as a
   conflict.
 - Builds persisted manifest records.
-- Formats the append-only conflict/failure log entries and computes the log
-  path.
+- Formats conflict/failure log entries and computes the log path.
 
 Keeping this policy independent of Obsidian is valuable and should be preserved.
 It allows the safety and change-detection rules to be tested without a vault or
@@ -976,9 +975,11 @@ logs prove insufficient.
   newest eight H2 sections by default across both engines, including older IP
   entries. Preserve content before the first H2; user-written H2 sections count
   toward the limit and may be trimmed. Retention applies when logging resumes,
-  the limit changes, or a new entry is appended. Runs needing no pruning remain
-  append-only. A malformed or unwritable log must not change the sync result or
-  bypass protected-file safeguards.
+  the limit changes, or a new entry is written. New entries appear above older
+  ones, after any preamble; trimming removes entries from the bottom. Existing
+  oldest-first logs with ordered timestamp headings are reordered when touched.
+  A malformed or unwritable log must not change the sync result or bypass
+  protected-file safeguards.
 - Automatic sync remains off by default, with its existing 15-minute default
   interval. Do not overwrite a user's saved 5-minute (or other valid) choice.
   Eight entries spaced 15 minutes apart span 105 minutes from oldest to newest;

@@ -474,7 +474,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     {
                         name: 'Sync log',
                         render: (setting) => {
-                            setting.setDesc('Keep a shared log of sync conflicts and failures.')
+                            setting.setDesc('Keep a shared log of sync issues and successful cleanup. Clean runs have no entry.')
                                 .addToggle((toggle) => toggle.setValue(this.plugin.settings.syncLogEnabled)
                                     .onChange(async (enabled) => {
                                         this.plugin.settings.syncLogEnabled = enabled;
@@ -743,7 +743,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
         let historyCountSetting: Setting;
         new Setting(sectionEl)
             .setName('Sync log')
-            .setDesc('Keep a shared log of sync conflicts and failures.')
+            .setDesc('Keep a shared log of sync issues and successful cleanup. Clean runs have no entry.')
             .addToggle((toggle) => toggle.setValue(this.plugin.settings.syncLogEnabled)
                 .onChange(async (enabled) => {
                     this.plugin.settings.syncLogEnabled = enabled;

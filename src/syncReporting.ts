@@ -27,8 +27,12 @@ function renderLogEntry(engineName: string, now: Date, lines: string[]): string 
 export function retainSyncLogEntries(text: string, historyCount: number): string {
     if (!Number.isSafeInteger(historyCount) || historyCount < 1) historyCount = 8;
     const headings = [...text.matchAll(/^##(?:[ \t]+|$)/gm)].map((match) => match.index);
-    if (headings.length <= historyCount) return text;
-    return text.slice(0, headings[0]) + text.slice(headings[headings.length - historyCount]);
+    if (!headings.length) return text;
+    const sections = headings.map((start, index) => text.slice(start, headings[index + 1]));
+    const dated = sections.map((section) => /^## (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) \(/.exec(section)?.[1]).filter((date) => date !== undefined);
+    if (dated.length > 1 && dated[0] < dated[dated.length - 1]
+        && dated.every((date, index) => index === 0 || date >= dated[index - 1])) sections.reverse();
+    return text.slice(0, headings[0]) + sections.slice(0, historyCount).join('');
 }
 
 export function formatSyncLogEntry(result: SyncRunResult, engineName: string, now: Date = new Date()): string | null {
@@ -94,12 +98,14 @@ export async function trimSyncLog(app: App, syncFolder: string, historyCount: nu
 
 async function appendSyncLogEntry(app: App, syncFolder: string, entry: string, historyCount: number): Promise<void> {
     const file = await ensureSyncLogFile(app, syncFolder);
-    const text = await app.vault.read(file);
-    if (retainSyncLogEntries(text + entry, historyCount) === text + entry) {
-        await app.vault.append(file, entry);
-    } else {
-        await app.vault.process(file, (current) => retainSyncLogEntries(current + entry, historyCount));
-    }
+    await app.vault.process(file, (current) => {
+        const normalized = retainSyncLogEntries(current, historyCount);
+        const firstHeading = normalized.search(/^##(?:[ \t]+|$)/m);
+        const insertion = firstHeading < 0 ? normalized.length : firstHeading;
+        const preamble = normalized.slice(0, insertion);
+        const separator = preamble && !preamble.endsWith('\n') ? '\n' : '';
+        return retainSyncLogEntries(preamble + separator + entry + normalized.slice(insertion), historyCount);
+    });
 }
 
 export async function reportSyncResult(app: App, syncFolder: string, result: SyncRunResult, engineName: string, historyCount = 8, enabled = true): Promise<void> {

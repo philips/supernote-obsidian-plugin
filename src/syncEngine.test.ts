@@ -220,18 +220,19 @@ describe('shared sync reporting', () => {
         engineId, synced: 0, unchanged: 0, excluded: 0, removed: 0, issues,
     });
 
-    it('creates the IP log on a clean run and appends only once for each reportable run', async () => {
+    it('creates the IP log on a clean run and prepends only once for each reportable run', async () => {
         const vault = makeVault();
         const log = `${SYNC_FOLDER}/Sync Log.md`;
         await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 'Direct IP');
         expect(vault.readText(log)).toBe('');
-        const append = vi.spyOn(vault.vault, 'append');
+        const process = vi.spyOn(vault.vault, 'process');
         await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
             { kind: 'protected', item: 'Mirror/edited.note', message: 'edited' },
             { kind: 'failure', item: '/failed.note', message: 'timed out' },
         ]), 'Direct IP');
         await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('connection lost'), 'Direct IP');
-        expect(append).toHaveBeenCalledTimes(2);
+        expect(process).toHaveBeenCalledTimes(2);
+        expect(vault.readText(log)).toMatch(/^## .*\(Direct IP\)\n- Sync failed: connection lost/);
         expect(vault.readText(log)).toContain('Skipped (edited locally since last sync): `Mirror/edited.note`');
         expect(vault.readText(log)).toContain('Failed: `/failed.note` — timed out');
         expect(vault.readText(log)).toContain('Sync failed: connection lost');
@@ -267,7 +268,7 @@ describe('shared sync reporting', () => {
 
     it('surfaces log-write failures without altering the underlying sync result', async () => {
         const vault = makeVault();
-        vault.vault.append = vi.fn().mockRejectedValue(new Error('disk full'));
+        vault.vault.process = vi.fn().mockRejectedValue(new Error('disk full'));
         await expect(reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
             { kind: 'protected', item: 'edited.note', message: 'edited' },
         ]), 'Direct IP')).rejects.toThrow('disk full');
@@ -277,19 +278,21 @@ describe('shared sync reporting', () => {
     it('keeps the latest reportable sections across engines while preserving the preamble', async () => {
         const vault = makeVault();
         const log = `${SYNC_FOLDER}/Sync Log.md`;
-        vault.seedFile(log, '# Notes\nKeep this preamble.\n\n## older IP\nold\n\n## user heading\nuser text\n\n');
+        vault.seedFile(log, '# Notes\nKeep this preamble.\n\n## 2026-01-01 00:00:00 (Direct IP)\nold\n\n## user heading\nuser text\n\n## 2026-02-01 00:00:00 (Supernote cloud)\nolder\n\n');
         await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device'), 'Direct IP', 2);
-        expect(vault.readText(log)).toContain('## older IP');
+        expect(vault.readText(log)).toContain('## 2026-01-01');
         await reportSyncResult(vault.app, SYNC_FOLDER, result('ip-device', [
             { kind: 'protected', item: 'edited.note', message: 'edited' },
         ]), 'Direct IP', 2);
-        expect(vault.readText(log)).not.toContain('## older IP');
+        expect(vault.readText(log)).not.toContain('## 2026-01-01');
+        expect(vault.readText(log)).toContain('## 2026-02-01');
         await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error('secret'), 'Supernote cloud', 2);
         expect(vault.readText(log)).toMatch(/^# Notes\nKeep this preamble\.\n\n## 20/);
         expect(vault.readText(log)).not.toContain('## user heading');
         expect(vault.readText(log)).toContain('edited.note');
         expect(vault.readText(log)).toContain('(Supernote cloud)');
         expect(vault.readText(log).match(/^## /gm)).toHaveLength(2);
+        expect(vault.readText(log).indexOf('Cloud sync failed')).toBeLessThan(vault.readText(log).indexOf('edited.note'));
     });
 
     it('trims existing logs on a limit change or resumption without creating a missing log', async () => {
@@ -297,11 +300,22 @@ describe('shared sync reporting', () => {
         const log = `${SYNC_FOLDER}/Sync Log.md`;
         await trimSyncLog(vault.app, SYNC_FOLDER, 1);
         expect(vault.exists(log)).toBe(false);
-        vault.seedFile(log, 'Intro\n## first\nA\n## second\nB\n## third\nC\n');
+        vault.seedFile(log, 'Intro\n## 2026-01-01 00:00:00 (Direct IP)\nA\n## 2026-02-01 00:00:00 (Direct IP)\nB\n## 2026-03-01 00:00:00 (Supernote cloud)\nC\n');
         await trimSyncLog(vault.app, SYNC_FOLDER, 2);
-        expect(vault.readText(log)).toBe('Intro\n## second\nB\n## third\nC\n');
+        expect(vault.readText(log)).toBe('Intro\n## 2026-03-01 00:00:00 (Supernote cloud)\nC\n## 2026-02-01 00:00:00 (Direct IP)\nB\n');
         await trimSyncLog(vault.app, SYNC_FOLDER, 1);
-        expect(vault.readText(log)).toBe('Intro\n## third\nC\n');
+        expect(vault.readText(log)).toBe('Intro\n## 2026-03-01 00:00:00 (Supernote cloud)\nC\n');
+    });
+
+    it('keeps newest-first logs in order and inserts a valid heading after an unterminated preamble', async () => {
+        const vault = makeVault();
+        const log = `${SYNC_FOLDER}/Sync Log.md`;
+        vault.seedFile(log, 'Intro\n## 2026-03-01 00:00:00 (Direct IP)\nnewer\n## 2026-02-01 00:00:00 (Direct IP)\nolder\n');
+        await trimSyncLog(vault.app, SYNC_FOLDER, 1);
+        expect(vault.readText(log)).toBe('Intro\n## 2026-03-01 00:00:00 (Direct IP)\nnewer\n');
+        vault.seedFile(log, 'Keep this preamble');
+        await reportSyncFailure(vault.app, SYNC_FOLDER, 'ip-device', new Error('offline'), 'Direct IP', 1);
+        expect(vault.readText(log)).toMatch(/^Keep this preamble\n## .*\(Direct IP\)\n- Sync failed: offline/);
     });
 
     it('does not create or write a log while disabled for either engine or failure path', async () => {
@@ -320,7 +334,7 @@ describe('shared sync reporting', () => {
 
     it('retains all lines in a section and ignores non-H2 headings', () => {
         expect(retainSyncLogEntries('Preamble\n# H1\n## first\n- item\n### child\n## second\n- item\n', 1))
-            .toBe('Preamble\n# H1\n## second\n- item\n');
+            .toBe('Preamble\n# H1\n## first\n- item\n### child\n');
     });
 
     it('does not overwrite a log when pruning fails', async () => {

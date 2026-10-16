@@ -192,13 +192,13 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
 
 - Both engines map protected and failed items into `SyncIssue`. Manual and
   scheduled results use one reporting path. IP creates the shared log on clean
-  runs, appends at most once per reportable run, and retains its manual error
+  runs, writes at most once per reportable run, and retains its manual error
   modal. Log-write failures do not mask sync results.
-- `<syncFolder>/Sync Log.md` is shared, append-only, and engine-labeled. Cloud
-  entries persist counts, protected/failed file paths, and allowlisted
-  categories, but not account data, signed URLs, or raw errors. The separate
-  Cloud log proposal was superseded in the design. Cloud planning and deletion
-  exclude the log and `.supernote-sync` even under the `*` extension allowlist.
+- `<syncFolder>/Sync Log.md` is shared and engine-labeled. Cloud entries persist
+  counts, protected/failed file paths, and allowlisted categories, but not
+  account data, signed URLs, or raw errors. The separate Cloud log proposal was
+  superseded in the design. Cloud planning and deletion exclude the log and
+  `.supernote-sync` even under the `*` extension allowlist.
 - Focused reporting tests and the full suite (453 tests), build, and lint passed
   on October 15, 2026. The Cloud per-file logging revision also passed the
   focused and full suites, build, and lint on that date. Lint reported 12
@@ -217,14 +217,14 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   preserve content before the first H2 but do not specially protect user-written
   H2 sections. Disabling logging stops creation and writes, but preserves any
   existing log and all Notices.
-- Shared reporting retains newest H2 sections when appending; settings trim
-  existing logs on resumption and limit changes. Clean IP runs still create a
-  log when enabled but do not append an entry. The manual and scheduled paths
-  share the same reporting calls and preserve Notices when logging is off.
-  Focused tests cover mixed engines, pre-existing logs, count changes,
-  enable/disable, missing logs, and write failures. Full tests (459), build, and
-  lint (zero errors, 12 existing warnings) passed October 15, 2026. No live
-  Cloud login, OTP, mutation, or destructive vault validation was used.
+- Shared reporting inserts new H2 sections at the top and trims the oldest from
+  the bottom; settings trim existing logs on resumption and limit changes. Clean
+  IP runs still create a log when enabled but do not append an entry. The manual
+  and scheduled paths share the same reporting calls and preserve Notices when
+  logging is off. Focused tests cover mixed engines, pre-existing logs, count
+  changes, enable/disable, missing logs, and write failures. Full tests (459),
+  build, and lint (zero errors, 12 existing warnings) passed October 15, 2026.
+  No live Cloud login, OTP, mutation, or destructive vault validation was used.
 
 ### Next: Explicit Cloud Mirror Reset
 
