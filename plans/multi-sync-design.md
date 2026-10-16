@@ -688,6 +688,15 @@ manual Cloud sync there downloaded five files without reported issues. This
 validates the tested flow, not interruption or every Cloud failure mode; an
 earlier generic `Cloud sync failed` log entry was not diagnosed.
 
+On October 16, 2026, the same disposable vault also passed a live cancellation
+check: a pre-created empty folder was selected in the change-location modal,
+then **Cancel** was pressed. Saved plugin settings and all seven original root
+files, including hidden manifest data, remained byte-identical; the destination
+stayed empty. After a normal Obsidian restart, the plugin still selected the
+original root and those saved files remained byte-identical. The empty test
+folder was removed. This checks cancellation and ordinary persistence, not
+recovery from an interrupted folder move or sync.
+
 Changing Cloud accounts is handled only from the interactive sign-in flow; there
 is no standalone destructive reset control. When a verified sign-in returns a
 different account ID from the account bound to the shared manifest, the user is

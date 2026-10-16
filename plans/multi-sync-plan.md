@@ -2,10 +2,11 @@
 
 **Status:** Single-active-engine coordination, Cloud/IP shared-manifest access,
 shared non-destructive history clearing, and the explicit sync-folder change
-workflow are implemented with synthetic tests. The move and leave-behind flow
-and manual Cloud sync after each change were validated in the disposable Marie
-vault. Live account-switch and device tests remain pending. Sync implementation
-files are organized under `src/sync/`. Updated October 16, 2026.
+workflow are implemented with synthetic tests. The move, leave-behind, and
+cancel flows and persistence across a normal restart were validated in the
+disposable Marie vault. Live account-switch and device tests remain pending.
+Sync implementation files are organized under `src/sync/`. Updated October 16,
+2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -86,17 +87,23 @@ criteria for both engines and root changes live in
   records. A second manual Cloud sync downloaded five files with no reported
   issues and committed five records under the original root. An earlier generic
   `Cloud sync failed` log entry was not diagnosed; the later successful runs do
-  not explain it. Cancel and restart recovery were covered synthetically but
-  were not exercised in the live vault.
+  not explain it. Interrupted-operation recovery was covered synthetically, but
+  was not exercised in the live vault.
+- Selected a pre-created empty folder in the live change-location modal and
+  pressed **Cancel**. Saved plugin settings and all seven files under the
+  original root, including hidden manifest data, matched their pre-test hashes;
+  the new folder stayed empty. After a normal Obsidian restart, the plugin still
+  selected the original root and settings and files still matched. The
+  disposable empty folder was removed. This did not test interruption during a
+  move or sync.
 
 ## Outstanding
 
 ### Remaining validation
 
-- Live cancel and interrupted-operation restart checks were not part of the
-  completed Marie sequence; keep them separate from the validated move and
-  leave-behind paths. Use replaceable folders and do not force an interruption
-  during a user's real sync.
+- Live interrupted-operation recovery remains untested. Do not force an
+  interruption during a user's real sync; a controlled replaceable fixture and
+  separate approval are required for that test.
 - Live Cloud account-switch validation still needs a consenting volunteer with a
   second account. The Marie checks did not switch accounts.
 - The real-device IP smoke test still needs a dedicated device test directory
