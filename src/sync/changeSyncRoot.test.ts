@@ -71,6 +71,15 @@ function fixture() {
         write: async (path: string, text: string) => { entries.set(path, { type: 'file', text }); },
         mkdir: async (path: string) => { entries.set(path, { type: 'folder' }); },
         remove: async (path: string) => { entries.delete(path); },
+        rename: async (source: string, destination: string) => {
+            if (failRename || renameCount++ === failAfterRenames) throw new Error('rename failed');
+            for (const [path, entry] of [...entries]) {
+                if (path === source || path.startsWith(`${source}/`)) {
+                    entries.delete(path);
+                    entries.set(`${destination}${path.slice(source.length)}`, entry);
+                }
+            }
+        },
         list: async (path: string) => ({
             files: [...entries].filter(([key, value]) => key.startsWith(`${path}/`)
                 && !key.slice(path.length + 1).includes('/') && value.type === 'file').map(([key]) => key),
@@ -83,16 +92,10 @@ function fixture() {
         saveLocalStorage: (key: string, value: unknown) => { local.set(key, value); },
         vault: {
             adapter,
-            getAbstractFileByPath: (path: string) => entries.get(path)
+            getAbstractFileByPath: (path: string) => !path.includes('/.supernote-sync') && entries.get(path)
                 ? Object.assign(entries.get(path)?.type === 'folder' ? new TFolder() : new TFile(), { path }) : null,
             rename: async (file: TAbstractFile, path: string) => {
-                if (failRename || renameCount++ === failAfterRenames) throw new Error('rename failed');
-                for (const [key, value] of [...entries]) {
-                    if (key === file.path || key.startsWith(`${file.path}/`)) {
-                        entries.delete(key);
-                        entries.set(`${path}${key.slice(file.path.length)}`, value);
-                    }
-                }
+                await adapter.rename(file.path, path);
             },
         },
     } as unknown as App;
@@ -272,6 +275,29 @@ it('recovers a failed entry move without overwriting the old folder', async () =
     vault.failRename(false);
     await vault.change.recover();
     expect(vault.entries.get('New Mirror/user.note')?.text).toBe('edited');
+});
+
+it('recovers the move when the hidden manifest directory is not indexed by Obsidian', async () => {
+    const vault = fixture();
+    vault.entries.set('Mirror/user.note', { type: 'file', text: 'edited' });
+    const storage = new ObsidianMirrorManifestStorage(vault.app, 'Mirror');
+    await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
+        'Mirror/user.note': { contentHash: 'original', source: { engineId: 'ip-device',
+            deviceUri: '/user.note', deviceDate: '', deviceSize: 6 } },
+    } });
+    expect(vault.app.vault.getAbstractFileByPath('Mirror/.supernote-sync')).toBeNull();
+    vault.failRename(true);
+    await expect(vault.change.change('New Mirror', 'move')).rejects.toThrow('rename failed');
+    expect(() => vault.change.assertReady()).toThrow('pending');
+    vault.failRename(false);
+    await vault.change.recover();
+    expect(vault.entries.get('New Mirror/user.note')?.text).toBe('edited');
+    expect(vault.entries.has('Mirror/.supernote-sync')).toBe(false);
+    expect(vault.entries.has('New Mirror/.supernote-sync/primary.json')).toBe(true);
+    expect((await loadMirrorManifest(new ObsidianMirrorManifestStorage(vault.app, 'New Mirror'), {})).manifest.records)
+        .toHaveProperty('New Mirror/user.note');
+    expect(vault.root()).toBe('New Mirror');
+    vault.change.assertReady();
 });
 
 it('recovers after one child moves, preserving nested files and the original folder', async () => {

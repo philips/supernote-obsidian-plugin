@@ -659,7 +659,12 @@ vault first, then selects that folder directly.
   manifest paths and `syncFolder` while retaining hashes and Cloud binding.
   Checkpoint the direct entries and their content signatures before mutation;
   resume a partial move only when each entry and the manifest prove their state.
-  Otherwise block sync for manual resolution.
+  Otherwise block sync for manual resolution. Use the Vault API for indexed
+  entries and the adapter for the hidden `.supernote-sync` directory: in the
+  Marie vault on October 16, 2026, the directory existed on disk but Obsidian's
+  `getAbstractFileByPath` did not return it. A Vault-only rename stopped at that
+  entry with a pending checkpoint; the adapter path and checkpoint recovery
+  passed synthetic tests and the live move completed with both manifest slots.
 - **Leave behind and start fresh:** do not move, delete, or trash old content.
   Explain that old files become unmanaged and in-scope remote files will be
   downloaded to the new root. Retire the old root's plugin manifest slots
@@ -672,6 +677,16 @@ vault first, then selects that folder directly.
 Both engines follow the same root-change operation. Do not automatically infer
 either choice from a path edit. The work sequence and validation cases are in
 [shared-manifest-plan.md](shared-manifest-plan.md).
+
+In the disposable Marie vault on October 16, 2026, moving from `Supernote sync`
+to the pre-created empty `Supernote sync B` left the original folder empty and
+rewrote the current manifest's five records to B. A manual Cloud sync from B
+reported five unchanged files and no issues. Returning to the original folder
+with **Leave files and start fresh** preserved B's seven user files, retired its
+manifest slots, and created an empty bound manifest in the original folder. A
+manual Cloud sync there downloaded five files without reported issues. This
+validates the tested flow, not interruption or every Cloud failure mode; an
+earlier generic `Cloud sync failed` log entry was not diagnosed.
 
 Changing Cloud accounts is handled only from the interactive sign-in flow; there
 is no standalone destructive reset control. When a verified sign-in returns a

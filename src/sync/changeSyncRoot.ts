@@ -175,6 +175,10 @@ export class SyncRootChange {
             for (const { name } of checkpoint.entries) {
                 const source = `${oldRoot}/${name}`;
                 if (await adapter.stat(source) === null) continue;
+                if (name === MIRROR_METADATA_DIRECTORY) {
+                    await adapter.rename(source, `${newRoot}/${name}`);
+                    continue;
+                }
                 const file = this.app.vault.getAbstractFileByPath(source);
                 if (!(file instanceof TAbstractFile)) throw new Error('Sync folder entry is not in the vault');
                 await this.app.vault.rename(file, `${newRoot}/${name}`);

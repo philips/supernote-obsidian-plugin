@@ -3,8 +3,9 @@
 **Status:** Implemented with synthetic regression coverage. Both engines use the
 root-bound two-slot manifest service; IP plans in memory. The coordinator owns
 shared non-destructive history clearing and exclusive root changes with restart
-checkpoints. Controlled-vault visual verification remains in
-[`multi-sync-next-steps.md`](multi-sync-next-steps.md).
+checkpoints. Move, leave-behind, and manual Cloud sync after each change were
+validated in the disposable Marie vault on October 16, 2026. Untested live
+cases remain in [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
 
 ## Product Contract
 
@@ -91,8 +92,9 @@ filesystem picker or accept a destination outside the vault.
   including user-created or edited files, `Sync Log.md`, and `.supernote-sync`,
   but the original folder stays. Require a distinct, safe, existing empty
   destination outside the old root. Under the coordinator lock, checkpoint the
-  direct entries and their content signatures, move each direct child through
-  the Vault API, then update manifest paths and `syncFolder`. Retain hashes,
+  direct entries and their content signatures, move indexed children through
+  the Vault API and the hidden `.supernote-sync` directory through the adapter,
+  then update manifest paths and `syncFolder`. Retain hashes,
   source snapshots, and Cloud account binding. Resume after interruption only
   when every entry is provably at exactly one root with its expected contents
   and the manifest still matches; otherwise stop sync for manual resolution.

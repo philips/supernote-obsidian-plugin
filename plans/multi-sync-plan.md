@@ -2,10 +2,10 @@
 
 **Status:** Single-active-engine coordination, Cloud/IP shared-manifest access,
 shared non-destructive history clearing, and the explicit sync-folder change
-workflow are implemented with synthetic tests. Controlled-vault visual
-validation of the settings flow and live account-switch validation remain
-pending. Sync implementation files are organized under `src/sync/`. Updated
-October 16, 2026.
+workflow are implemented with synthetic tests. The move and leave-behind flow
+and manual Cloud sync after each change were validated in the disposable Marie
+vault. Live account-switch and device tests remain pending. Sync implementation
+files are organized under `src/sync/`. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -71,17 +71,36 @@ criteria for both engines and root changes live in
 - Corrected move-contents workflow: `npm test` (502 passing), `npm run build`,
   `npm run lint` (0 errors, 14 existing warnings), and `git diff --check`.
   Folder changes were exercised with synthetic vault fixtures only.
+- Fixed the live move failure caused by Obsidian not indexing the hidden
+  `.supernote-sync` directory: the adapter renames that directory while indexed
+  entries still use the Vault API. Checkpoint recovery covers the hidden entry.
+  Verification: `npm test` (504 passing), `npm run build`, `npm run lint`
+  (0 errors, 14 existing warnings), and `git diff --check`.
+- Validated the settings move/leave choices in the disposable Marie vault:
+  moved the old root's contents to a pre-created empty B folder, leaving the
+  original folder; verified nine files including both manifest slots and a
+  current manifest with five paths rewritten to B. A manual Cloud sync from B
+  returned five unchanged and no reported issues. Returned to the original
+  empty folder with **Leave files and start fresh**; B retained seven user
+  files, its old manifest slots were retired, and the new bound manifest began
+  with zero records. A second manual Cloud sync downloaded five files with no
+  reported issues and committed five records under the original root. An
+  earlier generic `Cloud sync failed` log entry was not diagnosed; the later
+  successful runs do not explain it. Cancel and restart recovery were covered
+  synthetically but were not exercised in the live vault.
 
 ## Outstanding
 
 ### Remaining validation
 
-- Check the settings flow in the disposable Marie vault, using replaceable
-  folders and the available CLI, VS Code Obsidian MCP, or user interaction.
-  Confirm the UI choices and vault/settings/manifest results; no headless host
-  is needed. The earlier synthetic tests did not mutate a vault.
+- Live cancel and interrupted-operation restart checks were not part of the
+  completed Marie sequence; keep them separate from the validated move and
+  leave-behind paths. Use replaceable folders and do not force an interruption
+  during a user's real sync.
 - Live Cloud account-switch validation still needs a consenting volunteer with a
-  second account. No Cloud login or remote mutation was attempted.
+  second account. The Marie checks did not switch accounts.
+- The real-device IP smoke test still needs a dedicated device test directory
+  and explicit approval for its fixture upload.
 - The next handoff is in [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
 
 ### Open scope decisions
