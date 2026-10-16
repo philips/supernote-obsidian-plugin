@@ -24,6 +24,7 @@ export interface SharedMirrorManifest {
     version: 1;
     cloudAccountFingerprint: string | null;
     records: Record<string, SharedMirrorRecord>;
+    accountChange?: { targetFingerprint: string; pendingPath: string | null; protectedPaths: string[] };
 }
 
 export function cloudAccountFingerprint(userId: string): string {

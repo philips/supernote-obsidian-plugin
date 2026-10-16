@@ -6,8 +6,9 @@ implemented and synthetically tested. The user reports completing live
 logout/login; scheduled-sync checks, including signed-out handling and
 main-window notices, are user-reported rather than independently captured. The
 read-only username lookup was separately validated against the existing session.
-The confirmed Cloud account-change and guarded mirror reset workflow remains
-unimplemented and is scheduled for the next sprint. Updated October 15, 2026.
+Confirmed Cloud account change and guarded cleanup are implemented and
+synthetically tested; live account switching and destructive vault validation
+remain unverified. Updated October 15, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -38,8 +39,8 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   `requestUrl` GET, size and MD5 verification, local-edit checks immediately
   before writes, and no rewrite for identical bytes.
 - Implemented a desktop-only Cloud mirror engine for manual and scheduled runs.
-  The explicit reset workflow for clearing Cloud mirror history and account
-  binding remains unimplemented and is deferred to a later sprint.
+  Confirmed account changes now perform guarded cleanup; there is no standalone
+  destructive reset control.
 - Signed-in Cloud settings fetch the current `userName` through the existing
   account-identity route and display it only when the returned account ID
   matches the active session. Neither the username nor its response is stored; a
@@ -226,30 +227,27 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   build, and lint (zero errors, 12 existing warnings) passed October 15, 2026.
   No live Cloud login, OTP, mutation, or destructive vault validation was used.
 
-### Next: Confirmed Cloud Account Change
+### Confirmed Cloud Account Change (implemented; live validation pending)
 
-- Use the verified Cloud `userId` (not `userName`) to compare with the existing
-  shared manifest fingerprint before persisting a replacement session or
-  allowing sync. Sign-out and re-entry to the same ID preserve the binding and
-  files; a different ID blocks sync and offers a manual confirmation.
-  Cancellation keeps the old binding and does not save the new session.
-  Scheduled attempts must not open confirmation or perform cleanup in the
-  background.
-- On confirmation, apply the existing guarded reset requirements in
-  [`multi-sync-design.md`](multi-sync-design.md): recover pending operations,
-  move only unchanged managed files to Obsidian Trash, preserve and report
-  edited files, protect unmanaged and out-of-scope files, durably checkpoint
-  manifest changes, and release the old account binding only after safe cleanup.
-  Treat unbound manifests with shared IP-managed records as real history, not an
-  empty mirror; never delete those records or files solely because Cloud has not
-  bound the manifest. Bind the new verified account only after reset completes.
-  Do not add a standalone destructive "start over" button; keep non-destructive
-  history forgetting conceptually separate.
-- Cover same-account re-entry, differing IDs despite identical usernames,
-  cancellation, scheduled blocking, guarded Trash, edited/IP-managed records,
-  failures and restart recovery with synthetic tests. Run full test/build/lint/
-  diff checks. Request separate approval before any live login/OTP or
-  destructive vault validation; no Cloud mutation is required.
+- Verified Cloud `userId` drives the fingerprint comparison; the display-only
+  username does not. Same-account re-entry preserves the manifest. A different
+  account requires an explicit modal confirmation before any session replacement
+  or cleanup; cancellation keeps the old session and binding. The coordinator
+  excludes scheduled and manual sync while confirmation/cleanup runs, and Cloud
+  sync rejects a manifest with unfinished account-change progress.
+- On confirmation, per-file manifest checkpoints precede Trash. Unchanged,
+  in-scope Cloud-managed files move to Obsidian Trash. Edited and out-of-scope
+  files remain and are reported; unmanaged vault files and shared IP records
+  remain. A pending file is rechecked against its recorded hash on retry;
+  already-trashed files are committed without a second Trash attempt. The final
+  checkpoint binds the newly verified fingerprint, preventing an old session
+  from reclaiming a cleared binding if SecretStorage persistence fails.
+- Synthetic coverage includes same-account re-entry, confirmation/cancellation,
+  stale-session retry, edited/out-of-scope/IP files, an unbound manifest with IP
+  history, pending-file recovery, and failure after Trash before manifest
+  commit. No live login, OTP, Cloud mutation, or destructive vault check was
+  performed. The account-change trigger is not a standalone reset button;
+  non-destructive history forgetting remains distinct.
 
 ### Sprint 7: User-Reported Scheduled Sync Validation
 

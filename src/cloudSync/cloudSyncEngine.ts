@@ -62,6 +62,7 @@ export class CloudSyncEngine implements SyncEngine {
         const fingerprint = cloudAccountFingerprint(session.userId);
         const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
         let loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);
+        if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before sync');
         if (loaded.manifest.cloudAccountFingerprint === null) {
             loaded = await saveMirrorManifest(storage, loaded, {
                 ...loaded.manifest, cloudAccountFingerprint: fingerprint,

@@ -9,6 +9,9 @@ import { ObsidianMirrorManifestStorage } from './obsidianMirrorManifestStorage';
 import type { SupernotePluginSettings } from '../settings';
 import { CloudRequestBudget, NodeCloudProtocolTransport } from '../../scripts/cloudProtocolTransport';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';
+import { changeCloudMirrorAccount } from './cloudAccountChange';
+import { ObsidianCloudMirrorVault } from './obsidianCloudMirrorVault';
+import { parsePathFilters, parseFileExtensionAllowlist } from '../syncFilters';
 
 export function createCloudAuthTransport(): CloudControlPlaneTransport {
     return new NodeCloudProtocolTransport({
@@ -24,32 +27,52 @@ export async function signInCloud(
     getVerificationCode: () => Promise<string>,
     isCancelled: () => boolean,
     transport: CloudControlPlaneTransport = createCloudAuthTransport(),
-): Promise<void> {
+    confirmChange?: () => Promise<boolean>,
+    runExclusive: <T>(operation: () => Promise<T>) => Promise<T> = (operation) => operation(),
+): Promise<string[] | null> {
     if (!app.secretStorage?.getSecret || !app.secretStorage.setSecret) {
         throw new Error('SecretStorage is unavailable');
     }
     const storage = new CloudSessionStorage(app.secretStorage);
     const session = await authenticateCloudPassword(transport, credentials, { getVerificationCode });
-    if (isCancelled()) return;
-    const existing = storage.load();
-    if (existing && existing.userId !== session.userId) {
-        throw new Error('Cloud session belongs to another account');
-    }
-    const { manifest } = await loadMirrorManifest(
-        new ObsidianMirrorManifestStorage(app, settings.syncFolder), settings.noteSyncState,
-    );
-    if (manifest.cloudAccountFingerprint !== null
-        && manifest.cloudAccountFingerprint !== cloudAccountFingerprint(session.userId)) {
-        throw new Error('Cloud mirror account binding does not match');
-    }
-    if (isCancelled()) return;
-    storage.save(session);
-    const stored = storage.load();
-    if (stored?.token !== session.token || stored.userId !== session.userId) {
-        if (existing) storage.save(existing);
-        else storage.clear();
-        throw new Error('SecretStorage did not retain the validated session');
-    }
+    if (isCancelled()) return null;
+    return runExclusive(async () => {
+        const existing = storage.load();
+        const manifestStorage = new ObsidianMirrorManifestStorage(app, settings.syncFolder);
+        const loaded = await loadMirrorManifest(manifestStorage, settings.noteSyncState);
+        const fingerprint = cloudAccountFingerprint(session.userId);
+        const accountChanged = (existing !== null && existing.userId !== session.userId)
+            || (loaded.manifest.cloudAccountFingerprint !== null
+                && loaded.manifest.cloudAccountFingerprint !== fingerprint)
+            || loaded.manifest.accountChange !== undefined;
+        let protectedPaths: string[] = [];
+        if (accountChanged) {
+            if (!confirmChange || !await confirmChange() || isCancelled()) return null;
+            if (loaded.manifest.cloudAccountFingerprint !== null
+                && (loaded.manifest.cloudAccountFingerprint !== fingerprint || loaded.manifest.accountChange)) {
+                const result = await changeCloudMirrorAccount(manifestStorage, loaded,
+                    new ObsidianCloudMirrorVault(app), fingerprint, settings.syncFolder,
+                    parsePathFilters(settings.syncPathFiltersRaw),
+                    parseFileExtensionAllowlist(settings.syncFileExtensionsRaw));
+                protectedPaths = result.protectedPaths;
+            }
+        }
+        // A confirmed reset must still establish the verified binding even if the modal closes.
+        if (isCancelled() && !accountChanged) return null;
+        if (existing?.userId !== session.userId) storage.clear();
+        try {
+            storage.save(session);
+            const stored = storage.load();
+            if (stored?.token !== session.token || stored.userId !== session.userId) {
+                throw new Error('SecretStorage did not retain the validated session');
+            }
+        } catch (error) {
+            storage.clear();
+            if (existing) storage.save(existing);
+            throw error;
+        }
+        return protectedPaths;
+    });
 }
 
 export async function signOutCloud(

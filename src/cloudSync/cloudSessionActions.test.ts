@@ -7,17 +7,20 @@ import { signInCloud, signOutCloud } from './cloudSessionActions';
 import { CloudSessionStorage } from './cloudSessionStorage';
 import { cloudAccountFingerprint } from './sharedMirrorManifest';
 import { loadMirrorManifest } from './sharedMirrorManifestStore';
+import { changeCloudMirrorAccount } from './cloudAccountChange';
 
 vi.mock('obsidian', () => ({ TFile: class TFile {} }));
 vi.mock('./cloudAuth', () => ({ authenticateCloudPassword: vi.fn() }));
 vi.mock('./sharedMirrorManifestStore', () => ({ loadMirrorManifest: vi.fn() }));
+vi.mock('./cloudAccountChange', () => ({ changeCloudMirrorAccount: vi.fn() }));
 
 const secrets = new Map<string, string>();
 const app = { secretStorage: {
     getSecret: (id: string) => secrets.get(id) ?? null,
     setSecret: (id: string, value: string) => { secrets.set(id, value); },
 } } as unknown as App;
-const settings = { syncFolder: 'Mirror', noteSyncState: {} } as SupernotePluginSettings;
+const settings = { syncFolder: 'Mirror', noteSyncState: {}, syncPathFiltersRaw: '',
+    syncFileExtensionsRaw: '.note' } as SupernotePluginSettings;
 const transport = { bootstrapCsrf: vi.fn(async () => {}), post: vi.fn(async () => ({ status: 200, body: '{"success":true}' })) };
 const credentials = { email: 'test@example.com', password: 'private-password' };
 const getCode = vi.fn(async () => 'private-code');
@@ -29,6 +32,7 @@ beforeEach(() => {
     vi.mocked(loadMirrorManifest).mockResolvedValue({
         manifest: { version: 1, cloudAccountFingerprint: null, records: {} }, revision: 0, slot: 'primary',
     });
+    vi.mocked(changeCloudMirrorAccount).mockResolvedValue({ protectedPaths: [] });
 });
 
 describe('Cloud session actions', () => {
@@ -55,9 +59,62 @@ describe('Cloud session actions', () => {
             manifest: { version: 1, cloudAccountFingerprint: cloudAccountFingerprint('17'), records: {} },
             revision: 1, slot: 'primary',
         });
-        await expect(signInCloud(app, settings, credentials, getCode, () => false, transport))
-            .rejects.toThrow('binding does not match');
+        expect(await signInCloud(app, settings, credentials, getCode, () => false, transport)).toBeNull();
         expect(secrets.size).toBe(0);
+    });
+
+    it('re-enters the same bound account without confirmation or cleanup', async () => {
+        vi.mocked(loadMirrorManifest).mockResolvedValue({
+            manifest: { version: 1, cloudAccountFingerprint: cloudAccountFingerprint('42'), records: {} },
+            revision: 1, slot: 'primary',
+        });
+        const confirm = vi.fn(async () => true);
+        expect(await signInCloud(app, settings, credentials, getCode, () => false, transport, confirm)).toEqual([]);
+        expect(confirm).not.toHaveBeenCalled();
+        expect(changeCloudMirrorAccount).not.toHaveBeenCalled();
+    });
+
+    it('changes a bound account only after confirmation and preserves cancellation', async () => {
+        vi.mocked(loadMirrorManifest).mockResolvedValue({
+            manifest: { version: 1, cloudAccountFingerprint: cloudAccountFingerprint('17'), records: {} },
+            revision: 1, slot: 'primary',
+        });
+        const confirm = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        expect(await signInCloud(app, settings, credentials, getCode, () => false, transport, confirm)).toBeNull();
+        expect(changeCloudMirrorAccount).not.toHaveBeenCalled();
+        vi.mocked(changeCloudMirrorAccount).mockResolvedValue({ protectedPaths: ['Mirror/Note/edited.note'] });
+        expect(await signInCloud(app, settings, credentials, getCode, () => false, transport, confirm))
+            .toEqual(['Mirror/Note/edited.note']);
+        expect(changeCloudMirrorAccount).toHaveBeenCalledOnce();
+        expect(new CloudSessionStorage(app.secretStorage).load()?.userId).toBe('42');
+    });
+
+    it('does not repeat cleanup when the new binding is already committed but the old session remains', async () => {
+        new CloudSessionStorage(app.secretStorage).save({ token: 'previous-token', userId: '17' });
+        vi.mocked(loadMirrorManifest).mockResolvedValue({
+            manifest: { version: 1, cloudAccountFingerprint: cloudAccountFingerprint('42'), records: {} },
+            revision: 4, slot: 'backup',
+        });
+        const confirm = vi.fn(async () => true);
+        expect(await signInCloud(app, settings, credentials, getCode, () => false, transport, confirm)).toEqual([]);
+        expect(confirm).toHaveBeenCalledOnce();
+        expect(changeCloudMirrorAccount).not.toHaveBeenCalled();
+        expect(new CloudSessionStorage(app.secretStorage).load()?.userId).toBe('42');
+    });
+
+    it('preserves unbound shared IP history when replacing an old local session', async () => {
+        new CloudSessionStorage(app.secretStorage).save({ token: 'previous-token', userId: '17' });
+        const ipRecord = { contentHash: 'synthetic', source: {
+            engineId: 'ip-device' as const, deviceUri: '/Note/ip.note', deviceDate: '2026-01-01', deviceSize: 1,
+        } };
+        vi.mocked(loadMirrorManifest).mockResolvedValue({
+            manifest: { version: 1, cloudAccountFingerprint: null, records: { 'Mirror/Note/ip.note': ipRecord } },
+            revision: 2, slot: 'primary',
+        });
+        const confirm = vi.fn(async () => true);
+        expect(await signInCloud(app, settings, credentials, getCode, () => false, transport, confirm)).toEqual([]);
+        expect(changeCloudMirrorAccount).not.toHaveBeenCalled();
+        expect(new CloudSessionStorage(app.secretStorage).load()?.userId).toBe('42');
     });
 
     it('preserves an existing session if the replacement token fails readback', async () => {

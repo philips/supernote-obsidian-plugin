@@ -88,6 +88,7 @@ export interface SyncCoordinator {
     pollAutomatic(now?: number, onUnready?: (engineId: SyncEngineId, reason?: string) => void): Promise<SyncRunResult | null>;
     runActive(trigger: SyncTrigger): Promise<SyncRunResult | null>;
     isRunning(): boolean;
+    runExclusive<T>(operation: () => Promise<T>): Promise<T>;
     clearActiveHistory(): Promise<void>;
 }
 
@@ -216,6 +217,16 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
 
     isRunning(): boolean {
         return this.running;
+    }
+
+    async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+        if (this.running) throw new Error('Wait for the current sync before changing Cloud accounts');
+        this.running = true;
+        try {
+            return await operation();
+        } finally {
+            this.running = false;
+        }
     }
 
     async clearActiveHistory(): Promise<void> {

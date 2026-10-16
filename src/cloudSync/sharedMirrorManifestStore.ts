@@ -34,7 +34,17 @@ function validManifest(value: unknown): value is SharedMirrorManifest {
     if (manifest.version !== 1 || !manifest.records || typeof manifest.records !== 'object'
         || Array.isArray(manifest.records)
         || (manifest.cloudAccountFingerprint !== null
-            && (typeof manifest.cloudAccountFingerprint !== 'string' || !manifest.cloudAccountFingerprint))) {
+            && (typeof manifest.cloudAccountFingerprint !== 'string' || !manifest.cloudAccountFingerprint))
+        || (manifest.accountChange !== undefined && (!manifest.accountChange
+            || typeof manifest.accountChange.targetFingerprint !== 'string'
+            || !/^v1:[a-f\d]{64}$/.test(manifest.accountChange.targetFingerprint)
+            || manifest.cloudAccountFingerprint === null
+            || !Array.isArray(manifest.accountChange.protectedPaths)
+            || !manifest.accountChange.protectedPaths.every((path) => typeof path === 'string'
+                && Object.hasOwn(manifest.records!, path) === false)
+            || (manifest.accountChange.pendingPath !== null
+                && (typeof manifest.accountChange.pendingPath !== 'string'
+                    || manifest.records[manifest.accountChange.pendingPath]?.source.engineId !== 'supernote-cloud'))))) {
         return false;
     }
     return Object.entries(manifest.records).every(([path, entry]) => {

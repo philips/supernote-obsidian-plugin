@@ -1592,7 +1592,7 @@ export default class SupernotePlugin extends Plugin {
 		if (this.cloudSignInModal) return;
 		this.cloudSignInModal = new CloudSignInModal(this.app, this.settings, () => {
 			onSignedIn();
-		}, () => { this.cloudSignInModal = null; });
+		}, () => { this.cloudSignInModal = null; }, (operation) => this.syncCoordinator.runExclusive(operation));
 		this.cloudSignInModal.open();
 	}
 

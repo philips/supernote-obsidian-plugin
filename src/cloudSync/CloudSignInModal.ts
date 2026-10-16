@@ -6,9 +6,11 @@ export class CloudSignInModal extends Modal {
     private cancelled = false;
     private submitting = false;
     private rejectCode: ((error: Error) => void) | null = null;
+    private rejectConfirmation: (() => void) | null = null;
 
     constructor(app: App, private readonly settings: SupernotePluginSettings,
-        private readonly onSignedIn: () => void, private readonly onClosed: () => void) {
+        private readonly onSignedIn: () => void, private readonly onClosed: () => void,
+        private readonly runExclusive: <T>(operation: () => Promise<T>) => Promise<T>) {
         super(app);
     }
 
@@ -32,12 +34,16 @@ export class CloudSignInModal extends Modal {
             submit.disabled = true;
             const credentials = { email: email.value.trim(), password: password.value };
             password.value = '';
-            void signInCloud(this.app, this.settings, credentials, () => this.requestCode(), () => this.cancelled)
-                .then(() => {
-                    if (!this.cancelled) {
+            void signInCloud(this.app, this.settings, credentials, () => this.requestCode(), () => this.cancelled,
+                undefined, () => this.confirmAccountChange(), this.runExclusive)
+                .then((protectedPaths) => {
+                    if (protectedPaths !== null && !this.cancelled) {
                         new Notice('Supernote Cloud signed in');
+                        if (protectedPaths.length) new Notice(`Cloud account changed. ${protectedPaths.length} edited or out-of-scope files preserved: ${protectedPaths.join(', ')}`);
                         this.close();
                         this.onSignedIn();
+                    } else if (!this.cancelled) {
+                        this.onOpen();
                     }
                 })
                 .catch((error: unknown) => {
@@ -80,10 +86,31 @@ export class CloudSignInModal extends Modal {
         });
     }
 
+    private confirmAccountChange(): Promise<boolean> {
+        if (this.cancelled) return Promise.resolve(false);
+        return new Promise((resolve) => {
+            this.rejectConfirmation = () => resolve(false);
+            this.contentEl.empty();
+            this.contentEl.createEl('h2', { text: 'Change Cloud account?' });
+            this.contentEl.createEl('p', { text: 'Unchanged managed Cloud files will move to Obsidian Trash. Locally edited, unmanaged, and out-of-scope files will stay. Protected files will be reported. This cannot be undone automatically.' });
+            const actions = this.contentEl.createDiv({ cls: 'supernote-cloud-sign-in-actions' });
+            const finish = (confirmed: boolean) => {
+                this.rejectConfirmation = null;
+                resolve(confirmed);
+            };
+            actions.createEl('button', { text: 'Cancel', attr: { type: 'button' } })
+                .addEventListener('click', () => finish(false));
+            actions.createEl('button', { text: 'Change account', cls: 'mod-warning', attr: { type: 'button' } })
+                .addEventListener('click', () => finish(true));
+        });
+    }
+
     onClose(): void {
         this.cancelled = true;
         this.rejectCode?.(new Error('Sign-in cancelled'));
         this.rejectCode = null;
+        this.rejectConfirmation?.();
+        this.rejectConfirmation = null;
         this.contentEl.querySelectorAll('input').forEach((input) => { input.value = ''; });
         this.contentEl.empty();
         this.onClosed();
