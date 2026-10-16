@@ -2,7 +2,7 @@ import type { App } from 'obsidian';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupernotePluginSettings } from '../../settings';
 import { validateCloudProtocolSession } from '../../../scripts/cloudProtocolSession';
-import { collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
+import { cloudInventoryFingerprint, collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
 import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { downloadCloudBytes } from './cloudDownload';
 import { cloudAccountFingerprint } from '../sharedMirrorManifest';
@@ -22,7 +22,7 @@ vi.mock('../../../scripts/cloudProtocolTransport', () => ({
     NodeCloudProtocolTransport: class NodeCloudProtocolTransport { post = post; },
 }));
 vi.mock('./cloudInventory', () => ({
-    collectCloudInventory: vi.fn(), queryCloudPath: vi.fn(), verifyCloudInventoryPaths: vi.fn(),
+    cloudInventoryFingerprint: vi.fn(), collectCloudInventory: vi.fn(), queryCloudPath: vi.fn(), verifyCloudInventoryPaths: vi.fn(),
 }));
 vi.mock('./cloudMirrorPipeline', () => ({ runVerifiedCloudMirror: vi.fn() }));
 vi.mock('./cloudDownload', () => ({ downloadCloudBytes: vi.fn() }));
@@ -62,6 +62,7 @@ beforeEach(() => {
     vi.mocked(collectCloudInventory).mockResolvedValue({ directories: [], items: [item] });
     vi.mocked(queryCloudPath).mockResolvedValue({ path: 'Note/Test.note/', idPath: '1/123/' });
     vi.mocked(verifyCloudInventoryPaths).mockReturnValue(new Map([['123', '/Note/Test.note']]));
+    vi.mocked(cloudInventoryFingerprint).mockReturnValue('matching');
     vi.mocked(loadMirrorManifest).mockResolvedValue({
         manifest: { version: 1, cloudAccountFingerprint: null, records: {} }, revision: 1, slot: 'primary',
     });
@@ -80,6 +81,31 @@ beforeEach(() => {
 });
 
 describe('Cloud engine', () => {
+    it('requires two matching verified inventories before resolving a missing file', async () => {
+        vi.mocked(loadMirrorManifest).mockResolvedValue({ manifest: {
+            version: 1, cloudAccountFingerprint: fingerprint, records: {},
+        }, revision: 1, slot: 'primary' });
+        vi.useFakeTimers();
+        vi.stubGlobal('window', { setTimeout });
+        try {
+            const check = new CloudSyncEngine(app, settings).checkPendingSource({
+                kind: 'write', root: 'Mirror', path: 'Mirror/Note/Test.note', beforeHash: null,
+                after: { contentHash: '0'.repeat(16), source: { engineId: 'supernote-cloud', md5: item.md5 } },
+            });
+            await vi.runAllTimersAsync();
+            await expect(check).resolves.toBe('present');
+            expect(collectCloudInventory).toHaveBeenCalledTimes(2);
+            vi.mocked(cloudInventoryFingerprint).mockReturnValueOnce('first').mockReturnValueOnce('second');
+            const changed = new CloudSyncEngine(app, settings).checkPendingSource({
+                kind: 'write', root: 'Mirror', path: 'Mirror/Note/Test.note', beforeHash: null,
+                after: { contentHash: '0'.repeat(16), source: { engineId: 'supernote-cloud', md5: item.md5 } },
+            });
+            const rejection = expect(changed).rejects.toThrow('changed between checks');
+            await vi.runAllTimersAsync();
+            await rejection;
+        } finally { vi.unstubAllGlobals(); vi.useRealTimers(); }
+    });
+
     it('uses the same guarded mirror pipeline for manual and scheduled runs', async () => {
         const engine = new CloudSyncEngine(app, settings);
         const manual = await engine.run({ kind: 'manual', commandId: 'sync-now' });

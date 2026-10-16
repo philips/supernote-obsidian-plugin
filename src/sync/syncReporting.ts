@@ -120,3 +120,8 @@ export async function reportSyncFailure(app: App, syncFolder: string, engineId: 
     const message = engineId === 'ip-device' ? (error instanceof Error ? error.message : String(error)) : '';
     await appendSyncLogEntry(app, syncFolder, formatSyncFailureLogEntry(engineId, message, engineName), historyCount);
 }
+
+export async function reportMirrorRecovery(app: App, syncFolder: string, message: string,
+    historyCount = 8): Promise<void> {
+    await appendSyncLogEntry(app, syncFolder, renderLogEntry('Mirror recovery', new Date(), [message]), historyCount);
+}

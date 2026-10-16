@@ -39,10 +39,9 @@ remain in [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
 - Retain the store's two-slot integrity, readback checks, revision comparison,
   and fail-closed invalid-manifest handling. Reject stale writes; automatic
   three-way reconciliation across machines is not part of this plan.
-- Account-change-specific recovery already exists. A general pending-operation
-  journal for ordinary transfers, overwrites, or remote-deletion Trash is a
-  separate decision, not a prerequisite to sharing the manifest. On ambiguous
-  vault/manifest state, protect the file or stop rather than guessing.
+- Account-change-specific recovery and the ordinary-operation pending intent
+  both exist; the latter was added after the shared-manifest integration. On
+  ambiguous vault/manifest state, protect the file or stop rather than guessing.
 
 ## Shared Manifest Integration
 
@@ -138,7 +137,6 @@ mutation. An invalid or cancelled change leaves the previous root in use.
 
 ## Deferred Decisions
 
-General crash recovery for ordinary per-file writes/Trash and automatic
-cross-device manifest merging remain independent proposals. The shared store
-continues to reject stale revisions and protect ambiguous local files; neither
-deferred feature is silently included in this migration or root-change work.
+Ordinary per-file intent recovery was implemented as a subsequent sprint.
+Automatic cross-device manifest merging remains deferred. The shared store
+continues to reject stale revisions and protect ambiguous local files.

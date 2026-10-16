@@ -21,8 +21,9 @@ import { ChangeSyncFolderModal } from './sync/ChangeSyncFolderModal';
 import { SyncRootChange } from './sync/changeSyncRoot';
 import { ObsidianMirrorManifestStorage } from './sync/obsidianMirrorManifestStorage';
 import { RootMirrorManifestService } from './sync/sharedMirrorManifestStore';
+import { MirrorRecoveryAttentionError } from './sync/mirrorOperationExecutor';
 import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngine, SyncEngineId, SyncRunResult } from './sync/syncAbstraction';
-import { reportSyncFailure, reportSyncResult } from './sync/syncReporting';
+import { reportMirrorRecovery, reportSyncFailure, reportSyncResult } from './sync/syncReporting';
 import { ObsidianSyncExecutionStateStore } from './sync/syncExecutionState';
 import { CloudSessionImportModal } from './sync/supernoteCloud/CloudSessionImportModal';
 import { CloudSignInModal } from './sync/supernoteCloud/CloudSignInModal';
@@ -1211,7 +1212,27 @@ export default class SupernotePlugin extends Plugin {
 				}
 			},
 			() => this.syncRootChange.assertReady(),
+			{
+				root: () => this.settings.syncFolder,
+				read: async (path) => {
+					const file = this.app.vault.getAbstractFileByPath(path);
+					return file instanceof TFile ? new Uint8Array(await this.app.vault.readBinary(file)) : null;
+				},
+				attention: async (error) => {
+					let logged = false;
+					if (this.settings.syncLogEnabled) {
+						try {
+							await reportMirrorRecovery(this.app, this.settings.syncFolder, error.message, this.settings.syncLogHistoryCount);
+							logged = true;
+						} catch (logError) { console.error('Failed to write mirror recovery log:', logError); }
+					}
+					new Notice(logged ? 'Supernote recovery needs attention; see Sync Log.md' : error.message);
+				},
+			},
 		);
+		await this.syncCoordinator.recoverOnStartup().catch((error) => {
+			new Notice(error instanceof Error ? error.message : 'Supernote recovery could not be checked');
+		});
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
 
@@ -1601,6 +1622,7 @@ export default class SupernotePlugin extends Plugin {
 	async changeSyncFolder(): Promise<void> {
 		await this.syncCoordinator.runExclusive(async () => {
 			await this.syncRootChange.recover();
+			await this.syncCoordinator.assertNoPendingOperation();
 			const hasContent = await this.syncRootChange.hasContent();
 			const choice = await new ChangeSyncFolderModal(this.app, this.settings.syncFolder, hasContent).choose();
 			if (!choice) return;
@@ -1727,6 +1749,7 @@ export default class SupernotePlugin extends Plugin {
 			}
 			await this.reportSyncFailure(err);
 			const error = err instanceof Error ? err : new Error(String(err));
+			if (error instanceof MirrorRecoveryAttentionError) return;
 			if (this.getActiveSyncEngineId() === 'ip-device') {
 				new DirectConnectErrorModal(this.app, this.settings, error).open();
 			} else if (shouldPromptCloudSignIn(error)) {

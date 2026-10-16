@@ -45,6 +45,25 @@ function checksum(revision: number, manifest: SharedMirrorManifest): string {
     return hashBytes(new TextEncoder().encode(JSON.stringify({ revision, manifest })));
 }
 
+function validPath(path: string): boolean {
+    return !!path && !path.startsWith('/') && !path.split('/').some((segment) => !segment || segment === '.'
+        || segment === '..' || segment === MIRROR_METADATA_DIRECTORY || /[\\:*?"<>|]/.test(segment)
+        || segment.endsWith('.') || segment.endsWith(' ')
+        || [...segment].some((character) => character.charCodeAt(0) < 32));
+}
+
+function validRecord(entry: SharedMirrorManifest['records'][string]): boolean {
+    if (!entry || typeof entry !== 'object' || typeof entry.contentHash !== 'string'
+        || !entry.contentHash || !entry.source || typeof entry.source !== 'object') return false;
+    const source = entry.source;
+    return source.engineId === 'ip-device'
+        ? typeof source.deviceUri === 'string' && source.deviceUri.startsWith('/')
+            && typeof source.deviceDate === 'string' && Number.isSafeInteger(source.deviceSize)
+            && source.deviceSize >= 0
+        : source.engineId === 'supernote-cloud' && typeof source.md5 === 'string'
+            && /^[a-f\d]{32}$/i.test(source.md5);
+}
+
 function validManifest(value: unknown): value is SharedMirrorManifest {
     if (!value || typeof value !== 'object') return false;
     const manifest = value as Partial<SharedMirrorManifest>;
@@ -53,6 +72,19 @@ function validManifest(value: unknown): value is SharedMirrorManifest {
         || (manifest.cloudAccountFingerprint !== null
             && (typeof manifest.cloudAccountFingerprint !== 'string' || !manifest.cloudAccountFingerprint))
         || (manifest.legacyHistoryRetired !== undefined && manifest.legacyHistoryRetired !== true)
+        || (manifest.pendingOperation !== undefined && (() => {
+            const pending = manifest.pendingOperation;
+            if (!pending || (pending.kind !== 'write' && pending.kind !== 'trash')
+                || typeof pending.root !== 'string' || !validPath(pending.root)
+                || typeof pending.path !== 'string' || !validPath(pending.path)
+                || !pending.path.startsWith(`${pending.root}/`)
+                || (pending.kind === 'write' ? !validRecord(pending.after!)
+                    || !/^[a-f\d]{16}$/.test(pending.after!.contentHash) : pending.after !== null
+                    || !manifest.records[pending.path]
+                    || pending.beforeHash !== manifest.records[pending.path].contentHash)
+                || (pending.beforeHash !== null && !/^[a-f\d]{16}$/.test(pending.beforeHash))) return true;
+            return false;
+        })())
         || (manifest.accountChange !== undefined && (!manifest.accountChange
             || typeof manifest.accountChange.targetFingerprint !== 'string'
             || !/^v1:[a-f\d]{64}$/.test(manifest.accountChange.targetFingerprint)
@@ -65,21 +97,7 @@ function validManifest(value: unknown): value is SharedMirrorManifest {
                     || manifest.records[manifest.accountChange.pendingPath]?.source.engineId !== 'supernote-cloud'))))) {
         return false;
     }
-    return Object.entries(manifest.records).every(([path, entry]) => {
-        if (!path || path.startsWith('/') || path.split('/').some((segment) => !segment || segment === '.'
-            || segment === '..' || segment === MIRROR_METADATA_DIRECTORY || /[\\:*?"<>|]/.test(segment)
-            || segment.endsWith('.') || segment.endsWith(' ')
-            || [...segment].some((character) => character.charCodeAt(0) < 32))
-            || !entry || typeof entry !== 'object' || typeof entry.contentHash !== 'string'
-            || !entry.contentHash || !entry.source || typeof entry.source !== 'object') return false;
-        const source = entry.source;
-        return source.engineId === 'ip-device'
-            ? typeof source.deviceUri === 'string' && source.deviceUri.startsWith('/')
-                && typeof source.deviceDate === 'string' && Number.isSafeInteger(source.deviceSize)
-                && source.deviceSize >= 0
-            : source.engineId === 'supernote-cloud' && typeof source.md5 === 'string'
-                && /^[a-f\d]{32}$/i.test(source.md5);
-    });
+    return Object.entries(manifest.records).every(([path, entry]) => validPath(path) && validRecord(entry));
 }
 
 function decode(contents: string): StoredManifest | null {
@@ -125,7 +143,7 @@ export async function loadMirrorManifest(
     // its account binding; legacy settings remain untouched until integration
     // can remove them after a verified commit.
     const current = await readLatest(storage);
-    if (current?.manifest.accountChange || current?.manifest.legacyHistoryRetired) return current;
+    if (current?.manifest.accountChange || current?.manifest.pendingOperation || current?.manifest.legacyHistoryRetired) return current;
     if (current) {
         const migrated = fromIpSyncManifest(legacy);
         const additions = Object.fromEntries(Object.entries(migrated.records)

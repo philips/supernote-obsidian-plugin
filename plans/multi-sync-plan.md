@@ -1,12 +1,12 @@
 # Multi-Sync Implementation Plan
 
 **Status:** Single-active-engine coordination, Cloud/IP shared-manifest access,
-shared non-destructive history clearing, and the explicit sync-folder change
-workflow are implemented with synthetic tests. The move, leave-behind, and
-cancel flows and persistence across a normal restart were validated in the
-disposable Marie vault. Minimal ordinary-operation recovery is designed but not
-implemented. Live account-switch and device tests remain pending. Sync
-implementation files are organized under `src/sync/`. Updated October 16, 2026.
+shared non-destructive history clearing, explicit sync-folder changes, and
+ordinary-operation intent recovery are implemented with synthetic tests. The
+move, leave-behind, and cancel flows and persistence across a normal restart
+were validated in the disposable Marie vault. Live interrupted-operation,
+account-switch, and device tests remain pending. Sync implementation files are
+organized under `src/sync/`. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -96,40 +96,25 @@ criteria for both engines and root changes live in
   selected the original root and settings and files still matched. The
   disposable empty folder was removed. This did not test interruption during a
   move or sync.
+- Added one validated pending operation in the two-slot shared manifest and a
+  shared intent-first executor for IP per-file writes/adoption and Cloud writes
+  and verified-inventory Trash. Startup and manual sync reconcile only known
+  byte states; missing files require a complete fresh source inventory on manual
+  retry. Uncertain Trash and unexpected bytes remain pending, pause scheduled
+  sync persistently, and block folder changes and history clearing. Synthetic
+  tests cover interruption, missing source, incomplete inventory, restart
+  gating, and failed logging. No live interruption was performed. Final
+  verification: `npm test` (514 passing), `npm run build`, `npm run lint` (0
+  errors, 14 existing warnings), and `git diff --check`.
 
 ## Outstanding
 
-### Next implementation: ordinary-operation recovery
+### Ordinary-operation recovery
 
-1. Extend and validate the existing two-slot shared manifest with one pending
-   create, overwrite, identical-byte adoption, or Cloud Trash intent. Keep its
-   root, path, source identity, and before/after hashes sufficient to compare
-   current bytes with either known state. Reject invalid or stale state; retain
-   the existing root-change and account-change checkpoints separately.
-2. Build one coordinator-supplied operation executor for both engines: commit
-   intent before mutation, guard the vault path, then commit the per-file record
-   and clear intent together. Convert IP from its end-of-run batch commit to
-   per-file commits. Keep inventory and verified transfer decisions within each
-   engine. Cloud's matching-inventory deletion gate remains mandatory.
-3. Resolve pending operations under the coordinator lock before another sync,
-   folder change, or history clear. Reconcile only proved old/new byte states;
-   block on unexpected existing bytes without modifying them or repeating
-   uncertain Trash. For a missing vault file, warn and use a fresh verified
-   source check on manual sync: download normally if present; retire the record
-   if confirmed absent; retain the intent on incomplete or unreachable source.
-   Do not change IP's ordinary additive behavior outside recovery.
-4. Persistently disable automatic sync when recovery needs attention. Log a
-   useful path-specific explanation and next step and show a short notice;
-   provide an informative notice when logging is off or unavailable. Allow
-   repeated manual attempts and log entries without deduplication. Reject
-   `Forget sync history` while an intent is pending. Do not add recovery
-   controls to settings, a recheck command, or an automatic repair UI.
-5. Test synthetic interruption before and after intent, file mutation, and
-   manifest commit for both engines, including adoption, uncertain Trash,
-   unexpected bytes, missing local/source files, incomplete inventory, a failed
-   log write, restart, and history/root-change gating. Run the checks below. Any
-   live interrupted-operation test needs a separate controlled replaceable
-   fixture and approval; do not simulate a crash in a user's sync.
+The intent-first per-file executor, coordinator restart reconciliation,
+path-specific attention logging, and history/root-change gates are implemented.
+Live interruption validation still requires a separately approved controlled
+fixture; do not simulate a crash in a user's sync.
 
 ### Remaining validation
 

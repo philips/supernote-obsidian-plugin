@@ -1,4 +1,6 @@
 import type { MirrorManifestService } from './sharedMirrorManifestStore';
+import { MirrorRecoveryAttentionError, recoverMirrorOperation } from './mirrorOperationExecutor';
+import type { PendingMirrorOperation } from './sharedMirrorManifest';
 
 export type SyncEngineId = 'ip-device' | 'supernote-cloud';
 
@@ -50,6 +52,13 @@ export interface SyncEngine {
     getReadiness(): SyncReadiness;
     run(trigger: SyncTrigger): Promise<SyncRunResult>;
     clearHistory(): Promise<void>;
+    checkPendingSource?(pending: PendingMirrorOperation): Promise<'present' | 'absent'>;
+}
+
+export interface MirrorRecoveryContext {
+    root(): string;
+    read(path: string): Promise<Uint8Array | null>;
+    attention(error: MirrorRecoveryAttentionError): Promise<void>;
 }
 
 export interface SyncExecutionState {
@@ -92,6 +101,8 @@ export interface SyncCoordinator {
     isRunning(): boolean;
     runExclusive<T>(operation: () => Promise<T>): Promise<T>;
     clearActiveHistory(): Promise<void>;
+    assertNoPendingOperation(): Promise<void>;
+    recoverOnStartup(): Promise<void>;
 }
 
 export class SingleEngineSyncCoordinator implements SyncCoordinator {
@@ -104,6 +115,7 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
         private readonly manifestService?: MirrorManifestService,
         private readonly retireLegacyHistory?: () => Promise<void>,
         private readonly assertRootReady?: () => void,
+        private readonly recovery?: MirrorRecoveryContext,
     ) {
         this.executionState = stateStore.load();
         if (!this.engines[this.executionState.activeSyncEngine]) {
@@ -216,7 +228,37 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
 
         this.running = true;
         try {
-            return await engine.run(trigger);
+            if (this.manifestService && this.recovery) {
+                const loaded = await this.manifestService.load({});
+                const pending = loaded.manifest.pendingOperation;
+                if (pending) {
+                    try {
+                        await recoverMirrorOperation(this.manifestService, loaded, this.recovery.root(),
+                            (path) => this.recovery!.read(path), trigger.kind === 'manual' ? async (intent) => {
+                                const source = intent.after?.source ?? loaded.manifest.records[intent.path]?.source;
+                                if (!source) throw new Error('Source identity is missing');
+                                const sourceEngine = this.getSyncEngine(intent.kind === 'trash'
+                                    ? 'supernote-cloud' : source.engineId);
+                                if (!sourceEngine.checkPendingSource) throw new Error('Source inventory is unavailable');
+                                const present = await sourceEngine.checkPendingSource(intent);
+                                if (present === 'present' && sourceEngine.id !== engine.id) {
+                                    throw new Error('Select the source engine before restoring this file');
+                                }
+                                return present;
+                            } : undefined);
+                    } catch (error) {
+                        if (error instanceof MirrorRecoveryAttentionError) {
+                            if (this.executionState.autoSyncEnabled) this.setAutoSyncEnabled(false);
+                            await this.recovery.attention(error).catch(() => {});
+                        }
+                        throw error;
+                    }
+                }
+            }
+            try { return await engine.run(trigger); } catch (error) {
+                await this.recoverOnStartup().catch(() => {});
+                throw error;
+            }
         } finally {
             this.running = false;
         }
@@ -244,11 +286,32 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
                 return;
             }
             const loaded = await this.manifestService.load({});
+            if (loaded.manifest.pendingOperation) throw new Error('Pending mirror operation blocks history clearing');
             if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before clearing history');
             await this.manifestService.commit(loaded, {
                 ...loaded.manifest, records: {}, legacyHistoryRetired: true,
             });
             await this.retireLegacyHistory();
         });
+    }
+
+    async assertNoPendingOperation(): Promise<void> {
+        if (!this.manifestService) return;
+        const loaded = await this.manifestService.load({});
+        if (loaded.manifest.pendingOperation) throw new Error('Pending mirror operation blocks sync folder changes');
+    }
+
+    async recoverOnStartup(): Promise<void> {
+        if (!this.manifestService || !this.recovery) return;
+        const loaded = await this.manifestService.load({});
+        if (!loaded.manifest.pendingOperation) return;
+        try {
+            await recoverMirrorOperation(this.manifestService, loaded, this.recovery.root(),
+                (path) => this.recovery!.read(path));
+        } catch (error) {
+            if (!(error instanceof MirrorRecoveryAttentionError)) throw error;
+            if (this.executionState.autoSyncEnabled) this.setAutoSyncEnabled(false);
+            await this.recovery.attention(error).catch(() => {});
+        }
     }
 }

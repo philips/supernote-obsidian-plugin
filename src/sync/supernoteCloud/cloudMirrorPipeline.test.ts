@@ -221,7 +221,7 @@ describe('Cloud inventory to shared-manifest planning', () => {
         expect((await loadMirrorManifest(storage, {})).manifest.records).toHaveProperty('Mirror/Note/Missing.note');
     });
 
-    it('stops deleting after Trash when the manifest commit fails', async () => {
+    it('does not Trash when the intent commit fails', async () => {
         const bytes = new Uint8Array([1, 2, 3]);
         const slots = new Map<MirrorManifestSlot, string>();
         let failWrite = false;
@@ -247,11 +247,11 @@ describe('Cloud inventory to shared-manifest planning', () => {
             fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
             verifyDeletionInventory: async () => ({ inventory: { directories: [], items: [] }, canonicalPathsById: {} }),
         })).rejects.toThrow('Manifest unavailable');
-        expect(trash).toHaveBeenCalledOnce();
+        expect(trash).not.toHaveBeenCalled();
         expect(trashEmptyFolder).not.toHaveBeenCalled();
     });
 
-    it('does not prune when file Trash fails or the local file was edited', async () => {
+    it('leaves a pending intent and does not prune when file Trash fails', async () => {
         const bytes = new Uint8Array([1, 2, 3]);
         const slots = new Map<MirrorManifestSlot, string>();
         const storage = {
@@ -265,7 +265,7 @@ describe('Cloud inventory to shared-manifest planning', () => {
         const trash = vi.fn(async () => { throw new Error('Trash unavailable'); });
         const trashEmptyFolder = vi.fn();
         const inventory = { directories: [], items: [] };
-        const result = await runVerifiedCloudMirror({
+        await expect(runVerifiedCloudMirror({
             inventory, canonicalPathsById: {}, syncFolder: 'Mirror', legacyManifest: {},
             accountFingerprint: 'v1:synthetic-account', storage,
             vault: { read: vi.fn(async (path: string) => path.endsWith('Edited.note')
@@ -273,12 +273,11 @@ describe('Cloud inventory to shared-manifest planning', () => {
             transfer: { download: vi.fn(), md5: vi.fn() }, pathFilters: [],
             fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
             verifyDeletionInventory: async () => ({ inventory, canonicalPathsById: {} }),
-        });
-        expect(result).toMatchObject({ removed: 0, protected: ['Mirror/Note/Edited.note'],
-            failed: ['Mirror/Note/Failed.note'] });
+        })).rejects.toThrow('Trash unavailable');
         expect(trash).toHaveBeenCalledExactlyOnceWith('Mirror/Note/Failed.note');
         expect(trashEmptyFolder).not.toHaveBeenCalled();
         expect(Object.keys((await loadMirrorManifest(storage, {})).manifest.records)).toHaveLength(2);
+        expect((await loadMirrorManifest(storage, {})).manifest.pendingOperation?.path).toBe('Mirror/Note/Failed.note');
     });
 
     it('writes once, persists history, skips unchanged bytes, and protects a later local edit', async () => {
@@ -392,7 +391,7 @@ describe('Cloud inventory to shared-manifest planning', () => {
             maxFileBytes: 100,
         })).rejects.toThrow('Storage unavailable');
         expect(transfer.download).toHaveBeenCalledOnce();
-        expect(vault.write).toHaveBeenCalledOnce();
+        expect(vault.write).not.toHaveBeenCalled();
     });
     it('reads only in-scope vault paths and protects edits to unchanged Cloud files', async () => {
         const written = new Uint8Array([0, 255, 1]);

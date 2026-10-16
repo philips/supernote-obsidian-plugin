@@ -1,6 +1,7 @@
 import { hashBytes } from '../directIP/deviceSync';
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
 import { requireBoundCloudAccount, SharedMirrorManifest } from '../sharedMirrorManifest';
+import { MirrorOperationExecutor } from '../mirrorOperationExecutor';
 
 // These ports keep protocol/download and Obsidian details out of the safety
 // decision, allowing byte integrity and overwrite behavior to be tested with
@@ -30,6 +31,7 @@ export async function applyCloudDownload(
     vault: CloudMirrorVault,
     transfer: CloudMirrorTransfer,
     maxFileBytes: number,
+    executor?: MirrorOperationExecutor,
 ): Promise<CloudMirrorWriteResult> {
     // Check binding and advertised limits before asking the transfer port for
     // bytes; no account mismatch or obviously oversized item should download.
@@ -62,17 +64,17 @@ export async function applyCloudDownload(
     }
 
     const outcome = existingHash === incomingHash ? 'already-current' : 'written';
-    if (outcome === 'written') await vault.write(candidate.vaultPath, bytes);
+    const nextRecord = { contentHash: incomingHash,
+        source: { engineId: 'supernote-cloud' as const, md5: expectedMd5 } };
+    if (executor) await executor.write(candidate.vaultPath, bytes, nextRecord, (path, content) => vault.write(path, content));
+    else if (outcome === 'written') await vault.write(candidate.vaultPath, bytes);
     return {
         outcome,
         manifest: {
             ...manifest,
             records: {
                 ...manifest.records,
-                [candidate.vaultPath]: {
-                    contentHash: incomingHash,
-                    source: { engineId: 'supernote-cloud', md5: expectedMd5 },
-                },
+                [candidate.vaultPath]: nextRecord,
             },
         },
     };

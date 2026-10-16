@@ -722,7 +722,7 @@ management records without moving vault files or changing the Cloud account
 binding. The exact handling of device-local last-run display state during
 account change remains a product decision; current implementation retains it.
 
-### Ordinary sync operation recovery (next sprint)
+### Ordinary sync operation recovery (implemented synthetically)
 
 The shared manifest is the source of truth for one pending ordinary file
 operation at a time. Add a validated `pendingOperation` to the existing two-slot
@@ -993,14 +993,14 @@ different source file follows the active engine's normal local-edit guard before
 overwrite. Thus the first run after switching engines may perform more downloads
 but needs no ownership migration.
 
-The next sprint adds one pending ordinary create, overwrite, identical-byte
-adoption, or Cloud Trash intent to this manifest as specified above. The
-two-slot store validates and readback-checks revisions but cannot make a vault
-mutation and its manifest update atomic. Account-change and sync-root changes
-retain their separate checkpoints; ordinary file moves and general rollback are
-outside this recovery scope. Ambiguous existing file bytes remain protected. An
-unowned file is adopted only after verified incoming bytes prove it identical; a
-non-identical existing file is protected.
+The ordinary-operation recovery sprint added one pending create, overwrite,
+identical-byte adoption, or Cloud Trash intent to this manifest as specified
+above. The two-slot store validates and readback-checks revisions but cannot
+make a vault mutation and its manifest update atomic. Account-change and
+sync-root changes retain their separate checkpoints; ordinary file moves and
+general rollback are outside this recovery scope. Ambiguous existing file bytes
+remain protected. An unowned file is adopted only after verified incoming bytes
+prove it identical; a non-identical existing file is protected.
 
 #### Concurrent manifest updates
 

@@ -7,7 +7,7 @@ import { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
 import { parsePathFilters, parseFileExtensionAllowlist } from '../syncFilters';
 import { SupernotePluginSettings } from '../../settings';
 import { downloadCloudBytes } from './cloudDownload';
-import { collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
+import { cloudInventoryFingerprint, collectCloudInventory, queryCloudPath, verifyCloudInventoryPaths } from './cloudInventory';
 import { CloudMirrorCandidate } from './cloudMirrorPlan';
 import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { CloudMirrorTransfer } from './cloudMirrorWrite';
@@ -16,7 +16,7 @@ import { CloudSessionStorage } from './cloudSessionStorage';
 import { ObsidianCloudMirrorVault } from './obsidianCloudMirrorVault';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';
 import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
-import { cloudAccountFingerprint, requireBoundCloudAccount } from '../sharedMirrorManifest';
+import { cloudAccountFingerprint, PendingMirrorOperation, requireBoundCloudAccount } from '../sharedMirrorManifest';
 import { MirrorManifestService, RootMirrorManifestService } from '../sharedMirrorManifestStore';
 
 export class CloudSignInRequiredError extends Error {
@@ -43,6 +43,36 @@ export class CloudSyncEngine implements SyncEngine {
         } catch {
             return { ready: false, reason: 'Cloud session storage is invalid' };
         }
+    }
+
+    async checkPendingSource(pending: PendingMirrorOperation): Promise<'present' | 'absent'> {
+        const session = new CloudSessionStorage(this.app.secretStorage).load();
+        if (!session) throw new CloudSignInRequiredError();
+        const transport = new NodeCloudProtocolTransport({
+            session: 'cloud-recovery', budget: new CloudRequestBudget(5_000),
+            fetchImplementation: createObsidianCloudRequest(),
+        });
+        await validateCloudProtocolSession(transport, { ...session, source: 'environment' });
+        const loaded = await this.manifestService.load({});
+        requireBoundCloudAccount(loaded.manifest, cloudAccountFingerprint(session.userId));
+        const verify = async () => {
+            const inventory = await collectCloudInventory(transport, session.token);
+            const queriedPaths = new Map();
+            for (const item of inventory.items) {
+                queriedPaths.set(item.id, await queryCloudPath(transport, session.token, item.id));
+            }
+            const paths = Object.fromEntries(verifyCloudInventoryPaths(inventory, queriedPaths));
+            return { inventory, paths };
+        };
+        const first = await verify();
+        await new Promise((resolve) => window.setTimeout(resolve, CLOUD_DELETION_STABILITY_DELAY_MS));
+        const second = await verify();
+        if (cloudInventoryFingerprint(first.inventory, first.paths)
+            !== cloudInventoryFingerprint(second.inventory, second.paths)) {
+            throw new Error('Cloud recovery inventory changed between checks');
+        }
+        return first.inventory.items.some((item) => !item.isFolder
+            && `${this.settings.syncFolder}${first.paths[item.id]}` === pending.path) ? 'present' : 'absent';
     }
 
     async run(_trigger: SyncTrigger): Promise<SyncRunResult> {

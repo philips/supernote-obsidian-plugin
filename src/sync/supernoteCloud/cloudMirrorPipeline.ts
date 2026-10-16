@@ -5,6 +5,7 @@ import { bindVerifiedCloudPaths, CloudMirrorPlan, missingManagedCloudPaths, plan
 import { applyCloudDownload, CloudMirrorTransfer, CloudMirrorVault } from './cloudMirrorWrite';
 import { cloudPlanningRecords, MIRROR_METADATA_DIRECTORY, requireBoundCloudAccount, SharedMirrorManifest } from '../sharedMirrorManifest';
 import { MirrorManifestService, MirrorManifestStorage, RootMirrorManifestService } from '../sharedMirrorManifestStore';
+import { MirrorOperationError, MirrorOperationExecutor } from '../mirrorOperationExecutor';
 
 // Keep inventory binding and vault inspection separate from network transport.
 // Only planned in-scope destinations are read; canonical-path or account
@@ -60,6 +61,8 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
     const manifestService = options.manifestService ?? new RootMirrorManifestService(() => options.storage);
     let loaded = await manifestService.load(options.legacyManifest);
     requireBoundCloudAccount(loaded.manifest, options.accountFingerprint);
+    const executor = new MirrorOperationExecutor(manifestService, options.syncFolder, loaded,
+        (path) => options.vault.read(path));
     const plan = await planVerifiedCloudInventory(options.inventory, options.canonicalPathsById,
         options.syncFolder, loaded.manifest, options.accountFingerprint, options.vault,
         options.pathFilters, options.fileExtensions);
@@ -73,9 +76,10 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
     for (const candidate of plan.toDownload) {
         let write: Awaited<ReturnType<typeof applyCloudDownload>>;
         try {
-            write = await applyCloudDownload(candidate, loaded.manifest, options.accountFingerprint,
-                options.vault, options.transfer, options.maxFileBytes);
+            write = await applyCloudDownload(candidate, executor.manifest, options.accountFingerprint,
+                options.vault, options.transfer, options.maxFileBytes, executor);
         } catch (error) {
+            if (error instanceof MirrorOperationError) throw error;
             result.failed.push(candidate.vaultPath);
             result.failureCategories.push(error instanceof Error && [
                 'Cloud download descriptor checksum does not match inventory',
@@ -91,14 +95,14 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         }
         // A failed manifest commit after a successful vault write makes the
         // next overwrite unsafe; stop rather than continuing under old history.
-        loaded = await manifestService.commit(loaded, write.manifest);
+        if (executor.manifest.pendingOperation) throw new Error('Pending mirror operation requires recovery');
         if (write.outcome === 'written') result.synced++;
         else result.unchanged++;
     }
 
     const files = bindVerifiedCloudPaths(options.inventory, options.canonicalPathsById);
     const candidates = missingManagedCloudPaths(files, options.syncFolder,
-        cloudPlanningRecords(loaded.manifest), options.pathFilters, options.fileExtensions);
+        cloudPlanningRecords(executor.manifest), options.pathFilters, options.fileExtensions);
     const root = options.syncFolder.replace(/^\/+|\/+$/g, '');
     const folders = options.vault.listFolders && options.vault.trashEmptyFolder
         ? await options.vault.listFolders(root) : [];
@@ -126,23 +130,22 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
             let trashed = false;
             try {
                 const bytes = await options.vault.read(path);
-                if (bytes && hashBytes(bytes) !== loaded.manifest.records[path].contentHash) {
+                if (bytes && hashBytes(bytes) !== executor.manifest.records[path].contentHash) {
                     result.protected.push(path);
                     continue;
                 }
                 if (bytes) {
-                    await options.vault.trash(path);
+                    await executor.trash(path, (target) => options.vault.trash!(target));
                     result.removed++;
                     trashed = true;
                 }
-            } catch {
+            } catch (error) {
+                if (error instanceof MirrorOperationError) throw error;
                 result.failed.push(path);
                 result.failureCategories.push('Cloud mirror Trash or vault operation failed');
                 continue;
             }
-            const records = { ...loaded.manifest.records };
-            delete records[path];
-            loaded = await manifestService.commit(loaded, { ...loaded.manifest, records });
+            if (!trashed) await executor.retire(path);
             if (trashed && options.vault.trashEmptyFolder) {
                 let parent = path.slice(0, path.lastIndexOf('/'));
                 while (parent.startsWith(`${root}/`)

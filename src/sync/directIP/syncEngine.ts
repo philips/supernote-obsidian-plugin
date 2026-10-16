@@ -16,7 +16,8 @@ import type { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction'
 import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
 import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
 import { MirrorManifestService, RootMirrorManifestService } from '../sharedMirrorManifestStore';
-import { mergeIpSyncManifest, SharedMirrorManifest, toIpSyncManifest } from '../sharedMirrorManifest';
+import { PendingMirrorOperation, SharedMirrorManifest, toIpSyncManifest } from '../sharedMirrorManifest';
+import { MirrorOperationError, MirrorOperationExecutor } from '../mirrorOperationExecutor';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
 // concurrent creator (createFolder throwing because another call already
@@ -76,6 +77,15 @@ export class IpSyncEngine implements SyncEngine {
             : { ready: false, reason: 'Supernote IP is unset' };
     }
 
+    async checkPendingSource(pending: PendingMirrorOperation): Promise<'present' | 'absent'> {
+        const source = pending.after?.source ?? (await this.manifestService.load({})).manifest.records[pending.path]?.source;
+        if (source?.engineId !== 'ip-device') throw new Error('IP source identity unavailable');
+        const files = await scanDeviceSupernoteTreeWithExtensions(this.settings.directConnectIP, ALL_FILE_EXTENSIONS);
+        return files.some((file) => file.uri === source.deviceUri
+            && deviceUriToVaultPath(this.settings.syncFolder, file.uri, file.name, file.directoryNames) === pending.path)
+            ? 'present' : 'absent';
+    }
+
     async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
         let result: DeviceSyncResult;
         const legacyManifest = this.settings.noteSyncState;
@@ -83,11 +93,12 @@ export class IpSyncEngine implements SyncEngine {
             const loaded = await this.manifestService.load(legacyManifest);
             if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before sync');
             const planningRecords = toIpSyncManifest(loaded.manifest);
-            result = await runDeviceSync(this.app, this.settings, loaded.manifest, planningRecords);
-            const merged = mergeIpSyncManifest(loaded.manifest, planningRecords);
-            if (JSON.stringify(merged) !== JSON.stringify(loaded.manifest)) {
-                await this.manifestService.commit(loaded, merged);
-            }
+            const executor = new MirrorOperationExecutor(this.manifestService, this.settings.syncFolder, loaded,
+                async (path) => {
+                    const file = this.app.vault.getAbstractFileByPath(path);
+                    return file instanceof TFile ? new Uint8Array(await this.app.vault.readBinary(file)) : null;
+                });
+            result = await runDeviceSync(this.app, this.settings, loaded.manifest, planningRecords, executor);
             this.settings.noteSyncState = {};
             await this.saveSettings();
         } catch (err) {
@@ -145,6 +156,7 @@ export async function runDeviceSync(
     settings: SupernotePluginSettings,
     sharedManifest: SharedMirrorManifest,
     planningRecords: SyncManifest,
+    executor?: MirrorOperationExecutor,
 ): Promise<DeviceSyncResult> {
     const ip = settings.directConnectIP;
     if (!ip) {
@@ -228,15 +240,27 @@ export async function runDeviceSync(
                 continue;
             }
 
-            if (existingHash !== newHash) {
-                const parentFolder = vaultPath.includes('/') ? vaultPath.slice(0, vaultPath.lastIndexOf('/')) : '';
+            const parentFolder = vaultPath.includes('/') ? vaultPath.slice(0, vaultPath.lastIndexOf('/')) : '';
+            const record = buildSyncRecord(listing, vaultPath, newHash);
+            if (executor) {
+                await executor.write(vaultPath, new Uint8Array(buffer), {
+                    contentHash: newHash,
+                    source: { engineId: 'ip-device', deviceUri: listing.uri,
+                        deviceDate: listing.date, deviceSize: listing.size },
+                }, async (path, bytes) => {
+                    await ensureFolder(app, parentFolder);
+                    await writeBinaryAt(app, path, bytes.slice().buffer);
+                });
+            } else if (existingHash !== newHash) {
                 await ensureFolder(app, parentFolder);
                 await writeBinaryAt(app, vaultPath, buffer);
             }
 
-            planningRecords[listing.uri] = buildSyncRecord(listing, vaultPath, newHash);
+            planningRecords[listing.uri] = record;
+            if (executor) sharedManifest = executor.manifest;
             result.synced++;
         } catch (err) {
+            if (err instanceof MirrorOperationError) throw err;
             result.failed.push({ file: listing.uri, error: err instanceof Error ? err.message : String(err) });
         }
     }

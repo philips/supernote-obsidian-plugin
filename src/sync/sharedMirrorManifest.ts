@@ -20,10 +20,19 @@ export interface SharedMirrorRecord {
     };
 }
 
+export interface PendingMirrorOperation {
+    kind: 'write' | 'trash';
+    root: string;
+    path: string;
+    beforeHash: string | null;
+    after: SharedMirrorRecord | null;
+}
+
 export interface SharedMirrorManifest {
     version: 1;
     cloudAccountFingerprint: string | null;
     records: Record<string, SharedMirrorRecord>;
+    pendingOperation?: PendingMirrorOperation;
     legacyHistoryRetired?: true;
     accountChange?: { targetFingerprint: string; pendingPath: string | null; protectedPaths: string[] };
 }

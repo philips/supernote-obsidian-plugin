@@ -3,6 +3,8 @@ import type { App } from 'obsidian';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
 import type { LoadedMirrorManifest } from './sharedMirrorManifestStore';
 import type { SharedMirrorManifest } from './sharedMirrorManifest';
+import { hashBytes } from './directIP/deviceSync';
+import { MirrorRecoveryAttentionError } from './mirrorOperationExecutor';
 import {
     formatSyncSummary,
     SingleEngineSyncCoordinator,
@@ -50,6 +52,36 @@ function stateStore(activeSyncEngine: 'ip-device' | 'supernote-cloud' = 'ip-devi
     };
     return { store, current: () => state };
 }
+
+it('pauses automatic sync on pending recovery and blocks shared actions until it is resolved', async () => {
+    const store = stateStore();
+    const path = 'Mirror/Note/Test.note';
+    const bytes = new TextEncoder().encode('edited');
+    const beforeHash = hashBytes(new TextEncoder().encode('old'));
+    const manifest: SharedMirrorManifest = {
+        version: 1, cloudAccountFingerprint: null,
+        records: { [path]: { contentHash: beforeHash, source: {
+            engineId: 'ip-device', deviceUri: '/Test.note', deviceDate: '', deviceSize: 3,
+        } } },
+        pendingOperation: { kind: 'write', root: 'Mirror', path, beforeHash,
+            after: { contentHash: hashBytes(new TextEncoder().encode('new')), source: {
+                engineId: 'ip-device', deviceUri: '/Test.note', deviceDate: '', deviceSize: 3,
+            } } },
+    };
+    const service = { load: vi.fn(async () => ({ manifest, revision: 1, slot: 'primary' as const })),
+        commit: vi.fn(async () => { throw new Error('should not commit'); }) };
+    const attention = vi.fn(async (_error: MirrorRecoveryAttentionError) => { throw new Error('log unavailable'); });
+    const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': engine('ip-device') }, store.store,
+        service, async () => {}, undefined, { root: () => 'Mirror', read: async () => bytes, attention });
+    coordinator.setAutoSyncEnabled(true);
+    await coordinator.recoverOnStartup();
+    expect(store.current().autoSyncEnabled).toBe(false);
+    expect(attention).toHaveBeenCalledOnce();
+    await expect(coordinator.assertNoPendingOperation()).rejects.toThrow('blocks sync folder changes');
+    await expect(coordinator.clearActiveHistory()).rejects.toThrow('blocks history clearing');
+    await expect(coordinator.runActive({ kind: 'manual', commandId: 'sync-now' }))
+        .rejects.toBeInstanceOf(MirrorRecoveryAttentionError);
+});
 
 describe('stored automatic sync settings', () => {
     it('migrates old enabled and disabled intervals without changing the selected engine', () => {
@@ -345,4 +377,32 @@ describe('SingleEngineSyncCoordinator', () => {
         expect(coordinator.getActiveEngineId()).toBe('ip-device');
         expect(state.current().activeSyncEngine).toBe('ip-device');
     });
+});
+
+it('checks Cloud for a missing pending Trash even when IP last wrote the shared record', async () => {
+    const path = 'Mirror/Note/Shared.note';
+    const manifest: SharedMirrorManifest = {
+        version: 1, cloudAccountFingerprint: 'v1:synthetic',
+        records: { [path]: { contentHash: hashBytes(new TextEncoder().encode('old')), source: {
+            engineId: 'ip-device', deviceUri: '/Shared.note', deviceDate: '', deviceSize: 3,
+        } } },
+        pendingOperation: { kind: 'trash', root: 'Mirror', path,
+            beforeHash: hashBytes(new TextEncoder().encode('old')), after: null },
+    };
+    const service = { load: vi.fn(async () => ({ manifest, revision: 1, slot: 'primary' as const })),
+        commit: vi.fn(async () => { throw new Error('should not retire while Cloud has the source'); }) };
+    const ip = createEngineHarness('ip-device');
+    const cloud = createEngineHarness('supernote-cloud');
+    const ipInventory = vi.fn(async () => 'absent' as const);
+    const cloudInventory = vi.fn(async () => 'present' as const);
+    ip.syncEngine.checkPendingSource = ipInventory;
+    cloud.syncEngine.checkPendingSource = cloudInventory;
+    const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': ip.syncEngine,
+        'supernote-cloud': cloud.syncEngine }, stateStore().store, service, async () => {}, undefined,
+    { root: () => 'Mirror', read: async () => null, attention: async () => {} });
+    await expect(coordinator.runActive({ kind: 'manual', commandId: 'sync-now' }))
+        .rejects.toThrow('source inventory is unavailable or incomplete');
+    expect(cloudInventory).toHaveBeenCalledOnce();
+    expect(ipInventory).not.toHaveBeenCalled();
+    expect(service.commit).not.toHaveBeenCalled();
 });
