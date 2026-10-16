@@ -5,10 +5,10 @@ import { CLOUD_PRODUCTION_ORIGIN } from './cloudPolicy';
 import { CloudSessionStorage } from './cloudSessionStorage';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';
 
-function parsePastedSession(input: string): { token: string; accountId: string | null } {
+function parsePastedSession(input: string): { token: string; userId: string | null } {
     const trimmed = input.trim();
     if (!trimmed) throw new Error('A Cloud access token is required');
-    if (!trimmed.startsWith('{')) return { token: trimmed, accountId: null };
+    if (!trimmed.startsWith('{')) return { token: trimmed, userId: null };
 
     let parsed: unknown;
     try {
@@ -25,7 +25,7 @@ function parsePastedSession(input: string): { token: string; accountId: string |
         || typeof session.accountId !== 'string' || !/^(0|[1-9]\d*)$/.test(session.accountId)) {
         throw new Error('Cloud session cache is invalid');
     }
-    return { token: session.token, accountId: session.accountId };
+    return { token: session.token, userId: session.accountId };
 }
 
 export async function importCloudSession(app: App, input: string): Promise<void> {
@@ -36,7 +36,7 @@ export async function importCloudSession(app: App, input: string): Promise<void>
 
     const storage = new CloudSessionStorage(app.secretStorage);
     const existing = storage.load();
-    if (existing && session.accountId !== null && existing.accountId !== session.accountId) {
+    if (existing && session.userId !== null && existing.userId !== session.userId) {
         throw new Error('Cloud session belongs to another account');
     }
     const transport = new NodeCloudProtocolTransport({
@@ -45,15 +45,15 @@ export async function importCloudSession(app: App, input: string): Promise<void>
     });
     const validated = await validateCloudProtocolSession(transport, {
         token: session.token,
-        accountId: session.accountId ?? existing?.accountId ?? null,
+        userId: session.userId ?? existing?.userId ?? null,
         source: 'environment',
     });
-    if (existing && existing.accountId !== validated.accountId) {
+    if (existing && existing.userId !== validated.userId) {
         throw new Error('Cloud session belongs to another account');
     }
     storage.save(validated);
     const stored = storage.load();
-    if (stored?.accountId !== validated.accountId || stored.token !== validated.token) {
+    if (stored?.userId !== validated.userId || stored.token !== validated.token) {
         throw new Error('SecretStorage did not retain the validated session');
     }
 }

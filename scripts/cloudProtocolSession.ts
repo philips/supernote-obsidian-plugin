@@ -12,7 +12,7 @@ const PENDING_SESSION_FILENAME = 'cloud-protocol-pending-token.json';
 
 export interface CloudProtocolSession {
     token: string;
-    accountId: string | null;
+    userId: string | null;
     source: 'environment' | 'temporary-file';
 }
 
@@ -37,11 +37,11 @@ export async function loadCloudProtocolSession(
 ): Promise<CloudProtocolSession | null> {
     const environmentToken = environment.SUPERNOTE_CLOUD_ACCESS_TOKEN?.trim();
     if (environmentToken) {
-        const accountId = environment.SUPERNOTE_CLOUD_ACCOUNT_ID?.trim() || null;
-        if (accountId !== null && !isCanonicalDecimal(accountId)) {
+        const userId = environment.SUPERNOTE_CLOUD_ACCOUNT_ID?.trim() || null;
+        if (userId !== null && !isCanonicalDecimal(userId)) {
             throw new CloudProtocolError('SUPERNOTE_CLOUD_ACCOUNT_ID must be a canonical decimal string');
         }
-        return { token: environmentToken, accountId, source: 'environment' };
+        return { token: environmentToken, userId, source: 'environment' };
     }
 
     let raw: string;
@@ -63,7 +63,7 @@ export async function loadCloudProtocolSession(
     }
     return {
         token: stored.token,
-        accountId: stored.accountId,
+        userId: stored.accountId,
         source: 'temporary-file',
     };
 }
@@ -71,10 +71,10 @@ export async function loadCloudProtocolSession(
 export async function saveCloudProtocolSession(
     origin: string,
     token: string,
-    accountId: string,
+    userId: string,
     environment: CloudProtocolEnvironment = processEnvironment,
 ): Promise<string> {
-    if (!token || !isCanonicalDecimal(accountId)) {
+    if (!token || !isCanonicalDecimal(userId)) {
         throw new CloudProtocolError('Cloud protocol session cannot be cached');
     }
     const path = getCloudProtocolSessionPath(environment);
@@ -82,7 +82,7 @@ export async function saveCloudProtocolSession(
         version: SESSION_VERSION,
         origin,
         token,
-        accountId,
+        accountId: userId,
         savedAt: new Date().toISOString(),
     };
     try {
@@ -108,13 +108,13 @@ export async function clearCloudProtocolSession(
 export async function validateCloudProtocolSession(
     transport: CloudControlPlaneTransport,
     session: CloudProtocolSession,
-): Promise<{ token: string; accountId: string }> {
+): Promise<{ token: string; userId: string }> {
     await transport.bootstrapCsrf();
-    const accountId = await queryCloudAccountIdentity(transport, session.token);
-    if (session.accountId !== null && session.accountId !== accountId) {
+    const userId = await queryCloudAccountIdentity(transport, session.token);
+    if (session.userId !== null && session.userId !== userId) {
         throw new CloudProtocolError('Cloud protocol session account identity does not match the cached binding');
     }
-    return { token: session.token, accountId };
+    return { token: session.token, userId };
 }
 
 function isStoredSession(value: unknown): value is StoredCloudProtocolSession {

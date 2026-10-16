@@ -26,7 +26,7 @@ if (fixtureTransfer && (!fixtureSize || !/^[1-9]\d*$/.test(fixtureSize)
     throw new CloudProtocolError('Fixture transfer requires its listed size and MD5');
 }
 const session = await loadCloudProtocolSession(CLOUD_PRODUCTION_ORIGIN);
-if (!session || !session.accountId) {
+if (!session || !session.userId) {
     throw new CloudProtocolError('A cached Cloud session with an account binding is required; no login was attempted');
 }
 const transport = new NodeCloudProtocolTransport({ session: 'descriptor-probe', budget: new CloudRequestBudget(4) });

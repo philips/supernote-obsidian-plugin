@@ -282,6 +282,14 @@ stores only a versioned SHA-256 account fingerprint derived from the canonical
 decimal ID. A fingerprint mismatch blocks the mirror until the user explicitly
 resets it.
 
+The plugin calls this identity `userId` in memory, matching the service field.
+For existing installations, SecretStorage continues to use the
+`supernote-cloud-account-id` key, and the opt-in protocol harness continues to
+read and write version 1 session-cache JSON with an `accountId` field and the
+`SUPERNOTE_CLOUD_ACCOUNT_ID` environment variable. These are compatibility names
+for the same `userId`, not independent identities. The shared manifest's
+`cloudAccountFingerprint` field and its hash input format are unchanged.
+
 **Compatible behavior:** hosted and Private Cloud clients expose `userId` as a
 decimal string in JWT claims or as an int64-shaped profile field. The plugin
 must store the account binding as an opaque decimal string; this evidence does
@@ -478,7 +486,7 @@ safety rules in this specification.
    account binding before enabling Cloud sync.
 5. The Cloud session setting reports **Signed in as <username>** when a
    verified, nonempty `userName` is available, or **Signed in** otherwise. It
-   never displays the token or numeric account ID.
+   never displays the token or numeric `userId`.
 
 ### 8.2 Verification code
 
@@ -511,9 +519,9 @@ compatible error-code evidence.
   the active runtime has SecretStorage before attempting an import rather than
   treating the installer version as the running application version.
 - A session token is device-local and is never added to synced plugin settings.
-- The raw account ID is stored securely with the token only to protect the
-  shared mirror from cross-account reconciliation. Synced mirror metadata
-  contains only the versioned account fingerprint defined in Section 11.1.
+- The raw `userId` is stored securely with the token only to protect the shared
+  mirror from cross-account reconciliation. Synced mirror metadata contains only
+  the versioned account fingerprint defined in Section 11.1.
 - The Cloud session setting obtains the current `userName` through a read-only
   account-identity request using the saved token and checks the returned ID
   against the still-active saved session. It does not store the username in
@@ -529,7 +537,7 @@ compatible error-code evidence.
 - Signing out removes the local token, retains shared sync history, and prevents
   future Cloud runs until a user signs in.
 - Obsidian's public SecretStorage API exposes `setSecret` and `getSecret`, but
-  no deletion operation. Local sign-out overwrites the token and account ID with
+  no deletion operation. Local sign-out overwrites the token and `userId` with
   empty values, which the plugin treats as signed out; it cannot remove their
   secret IDs through the public API. Remote logout is best effort after local
   invalidation.
@@ -635,7 +643,7 @@ points:
 - When the run starts, after readiness checks pass.
 - Immediately before downloading each new or changed file. Identify the file by
   its safe display name or vault-relative mirror path; never include a signed
-  URL, account ID, token, or raw response data.
+  URL, `userId`, token, or raw response data.
 - When the run completes, with secret-free counts for:
 
   - Downloaded files.

@@ -32,20 +32,20 @@ export async function signInCloud(
     const session = await authenticateCloudPassword(transport, credentials, { getVerificationCode });
     if (isCancelled()) return;
     const existing = storage.load();
-    if (existing && existing.accountId !== session.accountId) {
+    if (existing && existing.userId !== session.userId) {
         throw new Error('Cloud session belongs to another account');
     }
     const { manifest } = await loadMirrorManifest(
         new ObsidianMirrorManifestStorage(app, settings.syncFolder), settings.noteSyncState,
     );
     if (manifest.cloudAccountFingerprint !== null
-        && manifest.cloudAccountFingerprint !== cloudAccountFingerprint(session.accountId)) {
+        && manifest.cloudAccountFingerprint !== cloudAccountFingerprint(session.userId)) {
         throw new Error('Cloud mirror account binding does not match');
     }
     if (isCancelled()) return;
     storage.save(session);
     const stored = storage.load();
-    if (stored?.token !== session.token || stored.accountId !== session.accountId) {
+    if (stored?.token !== session.token || stored.userId !== session.userId) {
         if (existing) storage.save(existing);
         else storage.clear();
         throw new Error('SecretStorage did not retain the validated session');

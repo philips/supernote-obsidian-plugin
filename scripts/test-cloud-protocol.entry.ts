@@ -38,11 +38,11 @@ const createTransport = (session: string) => {
 const reusableSession = await loadCloudProtocolSession(CLOUD_PRODUCTION_ORIGIN);
 let sessionSource: 'environment' | 'temporary-file' | 'fresh-login';
 let token: string;
-let accountId: string;
+let userId: string;
 if (reusableSession) {
     sessionSource = reusableSession.source;
     try {
-        ({ token, accountId } = await validateCloudProtocolSession(
+        ({ token, userId } = await validateCloudProtocolSession(
             createTransport(`reuse-${reusableSession.source}`),
             reusableSession,
         ));
@@ -77,8 +77,8 @@ if (reusableSession) {
     );
     sessionSource = 'fresh-login';
     token = authenticated.token;
-    accountId = authenticated.accountId;
-    await saveCloudProtocolSession(CLOUD_PRODUCTION_ORIGIN, token, accountId);
+    userId = authenticated.userId;
+    await saveCloudProtocolSession(CLOUD_PRODUCTION_ORIGIN, token, userId);
 }
 
 const firstInventoryTransport = createTransport('inventory-pass-1');
@@ -124,7 +124,7 @@ const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).
 const observationSalt = randomBytes(32);
 const accountIdentityHash = createHash('sha256')
     .update(observationSalt)
-    .update(accountId, 'utf8')
+    .update(userId, 'utf8')
     .digest('hex');
 const firstInventoryFingerprint = fingerprintInventory(firstInventory.items, observationSalt);
 const secondInventoryFingerprint = fingerprintInventory(secondInventory.items, observationSalt);

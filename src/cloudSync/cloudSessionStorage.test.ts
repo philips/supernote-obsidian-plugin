@@ -4,6 +4,18 @@ import { CloudSessionStorage } from './cloudSessionStorage';
 import { ObsidianSyncExecutionStateStore } from '../syncExecutionState';
 
 describe('Cloud session storage', () => {
+    it('reads an existing session from the original SecretStorage keys', () => {
+        const secrets = new Map([
+            ['supernote-cloud-access-token', 'existing-token'],
+            ['supernote-cloud-account-id', '9223372036854775807'],
+        ]);
+        const storage = new CloudSessionStorage({
+            getSecret: (id: string) => secrets.get(id) ?? null,
+            setSecret: (id: string, value: string) => { secrets.set(id, value); },
+        } as App['secretStorage']);
+        expect(storage.load()).toEqual({ token: 'existing-token', userId: '9223372036854775807' });
+    });
+
     it('keeps token and account binding only in SecretStorage', () => {
         const secrets = new Map<string, string>();
         const saveLocalStorage = vi.fn();
@@ -17,10 +29,11 @@ describe('Cloud session storage', () => {
         } as unknown as App;
         const store = new CloudSessionStorage(app.secretStorage);
         expect(store.load()).toBeNull();
-        store.save({ token: 'test-token', accountId: '9223372036854775807' });
-        expect(store.load()).toEqual({ token: 'test-token', accountId: '9223372036854775807' });
+        store.save({ token: 'test-token', userId: '9223372036854775807' });
+        expect(store.load()).toEqual({ token: 'test-token', userId: '9223372036854775807' });
+        expect(secrets.get('supernote-cloud-account-id')).toBe('9223372036854775807');
         expect(saveLocalStorage).not.toHaveBeenCalled();
-        expect(() => store.save({ token: 'different', accountId: '2' })).toThrow('another account');
+        expect(() => store.save({ token: 'different', userId: '2' })).toThrow('another account');
         expect(store.load()?.token).toBe('test-token');
         store.clear();
         expect(store.load()).toBeNull();

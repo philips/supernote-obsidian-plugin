@@ -26,7 +26,7 @@ export interface CloudCredentials {
 
 export interface CloudAuthenticatedSession {
     token: string;
-    accountId: string;
+    userId: string;
     emailVerificationUsed: boolean;
 }
 
@@ -105,7 +105,7 @@ export async function authenticateCloudPassword(
 
     return {
         token,
-        accountId: await queryCloudAccountIdentity(transport, token),
+        userId: await queryCloudAccountIdentity(transport, token),
         emailVerificationUsed,
     };
 }
@@ -114,29 +114,29 @@ export async function queryCloudAccountIdentity(
     transport: CloudControlPlaneTransport,
     accessToken: string,
 ): Promise<string> {
-    return (await queryCloudAccountProfile(transport, accessToken)).accountId;
+    return (await queryCloudAccountProfile(transport, accessToken)).userId;
 }
 
 export async function queryCloudAccountProfile(
     transport: CloudControlPlaneTransport,
     accessToken: string,
-): Promise<{ accountId: string; userName: string | null }> {
+): Promise<{ userId: string; userName: string | null }> {
     const identityResponse = parseCloudObject(await transport.post(
         CLOUD_ROUTES.accountIdentity,
         {},
         { accessToken },
     ));
     requireCloudSuccess(identityResponse);
-    const accountId = requireCanonicalDecimalId(identityResponse, 'userId');
+    const userId = requireCanonicalDecimalId(identityResponse, 'userId');
     const userName = identityResponse.userName;
-    return { accountId, userName: typeof userName === 'string' && userName.trim() ? userName.trim() : null };
+    return { userId, userName: typeof userName === 'string' && userName.trim() ? userName.trim() : null };
 }
 
 export async function verifyCloudAuthIdentityGate(
     createTransport: () => CloudControlPlaneTransport,
     credentials: CloudCredentials,
     getVerificationCode?: (sessionNumber: number) => Promise<string>,
-): Promise<{ token: string; accountId: string; emailVerificationUsed: boolean }> {
+): Promise<{ token: string; userId: string; emailVerificationUsed: boolean }> {
     // Independent fresh sessions catch cookie/CSRF state accidentally carrying
     // the first success; only the first token is retained after identities agree.
     const first = await authenticateCloudPassword(createTransport(), credentials, {
@@ -145,12 +145,12 @@ export async function verifyCloudAuthIdentityGate(
     const second = await authenticateCloudPassword(createTransport(), credentials, {
         getVerificationCode: getVerificationCode ? () => getVerificationCode(2) : undefined,
     });
-    if (first.accountId !== second.accountId) {
+    if (first.userId !== second.userId) {
         throw new CloudProtocolError('Supernote Cloud returned different account identities across fresh sessions');
     }
     return {
         token: first.token,
-        accountId: first.accountId,
+        userId: first.userId,
         emailVerificationUsed: first.emailVerificationUsed || second.emailVerificationUsed,
     };
 }

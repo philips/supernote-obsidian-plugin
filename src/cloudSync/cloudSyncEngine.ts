@@ -59,7 +59,7 @@ export class CloudSyncEngine implements SyncEngine {
             }
             throw error;
         }
-        const fingerprint = cloudAccountFingerprint(session.accountId);
+        const fingerprint = cloudAccountFingerprint(session.userId);
         const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
         let loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);
         if (loaded.manifest.cloudAccountFingerprint === null) {

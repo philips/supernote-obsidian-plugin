@@ -26,9 +26,9 @@ export interface SharedMirrorManifest {
     records: Record<string, SharedMirrorRecord>;
 }
 
-export function cloudAccountFingerprint(accountId: string): string {
-    if (!/^(0|[1-9]\d*)$/.test(accountId)) throw new Error('Invalid Cloud account identity');
-    return `v1:${bytesToHex(sha256(utf8ToBytes(`supernote-cloud-account:v1:${accountId}`)))}`;
+export function cloudAccountFingerprint(userId: string): string {
+    if (!/^(0|[1-9]\d*)$/.test(userId)) throw new Error('Invalid Cloud account identity');
+    return `v1:${bytesToHex(sha256(utf8ToBytes(`supernote-cloud-account:v1:${userId}`)))}`;
 }
 
 export function requireBoundCloudAccount(manifest: SharedMirrorManifest, fingerprint: string): void {

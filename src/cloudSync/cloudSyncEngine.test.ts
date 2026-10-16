@@ -41,7 +41,7 @@ const app = { secretStorage: {
 
 beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'synthetic-token', accountId: '42' });
+    vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'synthetic-token', userId: '42' });
     vi.mocked(collectCloudInventory).mockResolvedValue({ directories: [], items: [item] });
     vi.mocked(queryCloudPath).mockResolvedValue({ path: 'Note/Test.note/', idPath: '1/123/' });
     vi.mocked(verifyCloudInventoryPaths).mockReturnValue(new Map([['123', '/Note/Test.note']]));

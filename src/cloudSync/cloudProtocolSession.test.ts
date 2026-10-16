@@ -24,7 +24,7 @@ describe('Cloud protocol session cache', () => {
             SUPERNOTE_CLOUD_ACCOUNT_ID: '9223372036854775807',
         })).resolves.toEqual({
             token: 'environment-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
             source: 'environment',
         });
     });
@@ -44,10 +44,12 @@ describe('Cloud protocol session cache', () => {
 
         await expect(loadCloudProtocolSession('https://cloud.supernote.com', environment)).resolves.toEqual({
             token: 'cached-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
             source: 'temporary-file',
         });
-        expect(await readFile(path, 'utf8')).toContain('cached-token');
+        const cached = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+        expect(cached).toMatchObject({ accountId: '9223372036854775807', token: 'cached-token' });
+        expect(cached).not.toHaveProperty('userId');
 
         await clearCloudProtocolSession(environment);
         await expect(loadCloudProtocolSession('https://cloud.supernote.com', environment)).resolves.toBeNull();
@@ -84,11 +86,11 @@ describe('Cloud protocol session cache', () => {
 
         await expect(validateCloudProtocolSession(transport, {
             token: 'cached-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
             source: 'temporary-file',
         })).resolves.toEqual({
             token: 'cached-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
         });
     });
 });

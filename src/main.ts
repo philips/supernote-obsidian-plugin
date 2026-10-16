@@ -1584,8 +1584,8 @@ export default class SupernotePlugin extends Plugin {
 		await transport.bootstrapCsrf();
 		const profile = await queryCloudAccountProfile(transport, session.token);
 		const current = storage.load();
-		return current?.token === session.token && current.accountId === profile.accountId
-			&& profile.accountId === session.accountId ? profile.userName : null;
+		   return current?.token === session.token && current.userId === profile.userId
+			   && profile.userId === session.userId ? profile.userName : null;
 	}
 
 	openCloudSignIn(onSignedIn: () => void = () => {}): void {

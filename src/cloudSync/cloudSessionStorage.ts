@@ -5,7 +5,7 @@ const ACCOUNT_SECRET_ID = 'supernote-cloud-account-id';
 
 export interface CloudSession {
     token: string;
-    accountId: string;
+    userId: string;
 }
 
 export class CloudSessionStorage {
@@ -13,23 +13,23 @@ export class CloudSessionStorage {
 
     load(): CloudSession | null {
         const token = this.secrets.getSecret(TOKEN_SECRET_ID);
-        const accountId = this.secrets.getSecret(ACCOUNT_SECRET_ID);
-        if (!token && !accountId) return null;
-        if (!token || !accountId || !/^(0|[1-9]\d*)$/.test(accountId)) {
+        const userId = this.secrets.getSecret(ACCOUNT_SECRET_ID);
+        if (!token && !userId) return null;
+        if (!token || !userId || !/^(0|[1-9]\d*)$/.test(userId)) {
             throw new Error('Cloud session storage is incomplete or invalid');
         }
-        return { token, accountId };
+        return { token, userId };
     }
 
     save(session: CloudSession): void {
-        if (!session.token || !/^(0|[1-9]\d*)$/.test(session.accountId)) {
+        if (!session.token || !/^(0|[1-9]\d*)$/.test(session.userId)) {
             throw new Error('Cloud session is invalid');
         }
         const existing = this.load();
-        if (existing && existing.accountId !== session.accountId) {
+        if (existing && existing.userId !== session.userId) {
             throw new Error('Cloud session belongs to another account');
         }
-        this.secrets.setSecret(ACCOUNT_SECRET_ID, session.accountId);
+        this.secrets.setSecret(ACCOUNT_SECRET_ID, session.userId);
         this.secrets.setSecret(TOKEN_SECRET_ID, session.token);
     }
 

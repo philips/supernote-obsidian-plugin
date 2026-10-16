@@ -76,7 +76,7 @@ describe('Node Cloud protocol transport', () => {
             getVerificationCode: async () => '654321',
         });
 
-        expect(session.accountId).toBe('9223372036854775807');
+        expect(session.userId).toBe('9223372036854775807');
         expect(session.emailVerificationUsed).toBe(true);
         expect(csrfRequests).toBe(2);
         expect(requests[1].headers.get('cookie')).toContain('session=session-secret-1');

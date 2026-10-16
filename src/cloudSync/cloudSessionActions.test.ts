@@ -25,7 +25,7 @@ const getCode = vi.fn(async () => 'private-code');
 beforeEach(() => {
     vi.clearAllMocks();
     secrets.clear();
-    vi.mocked(authenticateCloudPassword).mockResolvedValue({ token: 'private-token', accountId: '42', emailVerificationUsed: false });
+    vi.mocked(authenticateCloudPassword).mockResolvedValue({ token: 'private-token', userId: '42', emailVerificationUsed: false });
     vi.mocked(loadMirrorManifest).mockResolvedValue({
         manifest: { version: 1, cloudAccountFingerprint: null, records: {} }, revision: 0, slot: 'primary',
     });
@@ -35,7 +35,7 @@ describe('Cloud session actions', () => {
     it('saves only the validated token and account after checking mirror binding', async () => {
         await signInCloud(app, settings, credentials, getCode, () => false, transport);
         expect(authenticateCloudPassword).toHaveBeenCalledWith(transport, credentials, { getVerificationCode: getCode });
-        expect(new CloudSessionStorage(app.secretStorage).load()).toEqual({ token: 'private-token', accountId: '42' });
+        expect(new CloudSessionStorage(app.secretStorage).load()).toEqual({ token: 'private-token', userId: '42' });
         expect([...secrets.values()]).not.toContain(credentials.password);
         expect([...secrets.values()]).not.toContain('private-code');
         expect([...secrets.keys()]).toHaveLength(2);
@@ -61,7 +61,7 @@ describe('Cloud session actions', () => {
     });
 
     it('preserves an existing session if the replacement token fails readback', async () => {
-        new CloudSessionStorage(app.secretStorage).save({ token: 'previous-token', accountId: '42' });
+        new CloudSessionStorage(app.secretStorage).save({ token: 'previous-token', userId: '42' });
         const originalGetSecret = app.secretStorage.getSecret.bind(app.secretStorage);
         const transientApp = { secretStorage: {
             setSecret: app.secretStorage.setSecret.bind(app.secretStorage),
@@ -70,11 +70,11 @@ describe('Cloud session actions', () => {
         } } as unknown as App;
         await expect(signInCloud(transientApp, settings, credentials, getCode, () => false, transport))
             .rejects.toThrow('did not retain');
-        expect(new CloudSessionStorage(app.secretStorage).load()).toEqual({ token: 'previous-token', accountId: '42' });
+        expect(new CloudSessionStorage(app.secretStorage).load()).toEqual({ token: 'previous-token', userId: '42' });
     });
 
     it('clears local credentials even if remote logout fails', async () => {
-        new CloudSessionStorage(app.secretStorage).save({ token: 'private-token', accountId: '42' });
+        new CloudSessionStorage(app.secretStorage).save({ token: 'private-token', userId: '42' });
         transport.post.mockRejectedValueOnce(new Error('offline'));
         await signOutCloud(app, transport);
         expect(new CloudSessionStorage(app.secretStorage).load()).toBeNull();

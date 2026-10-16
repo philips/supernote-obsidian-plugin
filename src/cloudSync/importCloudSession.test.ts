@@ -36,11 +36,11 @@ describe('Cloud session import', () => {
 
     it('stores only a remotely validated pasted token and retains its account binding', async () => {
         const { app, secrets } = fakeApp();
-        vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'cached-token', accountId: '123' });
+        vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'cached-token', userId: '123' });
         await importCloudSession(app, ' cached-token ');
         expect(validateCloudProtocolSession).toHaveBeenCalledOnce();
         expect(vi.mocked(validateCloudProtocolSession).mock.calls[0][1]).toMatchObject({
-            token: 'cached-token', accountId: null,
+            token: 'cached-token', userId: null,
         });
         expect([...secrets.values()]).toContain('cached-token');
         expect([...secrets.values()]).toContain('123');
@@ -52,10 +52,10 @@ describe('Cloud session import', () => {
     it('checks the pasted cache origin and account binding before saving', async () => {
         const { app, secrets } = fakeApp();
         const cache = { version: 1, origin: 'https://cloud.supernote.com', token: 'cached-token', accountId: '123' };
-        vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'cached-token', accountId: '123' });
+        vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'cached-token', userId: '123' });
         await importCloudSession(app, JSON.stringify(cache));
         expect(vi.mocked(validateCloudProtocolSession).mock.calls[0][1]).toMatchObject({
-            token: 'cached-token', accountId: '123',
+            token: 'cached-token', userId: '123',
         });
         expect([...secrets.values()]).toContain('cached-token');
 
@@ -77,7 +77,7 @@ describe('Cloud session import', () => {
 
     it('rejects a token that SecretStorage does not retain accurately', async () => {
         const { app, secrets } = fakeApp();
-        vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'cached-token', accountId: '123' });
+        vi.mocked(validateCloudProtocolSession).mockResolvedValue({ token: 'cached-token', userId: '123' });
         vi.spyOn(app.secretStorage, 'getSecret').mockImplementation((id) => {
             const stored = secrets.get(id) ?? null;
             return stored === 'cached-token' ? 'incorrect-token' : stored;

@@ -129,7 +129,7 @@ describe('Cloud password authentication', () => {
         const identity = posts.at(-1)!;
         identity.response.body = '{"success":true,"userId":9223372036854775807,"userName":"Example user"}';
         await expect(queryCloudAccountProfile(new FakeTransport([identity]), 'session-token')).resolves.toEqual({
-            accountId: '9223372036854775807', userName: 'Example user',
+            userId: '9223372036854775807', userName: 'Example user',
         });
 
         const missingName = successfulPosts().at(-1)!;
@@ -147,7 +147,7 @@ describe('Cloud password authentication', () => {
 
         await expect(authenticateCloudPassword(transport, credentials)).resolves.toEqual({
             token: 'session-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
             emailVerificationUsed: false,
         });
         expect(transport.calls).toEqual([
@@ -176,7 +176,7 @@ describe('Cloud password authentication', () => {
             getVerificationCode: async () => ' 654321 ',
         })).resolves.toEqual({
             token: 'verified-session-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
             emailVerificationUsed: true,
         });
         expect(transport.calls).toEqual([
@@ -278,7 +278,7 @@ describe('Cloud password authentication', () => {
 
         await expect(verifyCloudAuthIdentityGate(() => transports.shift()!, credentials)).resolves.toEqual({
             token: 'session-token',
-            accountId: '9223372036854775807',
+            userId: '9223372036854775807',
             emailVerificationUsed: false,
         });
     });
