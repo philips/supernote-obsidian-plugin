@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App } from 'obsidian';
 import { ObsidianSyncExecutionStateStore } from './syncExecutionState';
+import type { LoadedMirrorManifest } from './sharedMirrorManifestStore';
+import type { SharedMirrorManifest } from './sharedMirrorManifest';
 import {
     formatSyncSummary,
     SingleEngineSyncCoordinator,
@@ -294,6 +296,46 @@ describe('SingleEngineSyncCoordinator', () => {
 
         expect(cloud.clearHistory).toHaveBeenCalledOnce();
         expect(ip.clearHistory).not.toHaveBeenCalled();
+    });
+
+    it.each(['ip-device', 'supernote-cloud'] as const)('clears shared history from %s without losing binding', async (active) => {
+        const original = { version: 1 as const, cloudAccountFingerprint: 'v1:synthetic',
+            records: { 'Mirror/file.note': { contentHash: 'hash', source: {
+                engineId: 'ip-device' as const, deviceUri: '/file.note', deviceDate: '', deviceSize: 4,
+            } } } };
+        const loaded = { manifest: original, revision: 1, slot: 'primary' as const };
+        const service = { load: vi.fn(async () => loaded), commit: vi.fn(async (_previous: LoadedMirrorManifest,
+            manifest: SharedMirrorManifest) => ({
+            manifest, revision: 2, slot: 'backup' as const,
+        })) };
+        const retire = vi.fn(async () => {});
+        const coordinator = new SingleEngineSyncCoordinator({
+            'ip-device': engine('ip-device'), 'supernote-cloud': engine('supernote-cloud'),
+        }, stateStore(active).store, service, retire);
+
+        await coordinator.clearActiveHistory();
+
+        expect(service.commit).toHaveBeenCalledWith(loaded, {
+            ...original, records: {}, legacyHistoryRetired: true,
+        });
+        expect(retire).toHaveBeenCalledOnce();
+    });
+
+    it('does not retire legacy settings when commit fails or an account change is pending', async () => {
+        const loaded: LoadedMirrorManifest = { manifest: { version: 1, cloudAccountFingerprint: null, records: {} },
+            revision: 1, slot: 'primary' };
+        const service = { load: vi.fn(async () => loaded), commit: vi.fn(async () => { throw new Error('write failed'); }) };
+        const retire = vi.fn(async () => {});
+        const coordinator = new SingleEngineSyncCoordinator({ 'ip-device': engine('ip-device') },
+            stateStore().store, service, retire);
+        await expect(coordinator.clearActiveHistory()).rejects.toThrow('write failed');
+        expect(retire).not.toHaveBeenCalled();
+        expect(coordinator.isRunning()).toBe(false);
+        service.load.mockResolvedValue({ ...loaded, manifest: { ...loaded.manifest,
+            accountChange: { targetFingerprint: `v1:${'a'.repeat(64)}`, pendingPath: null, protectedPaths: [] },
+        } });
+        await expect(coordinator.clearActiveHistory()).rejects.toThrow('Cloud account change');
+        expect(service.commit).toHaveBeenCalledTimes(1);
     });
 
     it('falls back to IP when persisted state names an unavailable future engine', () => {

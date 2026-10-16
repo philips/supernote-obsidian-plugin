@@ -15,8 +15,15 @@ at a time. The planned Cloud engine's external protocol, evidence boundaries,
 and user-observable behavior are defined by
 [cloud-sync-design.md](cloud-sync-design.md).
 
-This is a planning document. It does not yet add the Cloud engine, change the
-current IP sync format, or enable automatic synchronization.
+The sections describing the original IP engine and the proposed Cloud engine
+record the baseline at the time of planning; they are not current status.
+
+The original IP implementation below is a historical baseline, not the current
+implementation. Both engines now share a root-bound two-slot manifest service;
+automatic scheduling exists (disabled by default). IP plans with an in-memory
+projection, reserving persisted `noteSyncState` for migration. The coordinator
+clears shared history and guards explicit root changes. See
+[multi-sync-plan.md](multi-sync-plan.md) for verification status.
 
 ## Original IP-Based Sync Engine
 
@@ -611,8 +618,10 @@ The existing `syncFolder: 'Supernote sync'` remains the shared destination
 without a data migration. `syncFileExtensionsRaw` defaults to `.note, .spd`, and
 the existing `syncPathFiltersRaw` becomes the shared path allowlist. Existing
 `noteSyncState` records migrate from plugin settings into the shared vault
-manifest as IP-observed entries, after which `noteSyncState` is removed from
-persisted settings.
+manifest as IP-observed entries. IP plans against an in-memory source view and
+clears the persisted legacy field only after a verified shared commit. A
+`legacyHistoryRetired` marker prevents old settings from being re-imported after
+shared history is explicitly cleared, even if settings saving fails.
 
 Within the Sync section, the settings tab should show shared settings first,
 then engine selection, then engine-specific settings:
@@ -641,14 +650,16 @@ or leave its files behind; cancellation preserves settings, files, and history.
 Obsidian 1.13 provides a built-in vault-folder suggester for declarative
 settings, but its ordinary control saves the chosen path directly. Use a staged
 picker instead, using Obsidian vault folders rather than the existing Supernote
-device HTTP file browser. For a new destination path, select an existing parent
-and supply a new child-folder name.
+device HTTP file browser. The user creates an empty destination folder in the
+vault first, then selects that folder directly.
 
-- **Move:** require a safe, absent destination. Rename the entire sync root with
-  its managed, edited, and user-created contents. Update manifest paths and
-  `syncFolder` while retaining hashes and the Cloud account binding. Checkpoint
-  the operation so interrupted moves can be resumed only when the folder state
-  is unambiguous; otherwise block sync for manual resolution.
+- **Move:** require a distinct, safe, existing empty destination. Move every
+  direct child of the old root into it, including managed, edited, user-created,
+  log, and metadata content; leave the original folder itself in place. Update
+  manifest paths and `syncFolder` while retaining hashes and Cloud binding.
+  Checkpoint the direct entries and their content signatures before mutation;
+  resume a partial move only when each entry and the manifest prove their state.
+  Otherwise block sync for manual resolution.
 - **Leave behind and start fresh:** do not move, delete, or trash old content.
   Explain that old files become unmanaged and in-scope remote files will be
   downloaded to the new root. Retire the old root's plugin manifest slots
@@ -745,6 +756,9 @@ rewrite.
 - Preserve `directConnectIP`, shared `syncFolder`, and `syncPathFiltersRaw`.
 - Read and update the shared manifest instead of an IP-owned manifest. Existing
   `noteSyncState` records migrate to shared entries with IP source metadata.
+- Current implementation: the root-bound manifest service provides load and
+  revision-checked commit to both engines. IP's in-memory URI/date/size view is
+  merged back after its run; the shared destination hash guards writes.
 - Add the shared `syncFileExtensionsRaw`, defaulting to `.note` and `.spd`.
   Refactor the device scan's currently hard-coded extension selection so
   additional trusted regular-file extensions can be selected without weakening
@@ -758,6 +772,21 @@ rewrite.
 - Map `DeviceSyncResult` to the common result with `removed: 0`.
 - The coordinator's shared history action clears shared manifest entries; the IP
   engine has no separate history to clear.
+
+### Shared root changes
+
+The user creates an empty vault folder and selects it in a single staged picker,
+then confirms move or leave-behind. Cancellation does not touch settings or
+vault files. The coordinator lock blocks other runs while the modal is open or
+the operation executes. A device-local root-change checkpoint records each
+top-level entry and its content signature before mutation; startup resumes only
+when the entry locations and manifest binding/records prove the intended state.
+Ambiguous states leave the checkpoint in place and block sync for manual
+resolution. Move relocates the old folder's contents and rewrites manifest paths
+but leaves the original folder itself in place. Leave-behind initializes a fresh
+bound manifest and removes the old manifest slots without moving old files.
+Occupied destinations are rejected, including an old root still containing
+left-behind user files.
 
 Automatic scheduling is new for the IP engine, but it does not alter the sync
 algorithm. Only the trigger and scheduled-error presentation change.

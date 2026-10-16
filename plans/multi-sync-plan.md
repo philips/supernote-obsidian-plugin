@@ -1,12 +1,11 @@
 # Multi-Sync Implementation Plan
 
-**Status:** Core single-active-engine coordination, manual Cloud mirroring,
-shared automatic scheduling, and Cloud cleanup are implemented. The confirmed
-Cloud account-change flow is implemented; live account-switch validation remains
-pending. IP migration to the coordinator-owned shared manifest and an explicit
-shared sync-folder change workflow remain outstanding. Sync implementation files
-are now organized under `src/sync/`, with shared, `directIP/`, and
-`supernoteCloud/` modules. Updated October 16, 2026.
+**Status:** Single-active-engine coordination, Cloud/IP shared-manifest access,
+shared non-destructive history clearing, and the explicit sync-folder change
+workflow are implemented with synthetic tests. Controlled-vault visual
+validation of the settings flow and live account-switch validation remain
+pending. Sync implementation files are organized under `src/sync/`. Updated
+October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -44,23 +43,46 @@ criteria for both engines and root changes live in
 - Organized sync implementation and co-located tests under `src/sync/`,
   separating shared coordination and manifest code from `directIP/` and
   `supernoteCloud/` engine code.
+- Added additive migration of legacy IP records into the two-slot shared
+  manifest by recorded vault path. Existing shared records and Cloud binding
+  take precedence on collisions. IP runs use shared destination hashes to
+  protect local edits, preserve binding, update the source snapshot after safe
+  writes or byte-identical adoption, and stop during pending Cloud account
+  changes. The temporary IP/Cloud ownership block is removed. Synthetic tests
+  cover edited, missing, unchanged, and identical-byte cross-engine paths.
+- Last verified shared-manifest/IP slice: `npm test` (481 passing),
+  `npm run build`, `npm run lint` (0 errors, 14 existing warnings), and
+  `git diff --check`. No real-device or user-vault mutation was run.
+- Both engines now use a root-bound manifest service. IP planning uses an
+  in-memory map, leaving persisted `noteSyncState` for migration only. Shared
+  history clearing runs under the coordinator lock, retains account binding and
+  vault files, and records a retirement marker so a failed settings save cannot
+  re-import cleared history on restart.
+- The settings action stages vault-folder selection, offers move or leave-behind
+  where appropriate, and holds the coordinator lock through confirmation. Root
+  changes use a device-local checkpoint: move the old root's contents into an
+  existing empty target while leaving the old folder in place, with record path
+  rewrite; or start a fresh bound manifest with old slots retired. Ambiguous
+  interrupted changes stop sync; synthetic tests cover restart, conflicts,
+  locally edited and unrelated files, and settings/rename failures.
+- Shared lifecycle/folder-change verification: `npm test` (499 passing),
+  `npm run build`, `npm run lint` (0 errors, 14 existing warnings), and
+  `git diff --check`. No real-device or user-vault mutation was run.
+- Corrected move-contents workflow: `npm test` (502 passing), `npm run build`,
+  `npm run lint` (0 errors, 14 existing warnings), and `git diff --check`.
+  Folder changes were exercised with synthetic vault fixtures only.
 
 ## Outstanding
 
-### Shared manifest and sync-folder change (recommended next sprint)
+### Remaining validation
 
-- Follow [`shared-manifest-plan.md`](shared-manifest-plan.md) for the
-  coordinator-owned lifecycle, safe `noteSyncState` migration, IP and Cloud
-  integration, common history clearing, and regression gates.
-- Replace immediate text-setting changes with a folder selection and an explicit
-  choice: move the entire existing mirror and update its paths, or leave the old
-  files untouched/unmanaged and start with an empty manifest at the new root. Do
-  not archive or automatically reuse old history.
-- The root-change operation is shared by both engines. Implement and verify its
-  confirmation, conflict checks, and interrupted-change handling separately from
-  ordinary per-file crash recovery.
-- The sprint handoff and ordered acceptance checklist are in
-  [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
+- Check the settings flow in the disposable Marie vault, using replaceable
+  folders and the available CLI, VS Code Obsidian MCP, or user interaction.
+  Confirm the UI choices and vault/settings/manifest results; no headless host
+  is needed. The earlier synthetic tests did not mutate a vault.
+- Live Cloud account-switch validation still needs a consenting volunteer with a
+  second account. No Cloud login or remote mutation was attempted.
+- The next handoff is in [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
 
 ### Open scope decisions
 
@@ -92,10 +114,10 @@ shared-manifest block. The Cloud validation record is in
 
 For each work slice, run focused tests first. Before completion, run `npm test`,
 `npm run build`, `npm run lint`, and `git diff --check`. UI changes also require
-headless Obsidian verification where the test environment is available; IP
-integration must retain existing real-device smoke-test coverage. Cloud
-destructive behavior must be validated only with controlled replaceable test
-fixtures after its safety tests pass.
+validation in Obsidian using disposable vault content; IP integration must
+retain existing real-device smoke-test coverage. Cloud destructive behavior must
+be validated only with controlled replaceable test fixtures after its safety
+tests pass.
 
 Compatibility requirements: IP remains the default engine; only one engine runs
 at a time; the legacy IP command ID remains stable; automatic sync remains

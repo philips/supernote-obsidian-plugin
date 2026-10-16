@@ -311,6 +311,30 @@ it('does not scan or change files while a Cloud account change is pending', asyn
     expect(settings.noteSyncState).toEqual({ [legacy.deviceUri]: legacy });
 });
 
+it('retries legacy settings retirement after a verified shared commit when settings saving fails', async () => {
+    const vault = makeVault();
+    const record = manifestRecord(deviceFile('legacy.note', 'legacy'), vaultPathFor('legacy.note'), 'legacy');
+    const settings = settingsWith({ [record.deviceUri]: record });
+    const storage = new ObsidianMirrorManifestStorage(vault.app, settings.syncFolder);
+    await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic', records: {
+        [vaultPathFor('cloud.note')]: { contentHash: 'cloud-hash',
+            source: { engineId: 'supernote-cloud', md5: '0'.repeat(32) } },
+    } });
+    vi.mocked(scanDeviceSupernoteTreeWithExtensions).mockResolvedValue([]);
+    const failSave = vi.fn(async () => { throw new Error('settings failed'); });
+
+    await expect(new IpSyncEngine(vault.app, settings, failSave).run({ kind: 'manual', commandId: 'sync-now' }))
+        .rejects.toThrow('settings failed');
+    expect(settings.noteSyncState).toEqual({ [record.deviceUri]: record });
+    const committed = await loadMirrorManifest(storage, {});
+    expect(committed.manifest.records[vaultPathFor('legacy.note')].source.engineId).toBe('ip-device');
+    expect(committed.manifest.records[vaultPathFor('cloud.note')].source.engineId).toBe('supernote-cloud');
+
+    await new IpSyncEngine(vault.app, settings, async () => {}).run({ kind: 'manual', commandId: 'sync-now' });
+    expect(settings.noteSyncState).toEqual({});
+    expect((await loadMirrorManifest(storage, {})).revision).toBe(committed.revision);
+});
+
 /** Makes fetchFromDevice hand out per-URI content and records requested URIs. */
 function mockDeviceContents(contents: Map<string, string>, failUris: string[] = []) {
     vi.mocked(fetchFromDevice).mockImplementation(async (_ip, uri) => {

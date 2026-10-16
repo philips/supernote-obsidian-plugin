@@ -4,6 +4,7 @@ import { scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
     DeviceNoteListing,
+    SyncManifest,
     planSync,
     deviceUriToVaultPath,
     decideWrite,
@@ -14,7 +15,7 @@ import {
 import type { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
 import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
 import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
-import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { MirrorManifestService, RootMirrorManifestService } from '../sharedMirrorManifestStore';
 import { mergeIpSyncManifest, SharedMirrorManifest, toIpSyncManifest } from '../sharedMirrorManifest';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
@@ -65,6 +66,8 @@ export class IpSyncEngine implements SyncEngine {
         private readonly app: App,
         private readonly settings: SupernotePluginSettings,
         private readonly saveSettings: () => Promise<void>,
+        private readonly manifestService: MirrorManifestService = new RootMirrorManifestService(
+            () => new ObsidianMirrorManifestStorage(app, settings.syncFolder)),
     ) {}
 
     getReadiness() {
@@ -77,14 +80,13 @@ export class IpSyncEngine implements SyncEngine {
         let result: DeviceSyncResult;
         const legacyManifest = this.settings.noteSyncState;
         try {
-            const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
-            const loaded = await loadMirrorManifest(storage, legacyManifest);
+            const loaded = await this.manifestService.load(legacyManifest);
             if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before sync');
-            this.settings.noteSyncState = toIpSyncManifest(loaded.manifest);
-            result = await runDeviceSync(this.app, this.settings, loaded.manifest);
-            const merged = mergeIpSyncManifest(loaded.manifest, this.settings.noteSyncState);
+            const planningRecords = toIpSyncManifest(loaded.manifest);
+            result = await runDeviceSync(this.app, this.settings, loaded.manifest, planningRecords);
+            const merged = mergeIpSyncManifest(loaded.manifest, planningRecords);
             if (JSON.stringify(merged) !== JSON.stringify(loaded.manifest)) {
-                await saveMirrorManifest(storage, loaded, merged);
+                await this.manifestService.commit(loaded, merged);
             }
             this.settings.noteSyncState = {};
             await this.saveSettings();
@@ -142,6 +144,7 @@ export async function runDeviceSync(
     app: App,
     settings: SupernotePluginSettings,
     sharedManifest: SharedMirrorManifest,
+    planningRecords: SyncManifest,
 ): Promise<DeviceSyncResult> {
     const ip = settings.directConnectIP;
     if (!ip) {
@@ -157,7 +160,7 @@ export async function runDeviceSync(
     }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
     const fileExtensions = parseFileExtensionAllowlist(settings.syncFileExtensionsRaw ?? '.note, .spd');
-    const plan = planSync(listings, settings.noteSyncState, patterns, fileExtensions);
+    const plan = planSync(listings, planningRecords, patterns, fileExtensions);
     // A device listing can be unchanged while its vault copy was deleted.
     // Restore those files from the unchanged bucket; a missing file is safe to
     // create, unlike a present file whose hash no longer matches the manifest.
@@ -169,7 +172,7 @@ export async function runDeviceSync(
     const toSync = [...plan.toSync];
     const unchanged: DeviceNoteListing[] = [];
     for (const listing of plan.unchanged) {
-        const record = settings.noteSyncState[listing.uri];
+        const record = planningRecords[listing.uri];
         if (!record) {
             unchanged.push(listing); // 'unchanged' implies a record exists; defensive only.
             continue;
@@ -231,7 +234,7 @@ export async function runDeviceSync(
                 await writeBinaryAt(app, vaultPath, buffer);
             }
 
-            settings.noteSyncState[listing.uri] = buildSyncRecord(listing, vaultPath, newHash);
+            planningRecords[listing.uri] = buildSyncRecord(listing, vaultPath, newHash);
             result.synced++;
         } catch (err) {
             result.failed.push({ file: listing.uri, error: err instanceof Error ? err.message : String(err) });
@@ -248,7 +251,7 @@ export async function runDeviceSync(
     // actual cost planSync's change detection avoids), it's cheap enough to
     // check on every run rather than waiting for that.
     for (const listing of unchanged) {
-        const record = settings.noteSyncState[listing.uri];
+        const record = planningRecords[listing.uri];
         if (!record) continue; // 'unchanged' implies a record exists; defensive only.
 
         try {

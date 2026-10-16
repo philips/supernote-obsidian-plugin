@@ -7,6 +7,9 @@ import { runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { downloadCloudBytes } from './cloudDownload';
 import { cloudAccountFingerprint } from '../sharedMirrorManifest';
 import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import type { SyncManifest } from '../directIP/deviceSync';
+import type { SharedMirrorManifest } from '../sharedMirrorManifest';
+import type { LoadedMirrorManifest, MirrorManifestStorage } from '../sharedMirrorManifestStore';
 import { CloudSignInRequiredError, CloudSyncEngine } from './cloudSyncEngine';
 
 const post = vi.hoisted(() => vi.fn());
@@ -23,7 +26,21 @@ vi.mock('./cloudInventory', () => ({
 }));
 vi.mock('./cloudMirrorPipeline', () => ({ runVerifiedCloudMirror: vi.fn() }));
 vi.mock('./cloudDownload', () => ({ downloadCloudBytes: vi.fn() }));
-vi.mock('../sharedMirrorManifestStore', () => ({ loadMirrorManifest: vi.fn(), saveMirrorManifest: vi.fn() }));
+vi.mock('../sharedMirrorManifestStore', () => {
+    const loadMirrorManifest = vi.fn<(storage: MirrorManifestStorage, legacy: SyncManifest) => Promise<LoadedMirrorManifest>>();
+    const saveMirrorManifest = vi.fn<(storage: MirrorManifestStorage, previous: LoadedMirrorManifest,
+        manifest: SharedMirrorManifest) => Promise<LoadedMirrorManifest>>();
+    return {
+        loadMirrorManifest, saveMirrorManifest,
+        RootMirrorManifestService: class {
+            constructor(private readonly storage: () => MirrorManifestStorage) {}
+            load(legacy: SyncManifest) { return loadMirrorManifest(this.storage(), legacy); }
+            commit(previous: LoadedMirrorManifest, manifest: SharedMirrorManifest) {
+                return saveMirrorManifest(this.storage(), previous, manifest);
+            }
+        },
+    };
+});
 
 const item = {
     id: '123', fileName: 'Test.note', directoryId: '0', isFolder: false,

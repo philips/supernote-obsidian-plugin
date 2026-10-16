@@ -417,10 +417,13 @@ export class SupernoteSettingTab extends PluginSettingTab {
                     {
                         name: 'Destination folder',
                         desc: 'Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.',
-                        control: {
-                            type: 'text',
-                            key: 'syncFolder',
-                            placeholder: 'Supernote sync',
+                        render: (setting) => {
+                            setting.setDesc(`Current folder: ${this.plugin.settings.syncFolder}`)
+                                .addButton((button) => button.setButtonText('Change sync folder').onClick(async () => {
+                                    try { await this.plugin.changeSyncFolder(); } catch (error) {
+                                        new Notice(error instanceof Error ? error.message : 'Sync folder change failed');
+                                    }
+                                }));
                         },
                     },
                     {
@@ -449,8 +452,12 @@ export class SupernoteSettingTab extends PluginSettingTab {
                                 .setDesc('Forgets which files sync has already managed. The next sync re-checks every matching file while preserving local-edit conflict protection.')
                                 .addButton((btn) => {
                                     btn.setButtonText('Forget sync history').onClick(async () => {
-                                        await this.plugin.clearActiveSyncHistory();
-                                        new Notice('Sync history cleared');
+                                        try {
+                                            await this.plugin.clearActiveSyncHistory();
+                                            new Notice('Sync history cleared');
+                                        } catch (error) {
+                                            new Notice(error instanceof Error ? error.message : 'Could not clear sync history');
+                                        }
                                     });
                                 });
                         },
@@ -667,15 +674,12 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(sectionEl)
             .setName('Destination folder')
-            .setDesc('Shared vault folder used by whichever sync engine is active. Synced source paths are mirrored below this folder.')
-            .addText(text => text
-                .setPlaceholder('Supernote sync')
-                .setValue(this.plugin.settings.syncFolder)
-                .onChange(async (value) => {
-                    this.plugin.settings.syncFolder = value;
-                    await this.plugin.saveSettings();
-                })
-            );
+            .setDesc(`Current folder: ${this.plugin.settings.syncFolder}`)
+            .addButton((button) => button.setButtonText('Change sync folder').onClick(async () => {
+                try { await this.plugin.changeSyncFolder(); } catch (error) {
+                    new Notice(error instanceof Error ? error.message : 'Sync folder change failed');
+                }
+            }));
 
         new Setting(sectionEl)
             .setName('Path allowlist')
@@ -714,16 +718,16 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
         new Setting(sectionEl)
             .setName('Sync history')
-            .setDesc('IP sync only. Cloud account binding and mirror history cannot be cleared in this milestone.')
+            .setDesc('Forget managed files for either engine without moving vault files or changing cloud account binding.')
             .addButton(btn => btn
                 .setButtonText('Forget sync history')
                 .onClick(async () => {
-                    if (this.plugin.getActiveSyncEngineId() === 'supernote-cloud') {
-                        new Notice('Cloud mirror history cannot be cleared while account binding is active');
-                        return;
+                    try {
+                        await this.plugin.clearActiveSyncHistory();
+                        new Notice('Sync history cleared');
+                    } catch (error) {
+                        new Notice(error instanceof Error ? error.message : 'Could not clear sync history');
                     }
-                    await this.plugin.clearActiveSyncHistory();
-                    new Notice('Sync history cleared');
                 })
             );
 

@@ -2,6 +2,10 @@
     color: var(--text-warning);
 }
 
+.supernote-sync-folder-warning {
+    color: var(--text-warning);
+}
+
 .supernote-sync-interval-validation {
     color: var(--text-error);
 }

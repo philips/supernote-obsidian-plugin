@@ -1,11 +1,10 @@
 # Shared Manifest Strategy and Implementation Plan
 
-**Status:** Planned. Cloud uses the versioned two-slot vault manifest; Direct IP
-still plans from `noteSyncState` in plugin settings. The coordinator currently
-serializes runs but delegates history clearing to the active engine. No shared
-root-change operation exists. This plan covers both engine integration and an
-explicit, common destination-change workflow; it does not claim either is
-implemented.
+**Status:** Implemented with synthetic regression coverage. Both engines use the
+root-bound two-slot manifest service; IP plans in memory. The coordinator owns
+shared non-destructive history clearing and exclusive root changes with restart
+checkpoints. Controlled-vault visual verification remains in
+[`multi-sync-next-steps.md`](multi-sync-next-steps.md).
 
 ## Product Contract
 
@@ -31,10 +30,11 @@ implemented.
 
 ## Current State and Boundaries
 
-- `IpSyncEngine` invokes `runDeviceSync`, whose planning and saves use
-  `settings.noteSyncState`. A guard currently prevents IP from running over
-  Cloud-recorded destinations. The Cloud engine already uses
-  `loadMirrorManifest` / `saveMirrorManifest` in `.supernote-sync`.
+- `IpSyncEngine` invokes `runDeviceSync` with an in-memory IP planning view.
+  Both engines use the root-bound manifest service; IP checks shared destination
+  hashes before writing, updates source metadata after a safe write or
+  byte-identical adoption, and blocks on a pending Cloud account change.
+  Persisted `noteSyncState` is migration input only.
 - Retain the store's two-slot integrity, readback checks, revision comparison,
   and fail-closed invalid-manifest handling. Reject stale writes; automatic
   three-way reconciliation across machines is not part of this plan.
@@ -83,29 +83,30 @@ it to `syncFolder`. Its folder list can come from Obsidian's Vault API, using
 `SuggestModal<TFolder>` or `AbstractInputSuggest` for the picker. The plugin's
 existing `FileListModal` is also a `SuggestModal`, but fetches folders from the
 Supernote device; reuse only its UI pattern, not its HTTP listing or device
-navigation. Support a new destination by selecting an existing parent and
-entering a new child-folder name. Never open an OS filesystem picker or accept a
-destination outside the vault.
+navigation. The user creates an empty destination folder in the vault before
+opening the picker; select that existing folder directly. Never open an OS
+filesystem picker or accept a destination outside the vault.
 
-- **Move existing mirror:** explain that the _whole_ old root moves, including
-  user-created or edited files, `Sync Log.md`, and `.supernote-sync`. Require a
-  distinct, safe, not-yet-existing destination outside the old root. Under the
-  coordinator lock, checkpoint the old/new root intent, rename the folder
-  through the Vault API, then update any path-bearing manifest records and
-  `syncFolder`. Retain hashes, remote snapshots, and Cloud account binding.
-  Resume an interrupted move only when the old/new folder state identifies a
-  single safe outcome; otherwise stop sync for manual resolution. Do not copy
-  files one by one or merge into an occupied destination.
+- **Move existing mirror:** explain that all contents of the old root move,
+  including user-created or edited files, `Sync Log.md`, and `.supernote-sync`,
+  but the original folder stays. Require a distinct, safe, existing empty
+  destination outside the old root. Under the coordinator lock, checkpoint the
+  direct entries and their content signatures, move each direct child through
+  the Vault API, then update manifest paths and `syncFolder`. Retain hashes,
+  source snapshots, and Cloud account binding. Resume after interruption only
+  when every entry is provably at exactly one root with its expected contents
+  and the manifest still matches; otherwise stop sync for manual resolution.
+  Never merge into an occupied destination.
 - **Leave files and start fresh:** warn that old files stay in place, become
   unmanaged, and new in-scope remote files will be downloaded under the new
   root. The old folder, user content, and log are not moved or trashed. Drop the
   old root's plugin manifest slots rather than archiving history or silently
   reactivating it on a later return to that folder. Initialize an empty manifest
   at the new root, retaining the verified Cloud account binding but no per-file
-  records. The destination may be a new path or an existing empty vault folder;
-  reject occupied folders rather than overwriting or claiming their contents.
-  Make the switch and old-metadata retirement recoverable or stop further sync
-  if interrupted; never guess which root is active. This is an explicit history
+  records. The destination must be an existing empty vault folder; reject
+  occupied folders rather than overwriting or claiming their contents. Make the
+  switch and old-metadata retirement recoverable or stop further sync if
+  interrupted; never guess which root is active. This is an explicit history
   reset for the old files, not a request to remove them.
 
 If the current root has no managed history and no files to move, allow a

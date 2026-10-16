@@ -4,7 +4,7 @@ import { cloudInventoryFingerprint, CloudInventoryPass } from './cloudInventory'
 import { bindVerifiedCloudPaths, CloudMirrorPlan, missingManagedCloudPaths, planCloudMirror } from './cloudMirrorPlan';
 import { applyCloudDownload, CloudMirrorTransfer, CloudMirrorVault } from './cloudMirrorWrite';
 import { cloudPlanningRecords, MIRROR_METADATA_DIRECTORY, requireBoundCloudAccount, SharedMirrorManifest } from '../sharedMirrorManifest';
-import { loadMirrorManifest, MirrorManifestStorage, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { MirrorManifestService, MirrorManifestStorage, RootMirrorManifestService } from '../sharedMirrorManifestStore';
 
 // Keep inventory binding and vault inspection separate from network transport.
 // Only planned in-scope destinations are read; canonical-path or account
@@ -41,6 +41,7 @@ export interface CloudMirrorRunOptions {
     accountFingerprint: string;
     vault: CloudMirrorVault;
     storage: MirrorManifestStorage;
+    manifestService?: MirrorManifestService;
     transfer: CloudMirrorTransfer;
     pathFilters: readonly string[];
     fileExtensions: FileExtensionAllowlist;
@@ -56,7 +57,8 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
     protected: string[]; failed: string[];
     failureCategories: string[]; warningCategories: string[];
 }> {
-    let loaded = await loadMirrorManifest(options.storage, options.legacyManifest);
+    const manifestService = options.manifestService ?? new RootMirrorManifestService(() => options.storage);
+    let loaded = await manifestService.load(options.legacyManifest);
     requireBoundCloudAccount(loaded.manifest, options.accountFingerprint);
     const plan = await planVerifiedCloudInventory(options.inventory, options.canonicalPathsById,
         options.syncFolder, loaded.manifest, options.accountFingerprint, options.vault,
@@ -89,7 +91,7 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         }
         // A failed manifest commit after a successful vault write makes the
         // next overwrite unsafe; stop rather than continuing under old history.
-        loaded = await saveMirrorManifest(options.storage, loaded, write.manifest);
+        loaded = await manifestService.commit(loaded, write.manifest);
         if (write.outcome === 'written') result.synced++;
         else result.unchanged++;
     }
@@ -140,7 +142,7 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
             }
             const records = { ...loaded.manifest.records };
             delete records[path];
-            loaded = await saveMirrorManifest(options.storage, loaded, { ...loaded.manifest, records });
+            loaded = await manifestService.commit(loaded, { ...loaded.manifest, records });
             if (trashed && options.vault.trashEmptyFolder) {
                 let parent = path.slice(0, path.lastIndexOf('/'));
                 while (parent.startsWith(`${root}/`)

@@ -20,6 +20,23 @@ export interface LoadedMirrorManifest {
     slot: MirrorManifestSlot;
 }
 
+export interface MirrorManifestService {
+    load(legacy: SyncManifest): Promise<LoadedMirrorManifest>;
+    commit(previous: LoadedMirrorManifest, manifest: SharedMirrorManifest): Promise<LoadedMirrorManifest>;
+}
+
+export class RootMirrorManifestService implements MirrorManifestService {
+    constructor(private readonly storage: () => MirrorManifestStorage) {}
+
+    load(legacy: SyncManifest): Promise<LoadedMirrorManifest> {
+        return loadMirrorManifest(this.storage(), legacy);
+    }
+
+    commit(previous: LoadedMirrorManifest, manifest: SharedMirrorManifest): Promise<LoadedMirrorManifest> {
+        return saveMirrorManifest(this.storage(), previous, manifest);
+    }
+}
+
 const slots: MirrorManifestSlot[] = ['primary', 'backup'];
 
 // This detects accidental truncation/corruption, not malicious modification;
@@ -35,6 +52,7 @@ function validManifest(value: unknown): value is SharedMirrorManifest {
         || Array.isArray(manifest.records)
         || (manifest.cloudAccountFingerprint !== null
             && (typeof manifest.cloudAccountFingerprint !== 'string' || !manifest.cloudAccountFingerprint))
+        || (manifest.legacyHistoryRetired !== undefined && manifest.legacyHistoryRetired !== true)
         || (manifest.accountChange !== undefined && (!manifest.accountChange
             || typeof manifest.accountChange.targetFingerprint !== 'string'
             || !/^v1:[a-f\d]{64}$/.test(manifest.accountChange.targetFingerprint)
@@ -107,7 +125,7 @@ export async function loadMirrorManifest(
     // its account binding; legacy settings remain untouched until integration
     // can remove them after a verified commit.
     const current = await readLatest(storage);
-    if (current?.manifest.accountChange) return current;
+    if (current?.manifest.accountChange || current?.manifest.legacyHistoryRetired) return current;
     if (current) {
         const migrated = fromIpSyncManifest(legacy);
         const additions = Object.fromEntries(Object.entries(migrated.records)

@@ -17,6 +17,10 @@ import './webcomponent/SupernoteViewerElement';
 import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
 import { IpSyncEngine } from './sync/directIP/syncEngine';
+import { ChangeSyncFolderModal } from './sync/ChangeSyncFolderModal';
+import { SyncRootChange } from './sync/changeSyncRoot';
+import { ObsidianMirrorManifestStorage } from './sync/obsidianMirrorManifestStorage';
+import { RootMirrorManifestService } from './sync/sharedMirrorManifestStore';
 import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngine, SyncEngineId, SyncRunResult } from './sync/syncAbstraction';
 import { reportSyncFailure, reportSyncResult } from './sync/syncReporting';
 import { ObsidianSyncExecutionStateStore } from './sync/syncExecutionState';
@@ -1145,6 +1149,7 @@ export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
 	private syncCoordinator!: SyncCoordinator;
+	private syncRootChange!: SyncRootChange;
 	private noteViewerRegistered = false;
 	private cloudSignInModal: CloudSignInModal | null = null;
 	// Live reference handed to VaultWriter — registering/unregistering here
@@ -1174,11 +1179,38 @@ export default class SupernotePlugin extends Plugin {
         installAtPolyfill();
 
 		await this.loadSettings();
-		const ipSyncEngine = new IpSyncEngine(this.app, this.settings, () => this.saveSettings());
-		const cloudSyncEngine = new CloudSyncEngine(this.app, this.settings);
+		this.syncRootChange = new SyncRootChange(this.app, () => this.settings.syncFolder,
+			() => this.settings.noteSyncState, async (root) => {
+				const previousRoot = this.settings.syncFolder;
+				const previousLegacy = this.settings.noteSyncState;
+				this.settings.syncFolder = root;
+				this.settings.noteSyncState = {};
+				try { await this.saveSettings(); } catch (error) {
+					this.settings.syncFolder = previousRoot;
+					this.settings.noteSyncState = previousLegacy;
+					throw error;
+				}
+			});
+		try { await this.syncRootChange.recover(); } catch (error) {
+			new Notice(error instanceof Error ? error.message : 'Sync folder change needs manual resolution');
+		}
+		const manifestService = new RootMirrorManifestService(
+			() => new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder));
+		const ipSyncEngine = new IpSyncEngine(this.app, this.settings, () => this.saveSettings(), manifestService);
+		const cloudSyncEngine = new CloudSyncEngine(this.app, this.settings, manifestService);
 		this.syncCoordinator = new SingleEngineSyncCoordinator(
 			{ 'ip-device': ipSyncEngine, 'supernote-cloud': cloudSyncEngine },
 			new ObsidianSyncExecutionStateStore(this.app),
+			manifestService,
+			async () => {
+				const legacy = this.settings.noteSyncState;
+				this.settings.noteSyncState = {};
+				try { await this.saveSettings(); } catch (error) {
+					this.settings.noteSyncState = legacy;
+					throw error;
+				}
+			},
+			() => this.syncRootChange.assertReady(),
 		);
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
@@ -1566,6 +1598,17 @@ export default class SupernotePlugin extends Plugin {
 		await this.syncCoordinator.clearActiveHistory();
 	}
 
+	async changeSyncFolder(): Promise<void> {
+		await this.syncCoordinator.runExclusive(async () => {
+			await this.syncRootChange.recover();
+			const hasContent = await this.syncRootChange.hasContent();
+			const choice = await new ChangeSyncFolderModal(this.app, this.settings.syncFolder, hasContent).choose();
+			if (!choice) return;
+			await this.syncRootChange.change(choice.root, choice.mode);
+			new Notice('Sync folder changed');
+		});
+	}
+
 	cloudSessionStatus(): string {
 		if (!this.app.secretStorage) return 'SecretStorage is unavailable';
 		try {
@@ -1625,9 +1668,14 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	private async reportSyncFailure(error: unknown): Promise<void> {
+		if (this.rootChangeBlocked()) return;
 		const engine = this.syncCoordinator.getActiveEngine();
 		await reportSyncFailure(this.app, this.settings.syncFolder, engine.id, error, engine.name, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
 			.catch((logError) => console.error('Failed to write to Supernote sync log:', logError));
+	}
+
+	private rootChangeBlocked(): boolean {
+		try { this.syncRootChange.assertReady(); return false; } catch { return true; }
 	}
 
 	private async pollAutomaticSync(): Promise<void> {
@@ -1645,6 +1693,10 @@ export default class SupernotePlugin extends Plugin {
 				await this.reportSyncResult(result);
 			}
 		} catch (error) {
+			if (this.rootChangeBlocked()) {
+				new Notice('Sync folder change is pending; resolve it before syncing');
+				return;
+			}
 			await this.reportSyncFailure(error);
 			if (error instanceof CloudSignInRequiredError) {
 				new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
@@ -1669,6 +1721,10 @@ export default class SupernotePlugin extends Plugin {
 			const result = await this.syncCoordinator.runActive({ kind: 'manual', commandId });
 			if (result) await this.reportSyncResult(result);
 		} catch (err) {
+			if (this.rootChangeBlocked()) {
+				new Notice('Sync folder change is pending; resolve it before syncing');
+				return;
+			}
 			await this.reportSyncFailure(err);
 			const error = err instanceof Error ? err : new Error(String(err));
 			if (this.getActiveSyncEngineId() === 'ip-device') {

@@ -68,6 +68,17 @@ describe('shared mirror manifest persistence', () => {
         expect(await loadMirrorManifest(store, {})).toEqual(saved);
     });
 
+    it('does not re-import legacy settings after verified history retirement, even after restart', async () => {
+        const store = storage();
+        const legacy = buildSyncRecord({ uri: '/Old.note', date: 'today', size: 3 }, 'Mirror/Old.note', 'hash');
+        const first = await loadMirrorManifest(store, { [legacy.deviceUri]: legacy });
+        const cleared = await saveMirrorManifest(store, first, { ...first.manifest,
+            records: {}, cloudAccountFingerprint: 'v1:synthetic', legacyHistoryRetired: true });
+
+        expect(await loadMirrorManifest(store, { [legacy.deviceUri]: legacy })).toEqual(cleared);
+        expect(cleared.manifest.cloudAccountFingerprint).toBe('v1:synthetic');
+    });
+
     it('recovers the last valid revision when a later slot write is torn', async () => {
         const store = storage();
         const first = await loadMirrorManifest(store, {});

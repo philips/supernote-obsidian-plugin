@@ -17,7 +17,7 @@ import { ObsidianCloudMirrorVault } from './obsidianCloudMirrorVault';
 import { createObsidianCloudRequest } from './obsidianCloudRequest';
 import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
 import { cloudAccountFingerprint, requireBoundCloudAccount } from '../sharedMirrorManifest';
-import { loadMirrorManifest, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { MirrorManifestService, RootMirrorManifestService } from '../sharedMirrorManifestStore';
 
 export class CloudSignInRequiredError extends Error {
     constructor() { super('Sign in to Supernote Cloud in settings to resume sync'); }
@@ -30,6 +30,8 @@ export class CloudSyncEngine implements SyncEngine {
     constructor(
         private readonly app: App,
         private readonly settings: SupernotePluginSettings,
+        private readonly manifestService: MirrorManifestService = new RootMirrorManifestService(
+            () => new ObsidianMirrorManifestStorage(app, settings.syncFolder)),
     ) {}
 
     getReadiness() {
@@ -61,10 +63,10 @@ export class CloudSyncEngine implements SyncEngine {
         }
         const fingerprint = cloudAccountFingerprint(session.userId);
         const storage = new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder);
-        let loaded = await loadMirrorManifest(storage, this.settings.noteSyncState);
+        let loaded = await this.manifestService.load(this.settings.noteSyncState);
         if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before sync');
         if (loaded.manifest.cloudAccountFingerprint === null) {
-            loaded = await saveMirrorManifest(storage, loaded, {
+            loaded = await this.manifestService.commit(loaded, {
                 ...loaded.manifest, cloudAccountFingerprint: fingerprint,
             });
         }
@@ -92,7 +94,7 @@ export class CloudSyncEngine implements SyncEngine {
         const result = await runVerifiedCloudMirror({
             inventory, canonicalPathsById, syncFolder: this.settings.syncFolder,
             legacyManifest: this.settings.noteSyncState, accountFingerprint: fingerprint,
-            vault: new ObsidianCloudMirrorVault(this.app), storage, transfer,
+            vault: new ObsidianCloudMirrorVault(this.app), storage, manifestService: this.manifestService, transfer,
             pathFilters: parsePathFilters(this.settings.syncPathFiltersRaw),
             fileExtensions: parseFileExtensionAllowlist(this.settings.syncFileExtensionsRaw),
             maxFileBytes: CLOUD_MAX_DESKTOP_FILE_BYTES,

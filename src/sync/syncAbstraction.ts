@@ -1,3 +1,5 @@
+import type { MirrorManifestService } from './sharedMirrorManifestStore';
+
 export type SyncEngineId = 'ip-device' | 'supernote-cloud';
 
 export type SyncTrigger =
@@ -99,6 +101,9 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
     constructor(
         private readonly engines: Partial<Record<SyncEngineId, SyncEngine>>,
         private readonly stateStore: SyncExecutionStateStore,
+        private readonly manifestService?: MirrorManifestService,
+        private readonly retireLegacyHistory?: () => Promise<void>,
+        private readonly assertRootReady?: () => void,
     ) {
         this.executionState = stateStore.load();
         if (!this.engines[this.executionState.activeSyncEngine]) {
@@ -201,6 +206,8 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
     async runActive(trigger: SyncTrigger): Promise<SyncRunResult | null> {
         if (this.running) return null;
 
+        this.assertRootReady?.();
+
         const engine = this.getActiveEngine();
         const readiness = engine.getReadiness();
         if (!readiness.ready) {
@@ -220,7 +227,7 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
     }
 
     async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
-        if (this.running) throw new Error('Wait for the current sync before changing Cloud accounts');
+        if (this.running) throw new Error('Wait for the current sync operation to finish');
         this.running = true;
         try {
             return await operation();
@@ -230,9 +237,18 @@ export class SingleEngineSyncCoordinator implements SyncCoordinator {
     }
 
     async clearActiveHistory(): Promise<void> {
-        if (this.running) {
-            throw new Error('Cannot clear sync history while a sync is running');
-        }
-        await this.getActiveEngine().clearHistory();
+        await this.runExclusive(async () => {
+            this.assertRootReady?.();
+            if (!this.manifestService || !this.retireLegacyHistory) {
+                await this.getActiveEngine().clearHistory();
+                return;
+            }
+            const loaded = await this.manifestService.load({});
+            if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before clearing history');
+            await this.manifestService.commit(loaded, {
+                ...loaded.manifest, records: {}, legacyHistoryRetired: true,
+            });
+            await this.retireLegacyHistory();
+        });
     }
 }
