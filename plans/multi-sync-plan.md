@@ -1,9 +1,10 @@
 # Multi-Sync Implementation Plan
 
-**Status:** Core single-active-engine coordination and manual Cloud mirroring
-are implemented. Shared automatic scheduling and Cloud cleanup are implemented;
-IP manifest migration and the destination-root move workflow remain outstanding.
-The explicit Cloud mirror reset is also outstanding. Updated October 15, 2026.
+**Status:** Core single-active-engine coordination, manual Cloud mirroring,
+shared automatic scheduling, and Cloud cleanup are implemented. The confirmed
+Cloud account-change flow is implemented; live account-switch validation remains
+pending. IP migration to the coordinator-owned shared manifest and the
+destination-root move workflow remain outstanding. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -39,15 +40,24 @@ progress and verification.
 
 ## Outstanding
 
-### Shared manifest migration and IP compatibility
+### Coordinator-owned shared manifest for IP and Cloud (next sprint)
 
-- Migrate legacy `noteSyncState` records to the shared vault manifest without
-  losing existing IP change-detection or local-edit protection.
-- Remove the legacy settings field only after verified migration succeeds.
-- Preserve Cloud account binding across IP runs and ensure IP cannot overwrite
-  Cloud-managed destinations until it uses the shared manifest.
-- Validate migration recovery and IP regression behavior with focused tests and
-  the existing device-sync smoke-test surface.
+- Make the coordinator the common owner and entry point for the shared manifest
+  lifecycle used by both engines, rather than having Cloud use the shared store
+  while IP continues to use `noteSyncState`.
+- Migrate existing `noteSyncState` records into the shared vault manifest and
+  remove the legacy settings field only after migration is verified and
+  recoverable.
+- Route IP reads and writes through the shared manifest, preserving device
+  date/size change detection, byte hashes, local-edit protection, restoration
+  behavior, and IP's additive/update-only semantics.
+- Make the shared history action operate on manifest records for both engines;
+  preserve Cloud account binding and ensure an IP run cannot overwrite a
+  Cloud-managed destination.
+- Add focused tests for migration, interrupted migration, shared history
+  behavior, and switching between engines without losing protection. Keep this
+  sprint limited to common manifest ownership and IP integration; do not assume
+  that general per-file crash recovery is included.
 
 ### Shared destination-root move
 
@@ -60,13 +70,22 @@ progress and verification.
 - Test interrupted moves and preservation of user-created and locally edited
   files. Do not replace this with per-file copying.
 
-### Explicit Cloud mirror reset
+### Open scope decisions
 
-- Implement the confirmed destructive account/device-binding reset described in
-  [`multi-sync-design.md`](multi-sync-design.md) and tracked in
-  [`cloud-sync-next-steps.md`](cloud-sync-next-steps.md). Preserve edited files,
-  trash only unchanged managed files, and clear the Cloud binding and shared
-  manifest without disturbing unrelated content or IP settings.
+- General recovery for ordinary sync operations is not part of the account-
+  change checkpointing already implemented. Decide whether to schedule a durable
+  recovery record for routine downloads, overwrites, moves, and Trash operations
+  as its own sprint, or retain the current fail-closed behavior.
+- Cross-device manifest reconciliation and the destination-root move workflow
+  remain separate design proposals, not part of the next shared-manifest sprint.
+  Decide whether both are still wanted and whether they should be separate
+  future sprints. See the design's concurrent-update and destination sections
+  for the detailed behavior under consideration.
+
+The standalone Cloud reset is not outstanding: confirmed account change occurs
+during interactive sign-in. Its controlled-vault/live account-switch validation
+remains pending separate approval, as recorded in
+[`cloud-sync-next-steps.md`](cloud-sync-next-steps.md).
 
 ## Verification
 

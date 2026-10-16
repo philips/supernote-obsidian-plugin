@@ -653,11 +653,31 @@ managed files and user-created content inside it. This also replaces the IP
 engine's current behavior, where changing `syncFolder` can gradually split one
 mirror across old and new roots.
 
-`Reset Cloud mirror` remains a separate destructive action for changing the
-logical user/device pairing: it may trash locally unchanged managed files,
 preserve and report locally edited files, clear the shared manifest, and remove
-the Cloud account binding. Moving a destination does not reset history or
-account binding.
+Changing Cloud accounts is handled only from the interactive sign-in flow; there
+is no standalone destructive reset control. When a verified sign-in returns a
+different account ID from the account bound to the shared manifest, the user is
+shown a confirmation before the session or mirror is changed. Cancellation
+preserves the current session, binding, and files. Scheduled sync never prompts
+or starts account-change cleanup.
+
+After confirmation, cleanup is limited to Cloud-managed records under the
+current sync root. Unchanged files that match the current path and extension
+allowlists are moved to Obsidian Trash. Edited files, out-of-scope files,
+unmanaged files, shared IP records, `Sync Log.md`, and `.supernote-sync` are
+preserved; preserved managed records are removed from Cloud management and
+reported so the new account cannot overwrite them. Each target is checkpointed
+before Trash and rechecked before the mutation so an interrupted change can
+resume safely. When cleanup finishes, the manifest is bound to the newly
+verified account before its session is saved; a failed session save therefore
+cannot let the old session claim the new mirror. A pending account change blocks
+Cloud sync. Moving a destination does not change account binding or reset
+history.
+
+`Forget sync history` remains non-destructive: it relinquishes sync's per-file
+management records without moving vault files or changing the Cloud account
+binding. The exact handling of device-local last-run display state during
+account change remains a product decision; current implementation retains it.
 
 ### Shared path and file-type allowlists
 
@@ -770,8 +790,10 @@ types. Suggested files:
    vault files.
 7. Record the authenticated account's stable ID. If a later login returns a
    different account ID while the shared manifest is bound to another account,
-   block sync and require `Reset Cloud mirror`; never apply one account's
-   complete-scan deletions to another account's files.
+   require explicit interactive confirmation and perform the guarded account-
+   change flow above. Cancellation changes nothing; scheduled sync never
+   prompts. Never apply one account's complete-scan deletions to another
+   account's files.
 
 #### One-way mirror workflow
 
@@ -898,11 +920,11 @@ destination/account header, vault files, durable logs, authentication, and
 last-run display state. The next run may re-adopt byte-identical files and
 protects non-identical files. Because history establishes which files are
 sync-managed, Cloud performs no deletion of pre-existing local files until they
-have been adopted into the new manifest. `Reset Cloud mirror` is the separate
-destructive workflow for changing the logical account/device pairing: it
-resolves pending operations, trashes unchanged managed files, preserves/reports
-edited files, clears the shared manifest and Cloud account binding, and clears
-Cloud last-run state.
+have been adopted into the new manifest. Changing Cloud accounts is instead the
+confirmed sign-in flow defined above; it cleans only unchanged, in-scope Cloud
+records, preserves IP history and all protected/out-of-scope items, and binds
+the verified target account when cleanup is complete. Current implementation
+retains per-engine last-run display state through this change.
 
 All Cloud-controlled paths must be normalized and proven to remain descendants
 of `syncFolder`. Reject absolute paths, empty/`.`/`..` segments, embedded
@@ -1009,8 +1031,8 @@ logs prove insufficient.
 - No remote write API is exposed by the Cloud engine.
 - A shared manifest with a Cloud account binding is valid only for that account
   and its recorded destination root.
-- IP runs preserve the Cloud account fingerprint. Only `Reset Cloud mirror`
-  releases that binding.
+- IP runs preserve the Cloud account fingerprint. Only a confirmed account
+  change in interactive Cloud sign-in can replace that binding.
 
 ### Implementation tracking
 

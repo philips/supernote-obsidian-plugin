@@ -39,8 +39,9 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   `requestUrl` GET, size and MD5 verification, local-edit checks immediately
   before writes, and no rewrite for identical bytes.
 - Implemented a desktop-only Cloud mirror engine for manual and scheduled runs.
-  Confirmed account changes now perform guarded cleanup; there is no standalone
-  destructive reset control.
+  Confirmed account changes now perform guarded cleanup during interactive
+  sign-in; cancellation preserves the old session and binding. Scheduled runs
+  never prompt, and there is no standalone destructive reset control.
 - Signed-in Cloud settings fetch the current `userName` through the existing
   account-identity route and display it only when the returned account ID
   matches the active session. Neither the username nor its response is stored; a
@@ -176,7 +177,9 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   only when required; cancelled and failed attempts do not persist credentials.
 - The validated token and account identity alone are written to device-local
   SecretStorage. Sign-out invalidates both locally and attempts remote logout
-  without relying on it. Existing mirror binding blocks a different account.
+  without relying on it. A different account requires confirmation during
+  interactive sign-in and then uses the guarded account-change cleanup; it is
+  not handled by a standalone reset action.
 - Manual sync prompts for sign-in; scheduled sync reports sign-in or account
   binding problems in the main window without background authentication. A
   notice appears for each due failed attempt, paced by the configured interval.
