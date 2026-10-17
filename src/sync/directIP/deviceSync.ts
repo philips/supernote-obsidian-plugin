@@ -1,4 +1,11 @@
 import { decodeDevicePathSegment, decodeDevicePathVariants, normalizeDeviceFileName } from './devicePath';
+import {
+    DEFAULT_FILE_EXTENSION_ALLOWLIST,
+    FileExtensionAllowlist,
+    matchesAnyPathPattern,
+    matchesFileExtension,
+} from '../syncFilters';
+export { globToRegExp, parsePathFilters } from '../syncFilters';
 
 // Pure planning/decision logic for mirroring .note/.spd files from a
 // Supernote device (over "Browse and Access") into the vault, unmodified —
@@ -18,6 +25,7 @@ export interface DeviceNoteListing {
     uri: string;
     date: string;
     size: number;
+    name?: string;
 }
 
 /** One entry in the persisted sync manifest: what we last wrote for a given device note. */
@@ -36,56 +44,13 @@ export type SyncManifest = Record<string, SyncedNoteRecord>;
 // Path scoping (which device notes are in-bounds for sync)
 // ---------------------------------------------------------------------------
 
-// Translates a small glob subset into an anchored RegExp: `*` matches any run
-// of characters except `/`, `**` matches any run of characters including `/`,
-// `?` matches a single character, everything else is literal. Deliberately
-// minimal (no brace expansion, no character classes, no dependency) — device
-// paths only need coarse folder/extension scoping, not full shell-glob
-// semantics.
-export function globToRegExp(pattern: string): RegExp {
-    let re = '';
-    for (let i = 0; i < pattern.length; i++) {
-        const c = pattern[i];
-        if (c === '*') {
-            if (pattern[i + 1] === '*') {
-                re += '.*';
-                i++;
-            } else {
-                re += '[^/]*';
-            }
-        } else if (c === '?') {
-            re += '[^/]';
-        } else if ('.+^${}()|[]\\'.includes(c)) {
-            re += '\\' + c;
-        } else {
-            re += c;
-        }
-    }
-    return new RegExp(`^${re}$`);
-}
-
 // No patterns configured means "sync everything the device has" — scoping
 // down further is opt-in, since the sync run itself (manual command, or the
 // auto-sync toggle) is already the opt-in step. Patterns match against the
 // full device URI (leading slash included, matching what fetchSupernoteDirectory
 // returns).
 export function matchesAnyPattern(deviceUri: string, patterns: string[]): boolean {
-    if (patterns.length === 0) return true;
-    const pathVariants = decodeDevicePathVariants(deviceUri);
-    return patterns.some((p) => {
-        const re = globToRegExp(p);
-        return pathVariants.some((path) => re.test(path));
-    });
-}
-
-// Settings store path filters as one text field (newline- or comma-separated)
-// since the declarative settings API's text control works on a single string,
-// not a list.
-export function parsePathFilters(raw: string): string[] {
-    return raw
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    return matchesAnyPathPattern(decodeDevicePathVariants(deviceUri), patterns);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +87,19 @@ export interface SyncPlan {
 // device-side deletions or renames are explicitly out of scope (see issue
 // #119 discussion): a sync run only ever adds or updates vault content, so a
 // bug here can't destroy something the device no longer has.
-export function planSync(files: DeviceNoteListing[], manifest: SyncManifest, pathFilters: string[]): SyncPlan {
+export function planSync(
+    files: DeviceNoteListing[],
+    manifest: SyncManifest,
+    pathFilters: string[],
+    fileExtensions: FileExtensionAllowlist = DEFAULT_FILE_EXTENSION_ALLOWLIST,
+): SyncPlan {
     const toSync: DeviceNoteListing[] = [];
     const unchanged: DeviceNoteListing[] = [];
     const excluded: DeviceNoteListing[] = [];
 
     for (const file of files) {
-        if (!matchesAnyPattern(file.uri, pathFilters)) {
+        if (!matchesAnyPattern(file.uri, pathFilters)
+            || !matchesFileExtension(file.name ?? file.uri, fileExtensions)) {
             excluded.push(file);
             continue;
         }
@@ -244,7 +215,7 @@ export type WriteDecision = 'create' | 'overwrite' | 'skip-conflict';
 //     re-mirror.
 export function decideWrite(
     existingContentHash: string | null,
-    record: SyncedNoteRecord | undefined,
+    record: Pick<SyncedNoteRecord, 'contentHash'> | undefined,
     incomingContentHash?: string,
 ): WriteDecision {
     if (existingContentHash === null) return 'create';
@@ -272,43 +243,3 @@ export function buildSyncRecord(
     };
 }
 
-// ---------------------------------------------------------------------------
-// Sync log ("Sync Log.md"): a human-readable, append-only record of the
-// noteworthy events from each sync run — conflicts and failures, not routine
-// "N synced, M unchanged" runs — so those don't only ever flash by in a
-// Notice. Lives inside the sync folder itself, keeping it inside the same
-// confined-blast-radius guarantee as everything else auto-sync writes.
-// ---------------------------------------------------------------------------
-
-export function syncLogPath(syncFolder: string): string {
-    const cleanRoot = syncFolder.replace(/^\/+|\/+$/g, '');
-    return cleanRoot ? `${cleanRoot}/Sync Log.md` : 'Sync Log.md';
-}
-
-function renderLogEntry(now: Date, lines: string[]): string {
-    const timestamp = now.toISOString().replace('T', ' ').slice(0, 19);
-    return `## ${timestamp}\n${lines.map((l) => `- ${l}`).join('\n')}\n\n`;
-}
-
-export interface SyncLogInput {
-    skippedConflicts: string[];
-    failed: { file: string; error: string }[];
-}
-
-// Formats one sync run's conflicts/failures as a log entry, or null if there
-// weren't any — a clean run doesn't get an entry, so the log stays a record
-// of things that actually needed attention rather than routine noise.
-export function formatSyncLogEntry(result: SyncLogInput, now: Date = new Date()): string | null {
-    if (result.skippedConflicts.length === 0 && result.failed.length === 0) return null;
-
-    return renderLogEntry(now, [
-        ...result.skippedConflicts.map((path) => `Skipped (edited locally since last sync): \`${path}\``),
-        ...result.failed.map((f) => `Failed: \`${f.file}\` — ${f.error}`),
-    ]);
-}
-
-// Same idea, for a sync run that failed outright before it could produce a
-// per-file result at all (e.g. the device was unreachable).
-export function formatSyncFailureLogEntry(message: string, now: Date = new Date()): string {
-    return renderLogEntry(now, [`Sync failed: ${message}`]);
-}

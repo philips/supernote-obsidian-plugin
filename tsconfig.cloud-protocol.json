@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/sync/supernoteCloud/**/*.ts",
+    "scripts/cloudProtocolTransport.ts",
+    "scripts/cloudProtocolSession.ts",
+    "scripts/secretPrompt.ts",
+    "scripts/test-cloud-protocol.entry.ts"
+  ],
+  "exclude": ["src/**/*.test.ts"]
+}

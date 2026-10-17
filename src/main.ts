@@ -1,10 +1,11 @@
 import { installAtPolyfill } from './polyfills';
 import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
+import { tryRegisterNoteViewer } from './noteViewerRegistration';
 import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildVectorInkBackgroundNote, buildRasterInkOverlayNote, toSvg } from 'supernote-typescript';
 import { encode } from 'image-js';
-import { DownloadListModal, UploadListModal } from './FileListModal';
-import { ImportTodayModal } from './ImportTodayModal';
+import { DownloadListModal, UploadListModal } from './sync/directIP/FileListModal';
+import { ImportTodayModal } from './sync/directIP/ImportTodayModal';
 import { ErrorModal } from './ErrorModal';
 import { PdfBuildWorkerMessage, PdfBuildWorkerResponse } from './pdfBuild.worker';
 import PdfBuildWorker from 'pdfBuild.worker';
@@ -15,8 +16,22 @@ import { ImageConverter, pageMayNeedRasterOverlay, terminateSharedWorkerPool } f
 import './webcomponent/SupernoteViewerElement';
 import type { SupernoteViewerElement } from './webcomponent/SupernoteViewerElement';
 import { replaceTextWithCustomDictionary } from './customDictionary';
-import { runDeviceSync, appendSyncLogEntry } from './syncEngine';
-import { formatSyncFailureLogEntry } from './deviceSync';
+import { IpSyncEngine } from './sync/directIP/syncEngine';
+import { ChangeSyncFolderModal } from './sync/ChangeSyncFolderModal';
+import { SyncRootChange } from './sync/changeSyncRoot';
+import { ObsidianMirrorManifestStorage, readMirrorRecoveryBytes } from './sync/obsidianMirrorManifestStorage';
+import { RootMirrorManifestService } from './sync/sharedMirrorManifestStore';
+import { MirrorRecoveryAttentionError } from './sync/mirrorOperationExecutor';
+import { formatSyncSummary, SingleEngineSyncCoordinator, SyncCoordinator, SyncEngine, SyncEngineId, SyncRunResult } from './sync/syncAbstraction';
+import { reportMirrorRecovery, reportSyncFailure, reportSyncResult } from './sync/syncReporting';
+import { ObsidianSyncExecutionStateStore } from './sync/syncExecutionState';
+import { CloudSessionImportModal } from './sync/supernoteCloud/CloudSessionImportModal';
+import { CloudSignInModal } from './sync/supernoteCloud/CloudSignInModal';
+import { shouldPromptCloudSignIn } from './sync/supernoteCloud/cloudSessionPrompt';
+import { createCloudAuthTransport, signOutCloud } from './sync/supernoteCloud/cloudSessionActions';
+import { queryCloudAccountProfile } from './sync/supernoteCloud/cloudAuth';
+import { CloudSessionStorage } from './sync/supernoteCloud/cloudSessionStorage';
+import { CloudSignInRequiredError, CloudSyncEngine } from './sync/supernoteCloud/cloudSyncEngine';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 
@@ -1134,7 +1149,10 @@ export class SupernoteEmbed extends Component {
 export default class SupernotePlugin extends Plugin {
 	settings!: SupernotePluginSettings;
 	vaultWriter!: VaultWriter;
-	private syncInFlight = false;
+	private syncCoordinator!: SyncCoordinator;
+	private syncRootChange!: SyncRootChange;
+	private noteViewerRegistered = false;
+	private cloudSignInModal: CloudSignInModal | null = null;
 	// Live reference handed to VaultWriter — registering/unregistering here
 	// after construction still takes effect, since both hold the same Set.
 	pageTextProcessors: Set<PageTextProcessor> = new Set();
@@ -1162,6 +1180,56 @@ export default class SupernotePlugin extends Plugin {
         installAtPolyfill();
 
 		await this.loadSettings();
+		this.syncRootChange = new SyncRootChange(this.app, () => this.settings.syncFolder,
+			() => this.settings.noteSyncState, async (root) => {
+				const previousRoot = this.settings.syncFolder;
+				const previousLegacy = this.settings.noteSyncState;
+				this.settings.syncFolder = root;
+				this.settings.noteSyncState = {};
+				try { await this.saveSettings(); } catch (error) {
+					this.settings.syncFolder = previousRoot;
+					this.settings.noteSyncState = previousLegacy;
+					throw error;
+				}
+			});
+		try { await this.syncRootChange.recover(); } catch (error) {
+			new Notice(error instanceof Error ? error.message : 'Sync folder change needs manual resolution');
+		}
+		const manifestService = new RootMirrorManifestService(
+			() => new ObsidianMirrorManifestStorage(this.app, this.settings.syncFolder));
+		const ipSyncEngine = new IpSyncEngine(this.app, this.settings, () => this.saveSettings(), manifestService);
+		const cloudSyncEngine = new CloudSyncEngine(this.app, this.settings, manifestService);
+		this.syncCoordinator = new SingleEngineSyncCoordinator(
+			{ 'ip-device': ipSyncEngine, 'supernote-cloud': cloudSyncEngine },
+			new ObsidianSyncExecutionStateStore(this.app),
+			manifestService,
+			async () => {
+				const legacy = this.settings.noteSyncState;
+				this.settings.noteSyncState = {};
+				try { await this.saveSettings(); } catch (error) {
+					this.settings.noteSyncState = legacy;
+					throw error;
+				}
+			},
+			() => this.syncRootChange.assertReady(),
+			{
+				root: () => this.settings.syncFolder,
+				read: (path) => readMirrorRecoveryBytes(this.app, path),
+				attention: async (error) => {
+					let logged = false;
+					if (this.settings.syncLogEnabled) {
+						try {
+							await reportMirrorRecovery(this.app, this.settings.syncFolder, error.message, this.settings.syncLogHistoryCount);
+							logged = true;
+						} catch (logError) { console.error('Failed to write mirror recovery log:', logError); }
+					}
+					new Notice(logged ? 'Supernote recovery needs attention; see Sync Log.md' : error.message);
+				},
+			},
+		);
+		await this.syncCoordinator.recoverOnStartup().catch((error) => {
+			new Notice(error instanceof Error ? error.message : 'Supernote recovery could not be checked');
+		});
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
 
@@ -1194,11 +1262,20 @@ export default class SupernotePlugin extends Plugin {
 			}
 		});
 
-		this.registerView(
-			VIEW_TYPE_SUPERNOTE,
-			(leaf) => new SupernoteView(leaf, this.settings)
-		);
-		this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE);
+		if (this.settings.noteViewerEnabled) {
+			this.registerView(
+				VIEW_TYPE_SUPERNOTE,
+				(leaf) => new SupernoteView(leaf, this.settings)
+			);
+		}
+		const noteViewerRegistered = tryRegisterNoteViewer(this.settings.noteViewerEnabled,
+			() => this.registerExtensions(['note'], VIEW_TYPE_SUPERNOTE));
+		this.noteViewerRegistered = noteViewerRegistered;
+		if (this.settings.noteViewerEnabled && !noteViewerRegistered) {
+			this.settings.noteViewerEnabled = false;
+			await this.saveSettings();
+			new Notice('Note viewer unavailable: another plugin may already handle .note files. Disable that viewer and reload this plugin to try again.');
+		}
 
 		// `.spd` files (Supernote Atelier app) — see atelierView.ts.
 		this.registerView(
@@ -1215,10 +1292,16 @@ export default class SupernotePlugin extends Plugin {
 		// embed support (rather than throwing) keeps the rest of the plugin
 		// working either way.
 		if (this.app.embedRegistry?.registerExtension) {
-			this.app.embedRegistry.registerExtension('note', (context, file, subpath) =>
-				new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
-			);
-			this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+			if (noteViewerRegistered) {
+				try {
+					this.app.embedRegistry.registerExtension('note', (context, file, subpath) =>
+						new SupernoteEmbed(this.app, this.settings, context.containerEl, file, parsePageAnchor(subpath))
+					);
+					this.register(() => this.app.embedRegistry?.unregisterExtension('note'));
+				} catch {
+					new Notice('Note embeds unavailable: another plugin may already handle .note embeds.');
+				}
+			}
 
 			this.app.embedRegistry.registerExtension('spd', (context, file) =>
 				new SupernoteAtelierEmbed(this.app, this.settings, context.containerEl, file)
@@ -1471,51 +1554,208 @@ export default class SupernotePlugin extends Plugin {
 		this.addCommand({
 			id: 'sync-notes-from-device',
 			name: 'Sync supernote notes now',
-			callback: () => { void this.runSync(); },
+			checkCallback: (checking) => {
+				if (this.getActiveSyncEngineId() !== 'ip-device') return false;
+				if (!checking) void this.runSync('sync-notes-from-device');
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'sync-now',
+			name: 'Sync supernote now',
+			callback: () => { void this.runSync('sync-now'); },
+		});
+
+		this.addCommand({
+			id: 'import-harness-cloud-session',
+			name: 'Import cloud access token',
+			callback: () => new CloudSessionImportModal(this.app).open(),
+		});
+		this.registerInterval(window.setInterval(() => { void this.pollAutomaticSync(); }, 60_000));
+		void this.pollAutomaticSync();
+	}
+
+	getActiveSyncEngineId(): SyncEngineId {
+		return this.syncCoordinator.getActiveEngineId();
+	}
+
+	getSyncEngines(): SyncEngine[] {
+		return this.syncCoordinator.getSyncEngines();
+	}
+
+	getSyncEngine(engineId: SyncEngineId): SyncEngine {
+		return this.syncCoordinator.getSyncEngine(engineId);
+	}
+
+	isNoteViewerReloadRequired(): boolean {
+		return this.settings.noteViewerEnabled !== this.noteViewerRegistered;
+	}
+
+	async setActiveSyncEngine(engineId: SyncEngineId): Promise<void> {
+		await this.syncCoordinator.setActiveEngine(engineId);
+	}
+
+	getAutoSyncMinutes(): number {
+		return this.syncCoordinator.getAutoSyncMinutes();
+	}
+
+	isAutoSyncEnabled(): boolean {
+		return this.syncCoordinator.isAutoSyncEnabled();
+	}
+
+	setAutoSyncEnabled(enabled: boolean): void {
+		this.syncCoordinator.setAutoSyncEnabled(enabled);
+	}
+
+	setAutoSyncMinutes(minutes: number): void {
+		this.syncCoordinator.setAutoSyncMinutes(minutes);
+	}
+
+	async clearActiveSyncHistory(): Promise<void> {
+		await this.syncCoordinator.clearActiveHistory();
+	}
+
+	async changeSyncFolder(): Promise<void> {
+		await this.syncCoordinator.runExclusive(async () => {
+			await this.syncRootChange.recover();
+			await this.syncCoordinator.assertNoPendingOperation();
+			const hasContent = await this.syncRootChange.hasContent();
+			const choice = await new ChangeSyncFolderModal(this.app, this.settings.syncFolder, hasContent).choose();
+			if (!choice) return;
+			await this.syncRootChange.change(choice.root, choice.mode);
+			new Notice('Sync folder changed');
 		});
 	}
 
-	async runSync(): Promise<void> {
-		if (this.settings.directConnectIP.length === 0) {
-			new DirectConnectErrorModal(this.app, this.settings, new Error("IP is unset")).open();
-			return;
+	cloudSessionStatus(): string {
+		if (!this.app.secretStorage) return 'SecretStorage is unavailable';
+		try {
+			return new CloudSessionStorage(this.app.secretStorage).load() ? 'Signed in' : 'Sign in required';
+		} catch {
+			return 'Cloud session storage is invalid';
 		}
-		// A slow sync (large device, slow LAN) could still be running when the
-		// command is invoked again — e.g. the user re-runs it by hand right
-		// after triggering it. Two runs racing on the same manifest could each
-		// read a stale copy and clobber the other's updates when they save.
-		if (this.syncInFlight) {
+	}
+
+	async cloudSessionUsername(): Promise<string | null> {
+		if (!this.app.secretStorage) return null;
+		const storage = new CloudSessionStorage(this.app.secretStorage);
+		const session = storage.load();
+		if (!session) return null;
+		const transport = createCloudAuthTransport();
+		await transport.bootstrapCsrf();
+		const profile = await queryCloudAccountProfile(transport, session.token);
+		const current = storage.load();
+		   return current?.token === session.token && current.userId === profile.userId
+			   && profile.userId === session.userId ? profile.userName : null;
+	}
+
+	openCloudSignIn(onSignedIn: () => void = () => {}): void {
+		if (this.cloudSignInModal) return;
+		this.cloudSignInModal = new CloudSignInModal(this.app, this.settings, () => {
+			onSignedIn();
+		}, () => { this.cloudSignInModal = null; }, (operation) => this.syncCoordinator.runExclusive(operation));
+		this.cloudSignInModal.open();
+	}
+
+	async signOutCloud(): Promise<void> {
+		if (this.syncCoordinator.isRunning()) throw new Error('Wait for the current sync before signing out');
+		await signOutCloud(this.app);
+	}
+
+	private showSyncResult(result: SyncRunResult): void {
+		const protectedCount = result.issues.filter((issue) => issue.kind === 'protected').length;
+		const failureCount = result.issues.filter((issue) => issue.kind === 'failure').length;
+		new Notice(formatSyncSummary(result));
+
+		if (protectedCount > 0 && result.engineId === 'ip-device') {
+			console.warn('Supernote sync protected these items:', result.issues.filter((issue) => issue.kind === 'protected'));
+		}
+		if (failureCount > 0 && result.engineId === 'ip-device') {
+			console.error('Supernote sync failed for these items:', result.issues.filter((issue) => issue.kind === 'failure'));
+		}
+		if (failureCount > 0 && result.engineId === 'supernote-cloud') {
+			const categories = [...new Set(result.issues.filter((issue) => issue.kind === 'failure').map((issue) => issue.message))];
+			new Notice(`Cloud mirror failures: ${categories.join('; ')}`);
+		}
+	}
+
+	private async reportSyncResult(result: SyncRunResult): Promise<void> {
+		await reportSyncResult(this.app, this.settings.syncFolder, result, this.getSyncEngine(result.engineId).name, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
+			.catch((error) => console.error('Failed to write to Supernote sync log:', error));
+		this.showSyncResult(result);
+	}
+
+	private async reportSyncFailure(error: unknown): Promise<void> {
+		if (this.rootChangeBlocked()) return;
+		const engine = this.syncCoordinator.getActiveEngine();
+		await reportSyncFailure(this.app, this.settings.syncFolder, engine.id, error, engine.name, this.settings.syncLogHistoryCount, this.settings.syncLogEnabled)
+			.catch((logError) => console.error('Failed to write to Supernote sync log:', logError));
+	}
+
+	private rootChangeBlocked(): boolean {
+		try { this.syncRootChange.assertReady(); return false; } catch { return true; }
+	}
+
+	private async pollAutomaticSync(): Promise<void> {
+		try {
+			const result = await this.syncCoordinator.pollAutomatic(Date.now(), (engineId, reason) => {
+				if (engineId === 'supernote-cloud') {
+					new Notice(reason === 'Sign in to Supernote Cloud in settings to resume sync'
+						? 'Scheduled Cloud sync paused: sign in to Supernote Cloud in settings'
+						: 'Scheduled Cloud sync paused: check Cloud Engine settings');
+				} else {
+					new Notice('Scheduled supernote sync paused: set a Supernote IP address in settings');
+				}
+			});
+			if (result) {
+				await this.reportSyncResult(result);
+			}
+		} catch (error) {
+			if (this.rootChangeBlocked()) {
+				new Notice('Sync folder change is pending; resolve it before syncing');
+				return;
+			}
+			await this.reportSyncFailure(error);
+			if (error instanceof CloudSignInRequiredError) {
+				new Notice('Scheduled Cloud sync paused: sign in to Supernote Cloud in settings');
+			} else if (this.getActiveSyncEngineId() === 'supernote-cloud' && error instanceof Error
+				&& (error.message.includes('account') || error.message.includes('binding'))) {
+				new Notice('Scheduled Cloud sync blocked: account identity or mirror binding does not match');
+			} else if (this.getActiveSyncEngineId() === 'supernote-cloud') {
+				new Notice('Scheduled Cloud sync failed; check your connection or session in Cloud Engine settings');
+			} else {
+				new Notice('Scheduled supernote sync failed; check the active engine and try syncing manually');
+			}
+		}
+	}
+
+	async runSync(commandId = 'sync-now'): Promise<void> {
+		if (this.syncCoordinator.isRunning()) {
 			new Notice('Supernote sync is already running');
 			return;
 		}
 
-		this.syncInFlight = true;
 		try {
-			const result = await runDeviceSync(this.app, this.settings, () => this.saveSettings());
-
-			const parts = [`${result.synced} synced`, `${result.unchanged} unchanged`];
-			if (result.excluded > 0) parts.push(`${result.excluded} out of scope`);
-			if (result.skippedConflicts.length > 0) parts.push(`${result.skippedConflicts.length} skipped (locally edited)`);
-			if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
-			new Notice(`Supernote sync: ${parts.join(', ')}`);
-
-			if (result.skippedConflicts.length > 0) {
-				console.warn('Supernote sync skipped these files because they were edited locally since the last sync:', result.skippedConflicts);
-			}
-			if (result.failed.length > 0) {
-				console.error('Supernote sync failed for these files:', result.failed);
-			}
+			const result = await this.syncCoordinator.runActive({ kind: 'manual', commandId });
+			if (result) await this.reportSyncResult(result);
 		} catch (err) {
+			if (this.rootChangeBlocked()) {
+				new Notice('Sync folder change is pending; resolve it before syncing');
+				return;
+			}
+			await this.reportSyncFailure(err);
 			const error = err instanceof Error ? err : new Error(String(err));
-			// Best-effort: a run that fails before producing a per-file result at
-			// all (e.g. the device was unreachable) is exactly the kind of thing
-			// worth a Sync Log entry, but a logging failure on top of that
-			// shouldn't hide the real error from the modal below.
-			await appendSyncLogEntry(this.app, this.settings.syncFolder, formatSyncFailureLogEntry(error.message))
-				.catch((logErr) => console.error('Failed to write to Supernote sync log:', logErr));
-			new DirectConnectErrorModal(this.app, this.settings, error).open();
-		} finally {
-			this.syncInFlight = false;
+			if (error instanceof MirrorRecoveryAttentionError) return;
+			if (this.getActiveSyncEngineId() === 'ip-device') {
+				new DirectConnectErrorModal(this.app, this.settings, error).open();
+			} else if (shouldPromptCloudSignIn(error)) {
+				this.openCloudSignIn();
+			} else {
+				new Notice(error.message.includes('account') || error.message.includes('binding')
+					? 'Cloud sync blocked: account identity or mirror binding does not match'
+					: 'Cloud sync failed. Check your connection or session in Cloud Engine settings');
+			}
 		}
 	}
 

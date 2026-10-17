@@ -1,5 +1,42 @@
+.supernote-sync-interval-warning {
+    color: var(--text-warning);
+}
+
+.supernote-sync-folder-warning {
+    color: var(--text-warning);
+}
+
+.supernote-sync-interval-validation {
+    color: var(--text-error);
+}
+
 .supernote-settings-hidden {
     display: none;
+}
+
+.modal.supernote-cloud-sign-in-modal {
+    width: min(440px, calc(100vw - 32px));
+}
+
+.supernote-cloud-sign-in-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.supernote-cloud-sign-in-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.supernote-cloud-sign-in-form input {
+    width: 100%;
+}
+
+.supernote-cloud-sign-in-actions {
+    display: flex;
+    justify-content: flex-end;
 }
 
 .theme-dark img[alt*="supernote-invert-dark"] {
@@ -188,6 +225,37 @@
 }
 
 /* Custom dictionary settings styles */
+.supernote-settings-sections > .setting-group {
+    margin-block: 1.5em;
+}
+
+.supernote-settings-sections > .setting-group > .setting-item-heading {
+    margin: 0;
+    padding: 1em 1.25em 0.5em;
+}
+
+.supernote-settings-sections > .setting-group > .setting-items {
+    padding: 0 1.25em 0.5em;
+    border: 0;
+    border-radius: var(--radius-m);
+    background-color: var(--background-secondary);
+}
+
+.supernote-settings-sections > .setting-group > .setting-items > .setting-item {
+    margin: 0;
+    padding: 1em 0;
+    border: 0;
+}
+
+.supernote-settings-sections > .setting-group > .setting-items > .setting-item + .setting-item {
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.setting-item.supernote-settings-custom-dictionary-setting {
+    flex-direction: column;
+    align-items: stretch;
+}
+
 .supernote-settings-custom-dictionary-subtitle {
 	padding: 0 0 0.75em;
 }

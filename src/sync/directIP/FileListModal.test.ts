@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { scanDeviceSupernoteTree, scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice } from './deviceFetch';
+import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
 
 vi.mock('obsidian', () => ({
     // FileListModal (extends SuggestModal) and its transitive imports
@@ -63,6 +64,31 @@ describe('scanDeviceSupernoteTree entry trust (GHSA-3gx3-r874-5pp4 follow-up)', 
         const files = await scanDeviceSupernoteTree('192.168.1.50');
 
         expect(files.map((f) => f.name).sort()).toEqual(['diary.note', 'sketch.spd']);
+    });
+
+    it('accepts additional trusted file types when configured', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'diary.note' },
+            { name: 'reference.pdf' },
+        ]));
+
+        const files = await scanDeviceSupernoteTreeWithExtensions(
+            '192.168.1.50',
+            parseFileExtensionAllowlist('.pdf'),
+        );
+
+        expect(files.map((f) => f.name)).toEqual(['reference.pdf']);
+    });
+
+    it('accepts extensionless trusted files only with the explicit all-files option', async () => {
+        vi.mocked(fetchFromDevice).mockResolvedValue(mockListing([
+            { name: 'README' },
+            { name: 'diary.note' },
+        ]));
+
+        const files = await scanDeviceSupernoteTreeWithExtensions('192.168.1.50', ALL_FILE_EXTENSIONS);
+
+        expect(files.map((f) => f.name).sort()).toEqual(['README', 'diary.note']);
     });
 
     it('keeps entries whose uri percent-encodes spaces in the filename', async () => {

@@ -1,21 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+vi.mock('obsidian', () => ({ TFile: class TFile {} }));
 import {
     globToRegExp,
-    matchesAnyPattern,
+    matchesFileExtension,
+    parseFileExtensionAllowlist,
     parsePathFilters,
+    validateFileExtensionAllowlist,
+} from '../syncFilters';
+import {
+    matchesAnyPattern,
     classifyChange,
     planSync,
     deviceUriToVaultPath,
     hashBytes,
     decideWrite,
     buildSyncRecord,
-    syncLogPath,
-    formatSyncLogEntry,
-    formatSyncFailureLogEntry,
     DeviceNoteListing,
     SyncManifest,
     SyncedNoteRecord,
 } from './deviceSync';
+import { syncLogPath, formatSyncLogEntry, formatSyncFailureLogEntry } from '../syncReporting';
+import type { SyncRunResult } from '../syncAbstraction';
 
 function bytesOf(text: string): Uint8Array {
     return new TextEncoder().encode(text);
@@ -108,6 +113,34 @@ describe('parsePathFilters', () => {
     });
 });
 
+describe('file extension allowlist', () => {
+    it('normalizes optional leading dots, case, and duplicates', () => {
+        expect(parseFileExtensionAllowlist('NOTE, .Spd, note')).toEqual({
+            allowAll: false,
+            extensions: ['.note', '.spd'],
+        });
+    });
+
+    it('requires an explicit * to include every regular file', () => {
+        expect(matchesFileExtension('README', parseFileExtensionAllowlist('*'))).toBe(true);
+        expect(matchesFileExtension('README', parseFileExtensionAllowlist(''))).toBe(false);
+        expect(matchesFileExtension('report.pdf', parseFileExtensionAllowlist(''))).toBe(false);
+    });
+
+    it('matches configured extensions case-insensitively', () => {
+        const allowlist = parseFileExtensionAllowlist('.note, pdf');
+        expect(matchesFileExtension('Journal.NOTE', allowlist)).toBe(true);
+        expect(matchesFileExtension('report.PDF', allowlist)).toBe(true);
+        expect(matchesFileExtension('drawing.spd', allowlist)).toBe(false);
+    });
+
+    it('rejects path fragments and wildcard fragments other than *', () => {
+        expect(validateFileExtensionAllowlist('.note, ../pdf')).toBe('Invalid file extension: ../pdf');
+        expect(validateFileExtensionAllowlist('.n*te')).toBe('Invalid file extension: .n*te');
+        expect(validateFileExtensionAllowlist('.note, *')).toBeUndefined();
+    });
+});
+
 describe('classifyChange', () => {
     it('is "new" when there is no manifest record for the device URI', () => {
         expect(classifyChange(listing(), {})).toBe('new');
@@ -169,6 +202,15 @@ describe('planSync (efficiency: skip unchanged, respect scope, never propose del
         const plan = planSync([changedButOutOfScope], manifest, ['/Diary/**']);
         expect(plan.toSync).toEqual([]);
         expect(plan.excluded).toEqual([changedButOutOfScope]);
+    });
+
+    it('excludes files outside the shared extension allowlist', () => {
+        const note = listing({ uri: '/Note/foo.note', name: 'foo.note' });
+        const pdf = listing({ uri: '/Note/report.pdf', name: 'report.pdf' });
+        const plan = planSync([note, pdf], {}, [], parseFileExtensionAllowlist('.pdf'));
+
+        expect(plan.toSync).toEqual([pdf]);
+        expect(plan.excluded).toEqual([note]);
     });
 
     it('partitions a mixed batch into the three buckets correctly', () => {
@@ -451,18 +493,21 @@ describe('syncLogPath', () => {
 
 describe('formatSyncLogEntry (only logs runs with something worth mentioning)', () => {
     const now = new Date('2026-07-27T11:15:32.000Z');
+    const ipResult = (issues: SyncRunResult['issues']): SyncRunResult => ({
+        engineId: 'ip-device', synced: 0, unchanged: 0, excluded: 0, removed: 0, issues,
+    });
 
     it('returns null for a clean run with no conflicts or failures', () => {
-        expect(formatSyncLogEntry({ skippedConflicts: [], failed: [] }, now)).toBeNull();
+        expect(formatSyncLogEntry(ipResult([]), 'Direct IP', now)).toBeNull();
     });
 
     it('lists each skipped conflict on its own line under a timestamp heading', () => {
-        const entry = formatSyncLogEntry(
-            { skippedConflicts: ['Supernote sync/Diary/a.note', 'Supernote sync/Diary/b.note'], failed: [] },
-            now,
-        );
+        const entry = formatSyncLogEntry(ipResult([
+            { kind: 'protected', item: 'Supernote sync/Diary/a.note', message: 'edited' },
+            { kind: 'protected', item: 'Supernote sync/Diary/b.note', message: 'edited' },
+        ]), 'Direct IP', now);
         expect(entry).toBe(
-            '## 2026-07-27 11:15:32\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/Diary/a.note`\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/Diary/b.note`\n'
             + '\n',
@@ -470,27 +515,23 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
     });
 
     it('lists each failure with its error message', () => {
-        const entry = formatSyncLogEntry(
-            { skippedConflicts: [], failed: [{ file: '/Diary/broken.note', error: 'Supernote responded with status 500' }] },
-            now,
-        );
+        const entry = formatSyncLogEntry(ipResult([
+            { kind: 'failure', item: '/Diary/broken.note', message: 'Supernote responded with status 500' },
+        ]), 'Direct IP', now);
         expect(entry).toBe(
-            '## 2026-07-27 11:15:32\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Failed: `/Diary/broken.note` — Supernote responded with status 500\n'
             + '\n',
         );
     });
 
     it('combines conflicts and failures in one entry, conflicts first', () => {
-        const entry = formatSyncLogEntry(
-            {
-                skippedConflicts: ['Supernote sync/a.note'],
-                failed: [{ file: '/b.note', error: 'timed out' }],
-            },
-            now,
-        );
+        const entry = formatSyncLogEntry(ipResult([
+            { kind: 'protected', item: 'Supernote sync/a.note', message: 'edited' },
+            { kind: 'failure', item: '/b.note', message: 'timed out' },
+        ]), 'Direct IP', now);
         expect(entry).toBe(
-            '## 2026-07-27 11:15:32\n'
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Skipped (edited locally since last sync): `Supernote sync/a.note`\n'
             + '- Failed: `/b.note` — timed out\n'
             + '\n',
@@ -499,10 +540,10 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
 
     it('defaults to the current time when no date is passed', () => {
         const before = Date.now();
-        const entry = formatSyncLogEntry({ skippedConflicts: ['x'], failed: [] });
+        const entry = formatSyncLogEntry(ipResult([{ kind: 'protected', item: 'x', message: 'edited' }]), 'Direct IP');
         const after = Date.now();
         const heading = entry?.split('\n')[0] ?? '';
-        const ts = new Date(heading.replace('## ', '').replace(' ', 'T') + 'Z').getTime();
+        const ts = new Date(heading.slice(3, 22).replace(' ', 'T') + 'Z').getTime();
         expect(ts).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
         expect(ts).toBeLessThanOrEqual(after);
     });
@@ -511,12 +552,23 @@ describe('formatSyncLogEntry (only logs runs with something worth mentioning)', 
 describe('formatSyncFailureLogEntry', () => {
     it('formats a single whole-run failure line under a timestamp heading', () => {
         const now = new Date('2026-07-27T11:15:32.000Z');
-        expect(formatSyncFailureLogEntry('Supernote at 192.168.1.50 did not respond', now)).toBe(
-            '## 2026-07-27 11:15:32\n'
+        expect(formatSyncFailureLogEntry('ip-device', 'Supernote at 192.168.1.50 did not respond', 'Direct IP', now)).toBe(
+            '## 2026-07-27 11:15:32 (Direct IP)\n'
             + '- Sync failed: Supernote at 192.168.1.50 did not respond\n'
             + '\n',
         );
     });
+});
+
+it('uses the registered engine name for result and failure headings', () => {
+    const now = new Date('2026-07-27T11:15:32.000Z');
+    const result: SyncRunResult = {
+        engineId: 'supernote-cloud', synced: 0, unchanged: 0, excluded: 0, removed: 0,
+        issues: [{ kind: 'warning', message: 'Cloud inventory changed; deletion skipped' }],
+    };
+    expect(formatSyncLogEntry(result, 'Renamed cloud', now)).toContain('## 2026-07-27 11:15:32 (Renamed cloud)');
+    expect(formatSyncFailureLogEntry('ip-device', 'offline', 'Renamed IP', now))
+        .toContain('## 2026-07-27 11:15:32 (Renamed IP)');
 });
 
 describe('end-to-end scenario: several sync runs in a row', () => {

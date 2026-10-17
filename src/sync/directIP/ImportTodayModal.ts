@@ -1,9 +1,9 @@
 import { App, Modal, Notice, Editor } from 'obsidian';
-import SupernotePlugin from './main';
+import SupernotePlugin from '../../main';
 import { SupernoteFile, scanDeviceSupernoteTree } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import { parseDeviceDate, isSameLocalDay, todayLocalMidnight, formatDateInputValue, parseDateInputValue } from './deviceDate';
-import { ImportFormat, IMPORT_FORMAT_LABELS } from './settings';
+import { ImportFormat, IMPORT_FORMAT_LABELS } from '../../settings';
 
 interface ScannedNote {
     file: SupernoteFile;

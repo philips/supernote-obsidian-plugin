@@ -102,7 +102,7 @@ function createDictionaryEntryUI({entry, tbody, plugin}: {entry: CustomDictionar
 }
 
 // Create the UI for the dictionary table
-function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlugin) {
+export function createDictionaryTableUI(containerEl: HTMLElement, plugin: SupernotePlugin) {
 	const CONTAINER_CLASSNAME = 'supernote-settings-custom-dictionary-entries';
 
 	// Remove existing dictionary entries to prepare for re-render
@@ -159,11 +159,7 @@ export function createCustomDictionarySettingsUI(containerEl: HTMLElement, plugi
 	const customDictionaryContainer = containerEl.createDiv();
 	customDictionaryContainer
 		.addClasses(['supernote-settings-custom-dictionary']);
-	customDictionaryContainer.createEl('h3', { text: 'Custom dictionary' })
-		// .addClass('setting-item-name');
-	customDictionaryContainer.createDiv({ text: 'You can add custom entries to your dictionary to fix errors from Supernote\'s handwriting recognition. This also lets you automatically swap out certain text with your preferred wording, add special markdown characters, etc.' })
-		.addClasses(['setting-item-description', 'supernote-settings-custom-dictionary-subtitle']);
-		
+
 	// Create the "Enable Custom Dictionary" setting
 	new Setting(customDictionaryContainer)
 		.setName('Enable custom dictionary')

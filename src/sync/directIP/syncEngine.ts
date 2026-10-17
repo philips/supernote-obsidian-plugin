@@ -1,18 +1,23 @@
 import { App, TFile } from 'obsidian';
-import { SupernotePluginSettings } from './settings';
-import { scanDeviceSupernoteTree } from './FileListModal';
+import { SupernotePluginSettings } from '../../settings';
+import { scanDeviceSupernoteTreeWithExtensions } from './FileListModal';
 import { fetchFromDevice, DEVICE_TRANSFER_TIMEOUT_MS } from './deviceFetch';
 import {
     DeviceNoteListing,
+    SyncManifest,
     planSync,
     deviceUriToVaultPath,
     decideWrite,
     buildSyncRecord,
     parsePathFilters,
-    syncLogPath,
-    formatSyncLogEntry,
     hashBytes,
 } from './deviceSync';
+import type { SyncEngine, SyncRunResult, SyncTrigger } from '../syncAbstraction';
+import { ALL_FILE_EXTENSIONS, parseFileExtensionAllowlist } from '../syncFilters';
+import { ObsidianMirrorManifestStorage } from '../obsidianMirrorManifestStorage';
+import { MirrorManifestService, RootMirrorManifestService } from '../sharedMirrorManifestStore';
+import { PendingMirrorOperation, SharedMirrorManifest, toIpSyncManifest } from '../sharedMirrorManifest';
+import { MirrorOperationError, MirrorOperationExecutor } from '../mirrorOperationExecutor';
 
 // Creates every missing intermediate folder in `folderPath`, tolerating a
 // concurrent creator (createFolder throwing because another call already
@@ -46,36 +51,85 @@ async function writeBinaryAt(app: App, path: string, buffer: ArrayBuffer): Promi
     }
 }
 
-// Creates "Sync Log.md" (see deviceSync.ts) with just a heading if it
-// doesn't exist yet, otherwise returns the existing file untouched — called
-// unconditionally at the end of every sync run (see runDeviceSync) so the
-// file is discoverable right after the first sync, even a clean one with
-// nothing to actually log.
-async function ensureSyncLogFile(app: App, syncFolder: string): Promise<TFile> {
-    const logPath = syncLogPath(syncFolder);
-    const parentFolder = logPath.includes('/') ? logPath.slice(0, logPath.lastIndexOf('/')) : '';
-    await ensureFolder(app, parentFolder);
-
-    const existing = app.vault.getAbstractFileByPath(logPath);
-    if (existing instanceof TFile) return existing;
-    return app.vault.create(logPath, '');
-}
-
-// Appends one pre-formatted entry to "Sync Log.md". Uses Vault.append rather
-// than read-modify-write so this can't clobber anything a user has since
-// added to the log themselves, and so two sync runs racing can't stomp on
-// each other's entries.
-export async function appendSyncLogEntry(app: App, syncFolder: string, entry: string): Promise<void> {
-    const file = await ensureSyncLogFile(app, syncFolder);
-    await app.vault.append(file, entry);
-}
-
 export interface DeviceSyncResult {
     synced: number;
     unchanged: number;
     excluded: number;
     skippedConflicts: string[];
     failed: { file: string; error: string }[];
+}
+
+export class IpSyncEngine implements SyncEngine {
+    readonly id = 'ip-device' as const;
+    readonly name = 'Direct IP';
+
+    constructor(
+        private readonly app: App,
+        private readonly settings: SupernotePluginSettings,
+        private readonly saveSettings: () => Promise<void>,
+        private readonly manifestService: MirrorManifestService = new RootMirrorManifestService(
+            () => new ObsidianMirrorManifestStorage(app, settings.syncFolder)),
+    ) {}
+
+    getReadiness() {
+        return this.settings.directConnectIP.length > 0
+            ? { ready: true }
+            : { ready: false, reason: 'Supernote IP is unset' };
+    }
+
+    async checkPendingSource(pending: PendingMirrorOperation): Promise<'present' | 'absent'> {
+        const source = pending.after?.source ?? (await this.manifestService.load({})).manifest.records[pending.path]?.source;
+        if (source?.engineId !== 'ip-device') throw new Error('IP source identity unavailable');
+        const files = await scanDeviceSupernoteTreeWithExtensions(this.settings.directConnectIP, ALL_FILE_EXTENSIONS);
+        return files.some((file) => file.uri === source.deviceUri
+            && deviceUriToVaultPath(this.settings.syncFolder, file.uri, file.name, file.directoryNames) === pending.path)
+            ? 'present' : 'absent';
+    }
+
+    async run(_trigger: SyncTrigger): Promise<SyncRunResult> {
+        let result: DeviceSyncResult;
+        const legacyManifest = this.settings.noteSyncState;
+        try {
+            const loaded = await this.manifestService.load(legacyManifest);
+            if (loaded.manifest.accountChange) throw new Error('Cloud account change must finish before sync');
+            const planningRecords = toIpSyncManifest(loaded.manifest);
+            const executor = new MirrorOperationExecutor(this.manifestService, this.settings.syncFolder, loaded,
+                async (path) => {
+                    const file = this.app.vault.getAbstractFileByPath(path);
+                    return file instanceof TFile ? new Uint8Array(await this.app.vault.readBinary(file)) : null;
+                });
+            result = await runDeviceSync(this.app, this.settings, loaded.manifest, planningRecords, executor);
+            this.settings.noteSyncState = {};
+            await this.saveSettings();
+        } catch (err) {
+            this.settings.noteSyncState = legacyManifest;
+            throw err instanceof Error ? err : new Error(String(err));
+        }
+        return {
+            engineId: this.id,
+            synced: result.synced,
+            unchanged: result.unchanged,
+            excluded: result.excluded,
+            removed: 0,
+            issues: [
+                ...result.skippedConflicts.map((item) => ({
+                    kind: 'protected' as const,
+                    item,
+                    message: 'Skipped because the vault copy was edited locally',
+                })),
+                ...result.failed.map(({ file, error }) => ({
+                    kind: 'failure' as const,
+                    item: file,
+                    message: error,
+                })),
+            ],
+        };
+    }
+
+    async clearHistory(): Promise<void> {
+        this.settings.noteSyncState = {};
+        await this.saveSettings();
+    }
 }
 
 // Reads a vault file's current bytes and hashes them, or returns null if
@@ -100,17 +154,25 @@ async function currentHash(app: App, vaultPath: string): Promise<string | null> 
 export async function runDeviceSync(
     app: App,
     settings: SupernotePluginSettings,
-    saveSettings: () => Promise<void>,
+    sharedManifest: SharedMirrorManifest,
+    planningRecords: SyncManifest,
+    executor?: MirrorOperationExecutor,
 ): Promise<DeviceSyncResult> {
     const ip = settings.directConnectIP;
     if (!ip) {
         throw new Error('Supernote IP is unset');
     }
 
-    const deviceFiles = await scanDeviceSupernoteTree(ip);
-    const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({ uri: f.uri, date: f.date, size: f.size }));
+    const deviceFiles = await scanDeviceSupernoteTreeWithExtensions(ip, ALL_FILE_EXTENSIONS);
+    const listings: DeviceNoteListing[] = deviceFiles.map((f) => ({
+        uri: f.uri,
+        date: f.date,
+        size: f.size,
+        name: f.name,
+    }));
     const patterns = parsePathFilters(settings.syncPathFiltersRaw);
-    const plan = planSync(listings, settings.noteSyncState, patterns);
+    const fileExtensions = parseFileExtensionAllowlist(settings.syncFileExtensionsRaw ?? '.note, .spd');
+    const plan = planSync(listings, planningRecords, patterns, fileExtensions);
     // A device listing can be unchanged while its vault copy was deleted.
     // Restore those files from the unchanged bucket; a missing file is safe to
     // create, unlike a present file whose hash no longer matches the manifest.
@@ -122,7 +184,7 @@ export async function runDeviceSync(
     const toSync = [...plan.toSync];
     const unchanged: DeviceNoteListing[] = [];
     for (const listing of plan.unchanged) {
-        const record = settings.noteSyncState[listing.uri];
+        const record = planningRecords[listing.uri];
         if (!record) {
             unchanged.push(listing); // 'unchanged' implies a record exists; defensive only.
             continue;
@@ -170,7 +232,8 @@ export async function runDeviceSync(
             const buffer = await response.arrayBuffer();
             const newHash = hashBytes(new Uint8Array(buffer));
 
-            const decision = decideWrite(await currentHash(app, vaultPath), settings.noteSyncState[listing.uri], newHash);
+            const existingHash = await currentHash(app, vaultPath);
+            const decision = decideWrite(existingHash, sharedManifest.records[vaultPath], newHash);
 
             if (decision === 'skip-conflict') {
                 result.skippedConflicts.push(vaultPath);
@@ -178,12 +241,26 @@ export async function runDeviceSync(
             }
 
             const parentFolder = vaultPath.includes('/') ? vaultPath.slice(0, vaultPath.lastIndexOf('/')) : '';
-            await ensureFolder(app, parentFolder);
-            await writeBinaryAt(app, vaultPath, buffer);
+            const record = buildSyncRecord(listing, vaultPath, newHash);
+            if (executor) {
+                await executor.write(vaultPath, new Uint8Array(buffer), {
+                    contentHash: newHash,
+                    source: { engineId: 'ip-device', deviceUri: listing.uri,
+                        deviceDate: listing.date, deviceSize: listing.size },
+                }, async (path, bytes) => {
+                    await ensureFolder(app, parentFolder);
+                    await writeBinaryAt(app, path, bytes.slice().buffer);
+                });
+            } else if (existingHash !== newHash) {
+                await ensureFolder(app, parentFolder);
+                await writeBinaryAt(app, vaultPath, buffer);
+            }
 
-            settings.noteSyncState[listing.uri] = buildSyncRecord(listing, vaultPath, newHash);
+            planningRecords[listing.uri] = record;
+            if (executor) sharedManifest = executor.manifest;
             result.synced++;
         } catch (err) {
+            if (err instanceof MirrorOperationError) throw err;
             result.failed.push({ file: listing.uri, error: err instanceof Error ? err.message : String(err) });
         }
     }
@@ -198,7 +275,7 @@ export async function runDeviceSync(
     // actual cost planSync's change detection avoids), it's cheap enough to
     // check on every run rather than waiting for that.
     for (const listing of unchanged) {
-        const record = settings.noteSyncState[listing.uri];
+        const record = planningRecords[listing.uri];
         if (!record) continue; // 'unchanged' implies a record exists; defensive only.
 
         try {
@@ -212,18 +289,6 @@ export async function runDeviceSync(
         } catch (err) {
             console.error(`Failed to check ${record.vaultPath} for local edits:`, err);
         }
-    }
-
-    await saveSettings();
-
-    const logEntry = formatSyncLogEntry(result);
-    if (logEntry) {
-        await appendSyncLogEntry(app, settings.syncFolder, logEntry);
-    } else {
-        // Nothing worth logging this run, but still make sure the log file
-        // itself exists — otherwise a run (or several) with nothing to
-        // report leaves no trace that sync ever ran at all.
-        await ensureSyncLogFile(app, settings.syncFolder);
     }
 
     return result;
