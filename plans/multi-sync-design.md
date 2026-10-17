@@ -661,7 +661,7 @@ vault first, then selects that folder directly.
   resume a partial move only when each entry and the manifest prove their state.
   Otherwise block sync for manual resolution. Use the Vault API for indexed
   entries and the adapter for the hidden `.supernote-sync` directory: in the
-  Marie vault on October 16, 2026, the directory existed on disk but Obsidian's
+  Test Vault on October 16, 2026, the directory existed on disk but Obsidian's
   `getAbstractFileByPath` did not return it. A Vault-only rename stopped at that
   entry with a pending checkpoint; the adapter path and checkpoint recovery
   passed synthetic tests and the live move completed with both manifest slots.
@@ -678,7 +678,7 @@ Both engines follow the same root-change operation. Do not automatically infer
 either choice from a path edit. The work sequence and validation cases are in
 [shared-manifest-plan.md](shared-manifest-plan.md).
 
-In the disposable Marie vault on October 16, 2026, moving from `Supernote sync`
+In the disposable Test Vault on October 16, 2026, moving from `Supernote sync`
 to the pre-created empty `Supernote sync B` left the original folder empty and
 rewrote the current manifest's five records to B. A manual Cloud sync from B
 reported five unchanged files and no issues. Returning to the original folder

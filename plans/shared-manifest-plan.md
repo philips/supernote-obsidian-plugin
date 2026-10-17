@@ -4,8 +4,8 @@
 root-bound two-slot manifest service; IP plans in memory. The coordinator owns
 shared non-destructive history clearing and exclusive root changes with restart
 checkpoints. Move, leave-behind, and manual Cloud sync after each change were
-validated in the disposable Marie vault on October 16, 2026. Untested live cases
-remain in [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
+validated in the disposable Test Vault on October 16, 2026. Remaining live
+validation is tracked in [`multi-sync-plan.md`](multi-sync-plan.md).
 
 ## Product Contract
 
@@ -131,11 +131,12 @@ mutation. An invalid or cancelled change leaves the previous root in use.
   former root is selected again.
 - Run focused tests, full `npm test`, `npm run build`, `npm run lint`, and
   `git diff --check`; visually check the settings flow in a test Obsidian vault.
-  Marie is the designated disposable integration-test vault for this workspace;
-  use unique local fixtures there for live operation, move, or Trash validation,
-  and verify existing files and manifest records remain intact. Do not initiate
-  Cloud login/OTP or modify Cloud/device contents without separate approval; use
-  synthetic or mocked source inventories when remote state is needed.
+  The Test Vault is the designated disposable integration-test vault for this
+  workspace; use unique local fixtures there for live operation, move, or Trash
+  validation, and verify existing files and manifest records remain intact. Do
+  not initiate Cloud login/OTP or modify Cloud/device contents without separate
+  approval; use synthetic or mocked source inventories when remote state is
+  needed.
 
 ## Deferred Decisions
 

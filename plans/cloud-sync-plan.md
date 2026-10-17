@@ -7,10 +7,9 @@ logout/login and scheduled-sync checks are user-reported; the read-only username
 lookup was separately validated with an existing session. Live different-account
 switching and its destructive cleanup remain **unresolved**, not validated: the
 current user has no second Cloud account (one cannot be created without another
-device). Testing is deferred until a community volunteer with another account
-can assist with explicit approval. See
-[`cloud-sync-next-steps.md`](cloud-sync-next-steps.md). Updated October
-16, 2026.
+device). This is the only Cloud-specific live validation item currently
+outstanding and is not a blocker to the implemented Cloud feature set. Updated
+October 16, 2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -67,12 +66,13 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   local mirror folder as expected. That observation confirms the folder
   disappeared; the subsequent controlled checks below addressed Trash placement
   and folder-safety scenarios.
-- On October 14, 2026, validated guarded deletion in the Marie vault using a
+- On October 14, 2026, validated guarded deletion in the Test Vault using a
   unique synthetic destination and a filter that matched no Cloud files. One
   unchanged fixture moved to Obsidian system Trash; a locally edited fixture and
   an unmanaged fixture stayed intact. The synthetic destination was then
   removed, leaving the system Trash item. No login/OTP or Cloud mutation was
-  performed. The local debugger attached to a Marie-targeted Obsidian launch.
+  performed. The local debugger attached to an Obsidian launch targeted at the
+  Test Vault.
 
 ### Implementation Decisions
 
@@ -282,6 +282,24 @@ behavior in [`cloud-sync-design.md`](cloud-sync-design.md); they do not by
 themselves call for another Cloud sprint. Live account-switch validation remains
 the separate unresolved evidence gap above, not a completed release gate.
 
+### Remaining Live Validation: Different-Account Switch
+
+When a consenting volunteer with a second Cloud account is available, obtain
+separate explicit approval before login/OTP or destructive vault validation.
+Using replaceable fixtures in the designated Test Vault, validate the
+different-account confirmation and cancellation; Obsidian Trash placement;
+preservation of edited, out-of-scope, unmanaged, and IP-managed files; and the
+preserved-file report. If safely stageable, also validate interrupted cleanup
+recovery. Do not mutate Cloud contents, broaden fixture scope, or treat
+synthetic tests as live account-switch evidence. The user-reported October 16,
+2026 check that scheduled sync did not open a login dialog supports
+no-background-sign-in only; it does not exercise this interactive flow.
+
+Ordinary download/write and remote-deletion Trash crash recovery is tracked
+separately in [`multi-sync-plan.md`](multi-sync-plan.md); it is not incomplete
+Cloud implementation. No further Cloud feature sprint is planned unless new
+evidence or a product requirement changes that scope.
+
 ## Validation Gates
 
 The sprint gates were run on October 14, 2026:
@@ -291,7 +309,7 @@ The sprint gates were run on October 14, 2026:
 3. `npm run build`.
 4. `npm run lint`.
 5. `git diff --check`.
-6. Controlled Marie-vault validation of remote deletion, using only replaceable
+6. Controlled Test-Vault validation of remote deletion, using only replaceable
    synthetic fixtures. The vault's Trash option was `system`.
 
 For Sprint 3, focused synthetic tests, `npm test` (423 passing),

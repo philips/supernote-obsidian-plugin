@@ -95,8 +95,8 @@ npm test                              # vitest run
 - Use synthetic credentials and a test vault for automated checks. Never expose
   tokens, account identifiers, filenames, paths, or response bodies in command
   output or diagnostic markers.
-- The user's Marie vault is the designated disposable Obsidian integration-test
-  vault for this workspace; do not require a second or headless vault for sync
+- The designated disposable Test Vault is the Obsidian integration-test vault
+  for this workspace; do not require a second or headless vault for sync
   recovery checks. Unique local fixtures may be created, modified, moved to
   Obsidian Trash, and removed there, provided existing vault files and sync
   records are preserved and verified. Do not mutate Supernote Cloud contents or

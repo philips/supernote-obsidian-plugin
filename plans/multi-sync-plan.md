@@ -4,11 +4,12 @@
 shared non-destructive history clearing, explicit sync-folder changes, and
 ordinary-operation intent recovery are implemented with synthetic tests. The
 move, leave-behind, cancel, recovery-attention, identical-byte adoption, and
-uncertain-Trash recovery paths were checked in Marie with local fixtures and
-synthetic source state. Synthetic Cloud pipeline tests cover post-mutation
-manifest commit failures; interruption inside a running Obsidian engine, live
-cross-account switching, and real-device smoke testing remain unvalidated. Sync
-implementation files are organized under `src/sync/`. Updated October 16, 2026.
+uncertain-Trash recovery paths were checked in the Test Vault with local
+fixtures and synthetic source state. Synthetic Cloud pipeline tests cover
+post-mutation manifest commit failures; interruption inside a running Obsidian
+engine, live cross-account switching, and real-device smoke testing remain
+unvalidated. Sync implementation files are organized under `src/sync/`. Updated
+October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -79,7 +80,7 @@ criteria for both engines and root changes live in
   entries still use the Vault API. Checkpoint recovery covers the hidden entry.
   Verification: `npm test` (504 passing), `npm run build`, `npm run lint` (0
   errors, 14 existing warnings), and `git diff --check`.
-- Validated the settings move/leave choices in the disposable Marie vault: moved
+- Validated the settings move/leave choices in the disposable Test Vault: moved
   the old root's contents to a pre-created empty B folder, leaving the original
   folder; verified nine files including both manifest slots and a current
   manifest with five paths rewritten to B. A manual Cloud sync from B returned
@@ -108,7 +109,7 @@ criteria for both engines and root changes live in
   gating, and failed logging. No live interruption was performed. Final
   verification: `npm test` (514 passing), `npm run build`, `npm run lint` (0
   errors, 14 existing warnings), and `git diff --check`.
-- In the disposable Marie vault, staged a synthetic pending overwrite on a
+- In the disposable Test Vault, staged a synthetic pending overwrite on a
   uniquely named test file. The first pre-write restart retained the intent;
   calling the recovery hook after Obsidian finished loading cleared it. Changed
   startup recovery reads to use the vault adapter rather than the file index. A
@@ -121,8 +122,8 @@ criteria for both engines and root changes live in
   Adapter-only startup reads have a regression test for an unindexed file.
   Verification after the fix: `npm test` (515 passing), `npm run build`,
   `npm run lint` (0 errors, 14 existing warnings), and `git diff --check`.
-- Exercised recovery attention in Marie without stopping the renderer or
-  starting a Cloud transfer: committed a synthetic pending write for a unique
+- Exercised recovery attention in the Test Vault without stopping the renderer
+  or starting a Cloud transfer: committed a synthetic pending write for a unique
   `.txt` path whose actual bytes matched neither expected hash, then invoked the
   coordinator's manual run. Recovery stopped before the engine ran, wrote the
   path-specific hash mismatch and next step to `Sync Log.md`, and left the
@@ -134,23 +135,23 @@ criteria for both engines and root changes live in
 - Replaced ambiguous-byte and uncertain-Trash advice to "inspect this file" with
   an actionable backup-first step: move the file outside the sync folder to keep
   a backup, then run a manual sync. This preserves unexpected local bytes while
-  the missing-path recovery checks a fresh source inventory. The historical
-  Marie log entry retains the older wording. The focused recovery tests (7
+  the missing-path recovery checks a fresh source inventory. The historical Test
+  Vault log entry retains the older wording. The focused recovery tests (7
   passing), build, lint (0 errors, 14 existing warnings), and `git diff --check`
   passed after the change.
 - Tested interrupted identical-byte adoption and post-Trash manifest commit
   failure in the executor with one-shot commit failures: recovery adopted
-  without rewriting bytes and did not repeat Trash. In Marie, staged a synthetic
-  identical-byte intent; recovery recorded the unchanged file and cleared the
-  intent. For a separate managed `.txt` fixture, moved the original into local
-  Obsidian Trash with an intent pending, created a different file at the path,
-  and verified recovery preserved both copies and logged uncertainty. Moving the
-  replacement aside and retrying through the coordinator with a temporary mocked
-  absent-source check and stubbed engine run cleared the intent without Cloud
-  requests. Removed only the synthetic files, local Trash item, and records;
-  five original records remain and auto-sync is off. This checked local
-  vault/manifest recovery, not a real Cloud pipeline transfer, source inventory,
-  or process interruption.
+  without rewriting bytes and did not repeat Trash. In the Test Vault, staged a
+  synthetic identical-byte intent; recovery recorded the unchanged file and
+  cleared the intent. For a separate managed `.txt` fixture, moved the original
+  into local Obsidian Trash with an intent pending, created a different file at
+  the path, and verified recovery preserved both copies and logged uncertainty.
+  Moving the replacement aside and retrying through the coordinator with a
+  temporary mocked absent-source check and stubbed engine run cleared the intent
+  without Cloud requests. Removed only the synthetic files, local Trash item,
+  and records; five original records remain and auto-sync is off. This checked
+  local vault/manifest recovery, not a real Cloud pipeline transfer, source
+  inventory, or process interruption.
 - Latest verification after recovery validation: `npm test` (517 passing),
   `npm run build`, `npm run lint` (0 errors, 14 existing warnings), and
   `git diff --check`.
@@ -178,19 +179,24 @@ criteria for both engines and root changes live in
 
 The intent-first per-file executor, coordinator restart reconciliation,
 path-specific attention logging, and history/root-change gates are implemented.
-Adoption and uncertain-Trash recovery were checked in Marie with synthetic
-intents and local fixtures. Cloud pipeline write/Trash interruptions were tested
-with synthetic ports, but a fault inside a running Obsidian engine remains
-untested. Marie is the designated disposable test vault. Do not terminate the
-Obsidian renderer, which made it unresponsive, or mutate Cloud/device contents.
+Adoption and uncertain-Trash recovery were checked in the Test Vault with
+synthetic intents and local fixtures. Cloud pipeline write/Trash interruptions
+were tested with synthetic ports, but a fault inside a running Obsidian engine
+remains untested. The Test Vault is the designated disposable test vault. Do not
+terminate the Obsidian renderer, which made it unresponsive, or mutate
+Cloud/device contents.
 
 ### Remaining validation
 
 - Live Cloud account-switch validation still needs a consenting volunteer with a
-  second account. The Marie checks did not switch accounts.
+  second account. The Test Vault checks did not switch accounts.
+- The next available account-switch check is specified in
+  [`cloud-sync-plan.md`](cloud-sync-plan.md), including the required explicit
+  approval and replaceable-fixture boundaries.
 - The real-device IP smoke test still needs a dedicated device test directory
   and explicit approval for its fixture upload.
-- The next handoff is in [`multi-sync-next-steps.md`](multi-sync-next-steps.md).
+- Do not run `npm run test:device-sync` without that approval: it uploads a
+  fixture that the device API cannot remove.
 
 ### Open scope decisions
 
@@ -205,7 +211,8 @@ during interactive sign-in. Live account-switch validation remains unresolved
 until a volunteer with a second Cloud account can test it with explicit consent;
 the current user has no second account. This does not block work on the
 shared-manifest block. The Cloud validation record is in
-[`cloud-sync-next-steps.md`](cloud-sync-next-steps.md).
+[`cloud-sync-plan.md`](cloud-sync-plan.md), which also records the safe test
+scope and explicit-consent requirement.
 
 ## Suggested Further Validation
 
@@ -217,12 +224,15 @@ recommendations for future validation, not blockers to normal sync:
   tests already check its mirror-pipeline wiring; do not terminate the renderer
   or mutate Cloud/device data.
 - Check live Cloud inventory and transfer behavior only when a safe, controlled
-  remote fixture is available. The Marie adoption/Trash checks used synthetic
-  records and a mocked source result, so they do not establish this behavior.
+  remote fixture is available. The Test Vault adoption/Trash checks used
+  synthetic records and a mocked source result, so they do not establish this
+  behavior.
 
-There is no further in-repo reject-and-retry validation sprint planned; see
-[`multi-sync-next-steps.md`](multi-sync-next-steps.md) for externally gated
-checks and deferred cross-device decisions. Real-device upload and
+There is no further in-repo reject-and-retry validation sprint planned.
+Automatic cross-device manifest reconciliation remains deferred; the current
+store rejects stale revisions it can see but does not atomically serialize truly
+simultaneous cross-device commits. See the concurrent-update boundary in
+[`multi-sync-design.md`](multi-sync-design.md). Real-device upload and
 second-account tests still require their prerequisites and explicit approval.
 
 ## Verification
