@@ -3,10 +3,12 @@
 **Status:** Single-active-engine coordination, Cloud/IP shared-manifest access,
 shared non-destructive history clearing, explicit sync-folder changes, and
 ordinary-operation intent recovery are implemented with synthetic tests. The
-move, leave-behind, and cancel flows and persistence across a normal restart
-were validated in the disposable Marie vault. Live interrupted-operation,
-account-switch, and device tests remain pending. Sync implementation files are
-organized under `src/sync/`. Updated October 16, 2026.
+move, leave-behind, cancel, recovery-attention, identical-byte adoption, and
+uncertain-Trash recovery paths were checked in Marie with local fixtures and
+synthetic source state. Synthetic Cloud pipeline tests cover post-mutation
+manifest commit failures; interruption inside a running Obsidian engine, live
+cross-account switching, and real-device smoke testing remain unvalidated. Sync
+implementation files are organized under `src/sync/`. Updated October 16, 2026.
 
 The architecture and product behavior are defined in
 [`multi-sync-design.md`](multi-sync-design.md). Cloud protocol facts and
@@ -149,6 +151,16 @@ criteria for both engines and root changes live in
   five original records remain and auto-sync is off. This checked local
   vault/manifest recovery, not a real Cloud pipeline transfer, source inventory,
   or process interruption.
+- Latest verification after recovery validation: `npm test` (517 passing),
+  `npm run build`, `npm run lint` (0 errors, 14 existing warnings), and
+  `git diff --check`.
+- Added synthetic Cloud mirror pipeline tests that fail the final manifest
+  commit once after a successful write or Trash. Both retain a pending intent;
+  recovery reconciles the manifest and a later pipeline run makes no duplicate
+  change. No headless vault, live Cloud transfer, or renderer crash was used.
+  Verification: focused pipeline tests (43 passing), `npm test` (519 passing),
+  `npm run build`, `npm run lint` (0 errors, 14 existing warnings), and
+  `git diff --check`.
 
 ## Outstanding
 
@@ -157,7 +169,8 @@ criteria for both engines and root changes live in
 The intent-first per-file executor, coordinator restart reconciliation,
 path-specific attention logging, and history/root-change gates are implemented.
 Adoption and uncertain-Trash recovery were checked in Marie with synthetic
-intents and local fixtures; interruption inside a real engine run remains
+intents and local fixtures. Cloud pipeline write/Trash interruptions were tested
+with synthetic ports, but a fault inside a running Obsidian engine remains
 untested. Marie is the designated disposable test vault. Do not terminate the
 Obsidian renderer, which made it unresponsive, or mutate Cloud/device contents.
 
@@ -173,7 +186,8 @@ Obsidian renderer, which made it unresponsive, or mutate Cloud/device contents.
 
 - Automatic cross-device manifest reconciliation remains a separate proposal.
   The shared-manifest work retains stale-revision rejection instead of silently
-  merging concurrent changes from multiple machines.
+  merging concurrent changes from multiple machines. A two-instance
+  reject-and-manual-retry scenario has not yet been exercised end to end.
 
 The standalone Cloud reset is not outstanding: confirmed account change occurs
 during interactive sign-in. Live account-switch validation remains unresolved
@@ -184,20 +198,22 @@ shared-manifest block. The Cloud validation record is in
 
 ## Suggested Further Validation
 
-The following end-to-end recovery checks were not performed in this iteration;
-they are recommendations for future validation, not blockers to normal sync:
+The following checks were not performed in this iteration; they are
+recommendations for future validation, not blockers to normal sync:
 
-- Exercise an interruption inside a real engine run with a fixture-scoped fault,
-  rather than staging the intent directly. This would also check pipeline
-  wiring; do not terminate the renderer or mutate Cloud/device data.
+- If further live validation is warranted, exercise a controlled fault inside a
+  running Obsidian engine with a local fixture. The synthetic Cloud pipeline
+  tests already check its mirror-pipeline wiring; do not terminate the renderer
+  or mutate Cloud/device data.
 - Check live Cloud inventory and transfer behavior only when a safe, controlled
   remote fixture is available. The Marie adoption/Trash checks used synthetic
   records and a mocked source result, so they do not establish this behavior.
 
-A future engine-integration sprint could add a narrowly scoped test fault and
-use separate fixtures for write/adoption and Trash. Keep real-device upload and
-second-account tests outside that sprint until their prerequisites and explicit
-approval are available.
+The next bounded sprint can verify stale-revision rejection and safe manual
+retry with two synthetic instances; see
+[`multi-sync-next-steps.md`](multi-sync-next-steps.md). Keep real-device upload
+and second-account tests outside that sprint until their prerequisites and
+explicit approval are available.
 
 ## Verification
 

@@ -4,7 +4,8 @@ import { DEFAULT_FILE_EXTENSION_ALLOWLIST } from '../syncFilters';
 import { CloudInventoryItem } from './cloudInventory';
 import { planVerifiedCloudInventory, runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { SharedMirrorManifest } from '../sharedMirrorManifest';
-import { loadMirrorManifest, MirrorManifestSlot, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { loadMirrorManifest, MirrorManifestSlot, RootMirrorManifestService, saveMirrorManifest } from '../sharedMirrorManifestStore';
+import { recoverMirrorOperation } from '../mirrorOperationExecutor';
 
 const md5 = '0123456789abcdef0123456789abcdef';
 
@@ -249,6 +250,97 @@ describe('Cloud inventory to shared-manifest planning', () => {
         })).rejects.toThrow('Manifest unavailable');
         expect(trash).not.toHaveBeenCalled();
         expect(trashEmptyFolder).not.toHaveBeenCalled();
+    });
+
+    it('recovers a pipeline write when the final manifest commit fails', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        let failFinalCommit = false;
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => {
+                if (failFinalCommit) {
+                    failFinalCommit = false;
+                    throw new Error('Manifest unavailable');
+                }
+                slots.set(slot, value);
+                if ((JSON.parse(value) as { manifest: SharedMirrorManifest }).manifest.pendingOperation) failFinalCommit = true;
+            },
+        };
+        await saveMirrorManifest(storage, null, {
+            version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: {},
+        });
+        const files = new Map<string, Uint8Array>();
+        const vault = {
+            read: async (path: string) => files.get(path) ?? null,
+            write: async (path: string, content: Uint8Array) => { files.set(path, content.slice()); },
+        };
+        const inventory = { directories: [], items: [item('1', 'Interrupted.note')] };
+        const options = {
+            inventory, canonicalPathsById: { '1': '/Note/Interrupted.note' }, syncFolder: 'Mirror',
+            legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', vault, storage,
+            transfer: { download: async () => bytes, md5: async () => md5 }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+        };
+
+        await expect(runVerifiedCloudMirror(options)).rejects.toThrow('Manifest unavailable');
+        expect([...files.keys()]).toEqual(['Mirror/Note/Interrupted.note']);
+        expect((await loadMirrorManifest(storage, {})).manifest.pendingOperation?.path)
+            .toBe('Mirror/Note/Interrupted.note');
+
+        const service = new RootMirrorManifestService(() => storage);
+        const loaded = await service.load({});
+        await recoverMirrorOperation(service, loaded, 'Mirror', vault.read);
+        expect((await loadMirrorManifest(storage, {})).manifest.pendingOperation).toBeUndefined();
+        expect((await loadMirrorManifest(storage, {})).manifest.records['Mirror/Note/Interrupted.note'].contentHash)
+            .toBe(hashBytes(bytes));
+        expect(await runVerifiedCloudMirror(options)).toMatchObject({ synced: 0, unchanged: 1, failed: [] });
+    });
+
+    it('recovers a pipeline Trash when the final manifest commit fails', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        let failFinalCommit = false;
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => {
+                if (failFinalCommit) {
+                    failFinalCommit = false;
+                    throw new Error('Manifest unavailable');
+                }
+                slots.set(slot, value);
+                if ((JSON.parse(value) as { manifest: SharedMirrorManifest }).manifest.pendingOperation) failFinalCommit = true;
+            },
+        };
+        const path = 'Mirror/Note/Interrupted.note';
+        const files = new Map([[path, bytes]]);
+        const record = { contentHash: hashBytes(bytes), source: { engineId: 'supernote-cloud' as const, md5 } };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+            records: { [path]: record } });
+        const vault = {
+            read: async (target: string) => files.get(target) ?? null,
+            write: async () => {},
+            trash: async (target: string) => { files.delete(target); },
+        };
+        const inventory = { directories: [], items: [] };
+        const options = {
+            inventory, canonicalPathsById: {}, syncFolder: 'Mirror', legacyManifest: {},
+            accountFingerprint: 'v1:synthetic-account', vault, storage,
+            transfer: { download: async () => bytes, md5: async () => md5 }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+            verifyDeletionInventory: async () => ({ inventory, canonicalPathsById: {} }),
+        };
+
+        await expect(runVerifiedCloudMirror(options)).rejects.toThrow('Manifest unavailable');
+        expect(files.has(path)).toBe(false);
+        expect((await loadMirrorManifest(storage, {})).manifest.pendingOperation?.path).toBe(path);
+
+        const service = new RootMirrorManifestService(() => storage);
+        const loaded = await service.load({});
+        await recoverMirrorOperation(service, loaded, 'Mirror', vault.read, async () => 'absent');
+        expect((await loadMirrorManifest(storage, {})).manifest.pendingOperation).toBeUndefined();
+        expect((await loadMirrorManifest(storage, {})).manifest.records).not.toHaveProperty(path);
+        expect(await runVerifiedCloudMirror(options)).toMatchObject({ removed: 0, failed: [] });
     });
 
     it('leaves a pending intent and does not prune when file Trash fails', async () => {

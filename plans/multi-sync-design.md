@@ -1006,18 +1006,25 @@ general rollback are outside this recovery scope. Ambiguous existing file bytes
 remain protected. An unowned file is adopted only after verified incoming bytes
 prove it identical; a non-identical existing file is protected.
 
+Synthetic Cloud pipeline tests now fail the final manifest commit after a
+successful local write or Trash, then reconcile the pending intent and verify
+the next run. They exercise the mirror pipeline and shared executor, not a live
+Cloud transfer, a full Obsidian engine run, or a process crash.
+
 #### Concurrent manifest updates
 
 The coordinator serializes runs within one plugin instance, but the same vault
 may be open on more than one device. The current shared store compares the
 loaded revision with the latest visible revision and refuses stale commits; this
-detects, but does not merge, changes by a second instance. Retain that
-fail-closed behavior for the shared-manifest integration. A later, separately
-approved design could three-way merge a run's baseline, intended changes, and
-newest manifest by path, preserving independent edits and stopping on
-incompatible changes to the same record. That is not a distributed lock: two
-offline devices can act before either sees the other's changes. Neither this
-merge nor general per-file recovery is assumed by the next work block.
+detects, but does not merge, changes by a second instance. The failed attempt
+does not automatically retry: a subsequent manual sync loads the newest manifest
+and must recheck the local bytes and source before acting. Keep the fail-closed
+behavior, including for same-path conflicts. A later, separately approved design
+could three-way merge a run's baseline, intended changes, and newest manifest by
+path, preserving independent edits and stopping on incompatible changes to the
+same record. That is not a distributed lock: two offline devices can act before
+either sees the other's changes. Cross-device reject-and-retry verification
+remains separate from automatic merging.
 
 The shared `Forget sync history` action clears shared entries only after
 confirming no run is active. It retains the destination/account header, vault
