@@ -143,16 +143,15 @@ criteria for both engines and root changes live in
 
 The intent-first per-file executor, coordinator restart reconciliation,
 path-specific attention logging, and history/root-change gates are implemented.
-Live adoption and uncertain Trash validation still require controlled
-replaceable fixtures. Do not terminate the Obsidian renderer for testing: it
-made the Marie app unresponsive. Use a controlled fault at the operation
-boundary without killing a renderer or changing a user's real sync.
+Live adoption and uncertain Trash validation still require controlled faults at
+the operation boundary. Marie is the designated disposable test vault, so unique
+local fixtures may be mutated there while preserving and verifying its existing
+files and records. Do not terminate the Obsidian renderer; that made Marie
+unresponsive. Use synthetic or mocked source inventories for remote state and do
+not mutate Cloud or device contents.
 
 ### Remaining validation
 
-- End-to-end live interruptions within real engine operations, adoption, and
-  uncertain Trash remain untested. Use replaceable fixtures and a controlled
-  fault mechanism, not renderer termination or a user's real sync.
 - Live Cloud account-switch validation still needs a consenting volunteer with a
   second account. The Marie checks did not switch accounts.
 - The real-device IP smoke test still needs a dedicated device test directory
@@ -171,6 +170,28 @@ until a volunteer with a second Cloud account can test it with explicit consent;
 the current user has no second account. This does not block work on the
 shared-manifest block. The Cloud validation record is in
 [`cloud-sync-next-steps.md`](cloud-sync-next-steps.md).
+
+## Suggested Further Validation
+
+The following end-to-end recovery checks were not performed in this iteration;
+they are recommendations for future validation, not blockers to normal sync:
+
+- End-to-end live interruptions within real engine operations, adoption, and
+  uncertain Trash remain untested. Use unique, replaceable fixtures in the Marie
+  test vault and a controlled fault mechanism, not renderer termination or
+  production/user data.
+- Validate identical-byte adoption and uncertain Trash with independent,
+  replaceable fixtures. For Trash, simulate the needed Cloud inventory rather
+  than changing Cloud contents. Verify manifest state, vault bytes, backup or
+  local Trash outcome, and the recovery log before and after manual recovery;
+  clean up only test data after confirming original records and account binding
+  are intact.
+
+A future recovery-validation sprint could first add a narrowly scoped test fault
+mechanism and cover write interruption across restart, then use separate
+fixtures for adoption and uncertain Trash. Keep real-device upload and
+second-account tests outside that sprint until their prerequisites and explicit
+approval are available.
 
 ## Verification
 

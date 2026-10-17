@@ -131,9 +131,11 @@ mutation. An invalid or cancelled change leaves the previous root in use.
   former root is selected again.
 - Run focused tests, full `npm test`, `npm run build`, `npm run lint`, and
   `git diff --check`; visually check the settings flow in a test Obsidian vault.
-  Use only synthetic replaceable fixtures for any actual move or Trash
-  validation. Do not initiate Cloud login/OTP, modify Cloud content, or change
-  real user vault files without separate approval.
+  Marie is the designated disposable integration-test vault for this workspace;
+  use unique local fixtures there for live operation, move, or Trash validation,
+  and verify existing files and manifest records remain intact. Do not initiate
+  Cloud login/OTP or modify Cloud/device contents without separate approval; use
+  synthetic or mocked source inventories when remote state is needed.
 
 ## Deferred Decisions
 
