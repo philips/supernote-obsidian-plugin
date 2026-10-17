@@ -161,6 +161,16 @@ criteria for both engines and root changes live in
   Verification: focused pipeline tests (43 passing), `npm test` (519 passing),
   `npm run build`, `npm run lint` (0 errors, 14 existing warnings), and
   `git diff --check`.
+- Verified two synthetic instances sharing manifest storage and a fake vault: A
+  commits while B's download is in flight; B's stale intent commit fails before
+  its vault write, preserving A's record and leaving no pending intent. Fresh
+  manual runs through the coordinator protect unexpected local bytes, then
+  commit B using a new source checksum when the path is clear. A separate
+  same-path race protects A's differing bytes without overwriting its record.
+  Focused Cloud pipeline tests (45 passing), `npm test` (521 passing),
+  `npm run build`, and `npm run lint` (0 errors, 14 existing warnings) passed.
+  This tests observed stale revisions, not atomic simultaneous cross-device
+  commits, live Cloud traffic, or Obsidian Sync propagation.
 
 ## Outstanding
 
@@ -186,8 +196,9 @@ Obsidian renderer, which made it unresponsive, or mutate Cloud/device contents.
 
 - Automatic cross-device manifest reconciliation remains a separate proposal.
   The shared-manifest work retains stale-revision rejection instead of silently
-  merging concurrent changes from multiple machines. A two-instance
-  reject-and-manual-retry scenario has not yet been exercised end to end.
+  merging concurrent changes from multiple machines. Synthetic two-instance
+  reject-and-manual-retry verification is complete; the read-then-write check
+  does not atomically serialize truly simultaneous cross-device commits.
 
 The standalone Cloud reset is not outstanding: confirmed account change occurs
 during interactive sign-in. Live account-switch validation remains unresolved
@@ -209,11 +220,10 @@ recommendations for future validation, not blockers to normal sync:
   remote fixture is available. The Marie adoption/Trash checks used synthetic
   records and a mocked source result, so they do not establish this behavior.
 
-The next bounded sprint can verify stale-revision rejection and safe manual
-retry with two synthetic instances; see
-[`multi-sync-next-steps.md`](multi-sync-next-steps.md). Keep real-device upload
-and second-account tests outside that sprint until their prerequisites and
-explicit approval are available.
+There is no further in-repo reject-and-retry validation sprint planned; see
+[`multi-sync-next-steps.md`](multi-sync-next-steps.md) for externally gated
+checks and deferred cross-device decisions. Real-device upload and
+second-account tests still require their prerequisites and explicit approval.
 
 ## Verification
 

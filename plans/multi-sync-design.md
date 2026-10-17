@@ -1016,15 +1016,18 @@ Cloud transfer, a full Obsidian engine run, or a process crash.
 The coordinator serializes runs within one plugin instance, but the same vault
 may be open on more than one device. The current shared store compares the
 loaded revision with the latest visible revision and refuses stale commits; this
-detects, but does not merge, changes by a second instance. The failed attempt
-does not automatically retry: a subsequent manual sync loads the newest manifest
-and must recheck the local bytes and source before acting. Keep the fail-closed
-behavior, including for same-path conflicts. A later, separately approved design
-could three-way merge a run's baseline, intended changes, and newest manifest by
-path, preserving independent edits and stopping on incompatible changes to the
-same record. That is not a distributed lock: two offline devices can act before
-either sees the other's changes. Cross-device reject-and-retry verification
-remains separate from automatic merging.
+detects, but does not merge, changes by a second instance. Synthetic
+two-instance tests confirm that a visible stale revision stops before B's vault
+write; a later manual B run loads the newest manifest, protects unexpected local
+bytes, and uses a fresh source snapshot. A same-path race with different bytes
+protects A's file. The failed attempt does not automatically retry. Keep the
+fail-closed behavior for observed stale revisions and same-path conflicts. The
+read-then-write revision check is not atomic across devices: simultaneous
+commits can both read the same revision before either writes, so these tests do
+not establish a distributed lock or lossless concurrent updates. A separately
+approved design could address that race and merge independent edits, stopping on
+incompatible changes to the same record. Offline devices can also act before
+either sees the other's changes.
 
 The shared `Forget sync history` action clears shared entries only after
 confirming no run is active. It retains the destination/account header, vault

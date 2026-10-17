@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { hashBytes } from '../directIP/deviceSync';
 import { DEFAULT_FILE_EXTENSION_ALLOWLIST } from '../syncFilters';
+import { DEFAULT_SYNC_EXECUTION_STATE, SingleEngineSyncCoordinator } from '../syncAbstraction';
 import { CloudInventoryItem } from './cloudInventory';
 import { planVerifiedCloudInventory, runVerifiedCloudMirror } from './cloudMirrorPipeline';
 import { SharedMirrorManifest } from '../sharedMirrorManifest';
@@ -341,6 +342,133 @@ describe('Cloud inventory to shared-manifest planning', () => {
         expect((await loadMirrorManifest(storage, {})).manifest.pendingOperation).toBeUndefined();
         expect((await loadMirrorManifest(storage, {})).manifest.records).not.toHaveProperty(path);
         expect(await runVerifiedCloudMirror(options)).toMatchObject({ removed: 0, failed: [] });
+    });
+
+    it('rejects a stale second instance before writing and retries from the latest manifest', async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, {
+            version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: {},
+        });
+        const files = new Map<string, Uint8Array>();
+        const vault = {
+            read: vi.fn(async (path: string) => files.get(path) ?? null),
+            write: vi.fn(async (path: string, content: Uint8Array) => { files.set(path, content.slice()); }),
+        };
+        const firstPath = 'Mirror/Note/First.note';
+        const secondPath = 'Mirror/Note/Second.note';
+        const common = {
+            syncFolder: 'Mirror', legacyManifest: {}, accountFingerprint: 'v1:synthetic-account',
+            vault, storage, pathFilters: [], fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST,
+            maxFileBytes: 100,
+        };
+        const firstOptions = {
+            ...common, inventory: { directories: [], items: [item('1', 'First.note')] },
+            canonicalPathsById: { '1': '/Note/First.note' },
+            transfer: { download: vi.fn(async () => bytes), md5: vi.fn(async () => md5) },
+        };
+        const secondTransfer = {
+            download: vi.fn(async () => {
+                expect(await runVerifiedCloudMirror(firstOptions)).toMatchObject({ synced: 1, failed: [] });
+                return bytes;
+            }),
+            md5: vi.fn(async () => md5),
+        };
+        const secondOptions = {
+            ...common, inventory: { directories: [], items: [item('2', 'Second.note')] },
+            canonicalPathsById: { '2': '/Note/Second.note' }, transfer: secondTransfer,
+        };
+
+        await expect(runVerifiedCloudMirror(secondOptions)).rejects.toThrow('changed since it was loaded');
+        expect(files.has(firstPath)).toBe(true);
+        expect(files.has(secondPath)).toBe(false);
+        expect(vault.write).toHaveBeenCalledExactlyOnceWith(firstPath, bytes);
+        const rejected = await loadMirrorManifest(storage, {});
+        expect(rejected.manifest.pendingOperation).toBeUndefined();
+        expect(Object.keys(rejected.manifest.records)).toEqual([firstPath]);
+
+        const freshMd5 = 'fedcba9876543210fedcba9876543210';
+        secondTransfer.download.mockImplementation(async () => bytes);
+        secondTransfer.md5.mockImplementation(async () => freshMd5);
+        const freshOptions = { ...secondOptions,
+            inventory: { directories: [], items: [item('1', 'First.note'),
+                { ...item('2', 'Second.note'), md5: freshMd5 }] },
+            canonicalPathsById: { '1': '/Note/First.note', '2': '/Note/Second.note' },
+        };
+        const manualRun = vi.fn(async () => {
+            const mirror = await runVerifiedCloudMirror(freshOptions);
+            return { engineId: 'supernote-cloud' as const, ...mirror,
+                issues: mirror.protected.map((item) => ({ kind: 'protected' as const, item, message: 'Protected' })) };
+        });
+        const state = { ...DEFAULT_SYNC_EXECUTION_STATE, activeSyncEngine: 'supernote-cloud' as const };
+        const coordinator = new SingleEngineSyncCoordinator({ 'supernote-cloud': {
+            id: 'supernote-cloud', name: 'Cloud', getReadiness: () => ({ ready: true }),
+            run: manualRun, clearHistory: async () => {},
+        } }, { load: () => state, save: () => {} }, new RootMirrorManifestService(() => storage),
+        async () => {}, undefined, { root: () => 'Mirror', read: vault.read, attention: async () => {} });
+        files.set(secondPath, new Uint8Array([9, 9, 9]));
+        expect(await coordinator.runActive({ kind: 'manual', commandId: 'sync-now' })).toMatchObject({
+            synced: 0, issues: [{ kind: 'protected', item: secondPath }], failed: [],
+        });
+        expect(vault.write).toHaveBeenCalledOnce();
+        expect((await loadMirrorManifest(storage, {})).manifest.records).not.toHaveProperty(secondPath);
+
+        files.delete(secondPath);
+        expect(await coordinator.runActive({ kind: 'manual', commandId: 'sync-now' })).toMatchObject({
+            synced: 1, unchanged: 1, failed: [], issues: [],
+        });
+        expect(manualRun).toHaveBeenCalledTimes(2);
+        expect(vault.write).toHaveBeenCalledTimes(2);
+        expect(files.get(secondPath)).toEqual(bytes);
+        const current = await loadMirrorManifest(storage, {});
+        expect(current.manifest.pendingOperation).toBeUndefined();
+        expect(Object.keys(current.manifest.records).sort()).toEqual([firstPath, secondPath]);
+        expect(current.manifest.records[secondPath].source).toMatchObject({ md5: freshMd5 });
+    });
+
+    it('protects a same-path file changed by another instance while download is in flight', async () => {
+        const firstBytes = new Uint8Array([1, 2, 3]);
+        const secondBytes = new Uint8Array([3, 2, 1]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, {
+            version: 1, cloudAccountFingerprint: 'v1:synthetic-account', records: {},
+        });
+        const path = 'Mirror/Note/Shared.note';
+        const files = new Map<string, Uint8Array>();
+        const vault = {
+            read: vi.fn(async (target: string) => files.get(target) ?? null),
+            write: vi.fn(async (target: string, content: Uint8Array) => { files.set(target, content.slice()); }),
+        };
+        const common = {
+            inventory: { directories: [], items: [item('1', 'Shared.note')] },
+            canonicalPathsById: { '1': '/Note/Shared.note' }, syncFolder: 'Mirror',
+            legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', vault, storage,
+            pathFilters: [], fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+        };
+        const firstOptions = { ...common,
+            transfer: { download: vi.fn(async () => firstBytes), md5: vi.fn(async () => md5) },
+        };
+        const secondOptions = { ...common,
+            transfer: { download: vi.fn(async () => {
+                await runVerifiedCloudMirror(firstOptions);
+                return secondBytes;
+            }), md5: vi.fn(async () => md5) },
+        };
+
+        expect(await runVerifiedCloudMirror(secondOptions)).toMatchObject({ synced: 0, protected: [path], failed: [] });
+        expect(vault.write).toHaveBeenCalledExactlyOnceWith(path, firstBytes);
+        expect(files.get(path)).toEqual(firstBytes);
+        const current = await loadMirrorManifest(storage, {});
+        expect(current.manifest.pendingOperation).toBeUndefined();
+        expect(current.manifest.records[path].contentHash).toBe(hashBytes(firstBytes));
     });
 
     it('leaves a pending intent and does not prune when file Trash fails', async () => {
