@@ -59,6 +59,51 @@ describe('ordinary mirror operation recovery', () => {
         expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
     });
 
+    it('adopts identical bytes without rewriting after an interrupted record commit', async () => {
+        const fixture = harness();
+        const loaded = await fixture.service.load({});
+        fixture.files.set(path, after);
+        const originalCommit = fixture.service.commit.bind(fixture.service);
+        let commits = 0;
+        fixture.service.commit = async (previous, manifest) => {
+            if (++commits === 2) throw new Error('interrupted');
+            return originalCommit(previous, manifest);
+        };
+        const write = vi.fn(async () => {});
+        await expect(new MirrorOperationExecutor(fixture.service, 'Mirror', loaded, fixture.read)
+            .write(path, after, record, write)).rejects.toThrow('interrupted');
+        expect(write).not.toHaveBeenCalled();
+        expect((await fixture.load()).manifest.pendingOperation?.kind).toBe('write');
+        fixture.service.commit = originalCommit;
+        await recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read);
+        expect(fixture.files.get(path)).toEqual(after);
+        expect((await fixture.load()).manifest.records[path]).toEqual(record);
+        expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
+    });
+
+    it('reconciles a completed Trash after an interrupted record commit without repeating Trash', async () => {
+        const fixture = harness();
+        const loaded = await fixture.seed();
+        fixture.files.set(path, before);
+        const originalCommit = fixture.service.commit.bind(fixture.service);
+        let commits = 0;
+        fixture.service.commit = async (previous, manifest) => {
+            if (++commits === 2) throw new Error('interrupted');
+            return originalCommit(previous, manifest);
+        };
+        const trash = vi.fn(async (target: string) => { fixture.files.delete(target); });
+        await expect(new MirrorOperationExecutor(fixture.service, 'Mirror', loaded, fixture.read)
+            .trash(path, trash)).rejects.toThrow('interrupted');
+        expect(trash).toHaveBeenCalledOnce();
+        expect((await fixture.load()).manifest.pendingOperation?.kind).toBe('trash');
+        fixture.service.commit = originalCommit;
+        await recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read,
+            async () => 'absent');
+        expect(trash).toHaveBeenCalledOnce();
+        expect((await fixture.load()).manifest.records[path]).toBeUndefined();
+        expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
+    });
+
     it('does not overwrite bytes edited while intent is being committed', async () => {
         const fixture = harness();
         const loaded = await fixture.seed();

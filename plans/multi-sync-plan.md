@@ -136,6 +136,19 @@ criteria for both engines and root changes live in
   Marie log entry retains the older wording. The focused recovery tests (7
   passing), build, lint (0 errors, 14 existing warnings), and `git diff --check`
   passed after the change.
+- Tested interrupted identical-byte adoption and post-Trash manifest commit
+  failure in the executor with one-shot commit failures: recovery adopted
+  without rewriting bytes and did not repeat Trash. In Marie, staged a synthetic
+  identical-byte intent; recovery recorded the unchanged file and cleared the
+  intent. For a separate managed `.txt` fixture, moved the original into local
+  Obsidian Trash with an intent pending, created a different file at the path,
+  and verified recovery preserved both copies and logged uncertainty. Moving the
+  replacement aside and retrying through the coordinator with a temporary mocked
+  absent-source check and stubbed engine run cleared the intent without Cloud
+  requests. Removed only the synthetic files, local Trash item, and records;
+  five original records remain and auto-sync is off. This checked local
+  vault/manifest recovery, not a real Cloud pipeline transfer, source inventory,
+  or process interruption.
 
 ## Outstanding
 
@@ -143,12 +156,10 @@ criteria for both engines and root changes live in
 
 The intent-first per-file executor, coordinator restart reconciliation,
 path-specific attention logging, and history/root-change gates are implemented.
-Live adoption and uncertain Trash validation still require controlled faults at
-the operation boundary. Marie is the designated disposable test vault, so unique
-local fixtures may be mutated there while preserving and verifying its existing
-files and records. Do not terminate the Obsidian renderer; that made Marie
-unresponsive. Use synthetic or mocked source inventories for remote state and do
-not mutate Cloud or device contents.
+Adoption and uncertain-Trash recovery were checked in Marie with synthetic
+intents and local fixtures; interruption inside a real engine run remains
+untested. Marie is the designated disposable test vault. Do not terminate the
+Obsidian renderer, which made it unresponsive, or mutate Cloud/device contents.
 
 ### Remaining validation
 
@@ -176,20 +187,15 @@ shared-manifest block. The Cloud validation record is in
 The following end-to-end recovery checks were not performed in this iteration;
 they are recommendations for future validation, not blockers to normal sync:
 
-- End-to-end live interruptions within real engine operations, adoption, and
-  uncertain Trash remain untested. Use unique, replaceable fixtures in the Marie
-  test vault and a controlled fault mechanism, not renderer termination or
-  production/user data.
-- Validate identical-byte adoption and uncertain Trash with independent,
-  replaceable fixtures. For Trash, simulate the needed Cloud inventory rather
-  than changing Cloud contents. Verify manifest state, vault bytes, backup or
-  local Trash outcome, and the recovery log before and after manual recovery;
-  clean up only test data after confirming original records and account binding
-  are intact.
+- Exercise an interruption inside a real engine run with a fixture-scoped fault,
+  rather than staging the intent directly. This would also check pipeline
+  wiring; do not terminate the renderer or mutate Cloud/device data.
+- Check live Cloud inventory and transfer behavior only when a safe, controlled
+  remote fixture is available. The Marie adoption/Trash checks used synthetic
+  records and a mocked source result, so they do not establish this behavior.
 
-A future recovery-validation sprint could first add a narrowly scoped test fault
-mechanism and cover write interruption across restart, then use separate
-fixtures for adoption and uncertain Trash. Keep real-device upload and
+A future engine-integration sprint could add a narrowly scoped test fault and
+use separate fixtures for write/adoption and Trash. Keep real-device upload and
 second-account tests outside that sprint until their prerequisites and explicit
 approval are available.
 

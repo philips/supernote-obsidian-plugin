@@ -1,8 +1,9 @@
 # Multi-Sync Next Steps
 
-**Status:** Recovery and attention logging are implemented; real-engine
-interruption, identical-byte adoption, and uncertain Trash remain untested live.
-Updated October 16, 2026.
+**Status:** Recovery and attention logging are implemented; identical-byte
+adoption and uncertain Trash were checked locally in Marie with synthetic
+intents. Interruption inside a real engine run and live Cloud inventory remain
+untested. Updated October 16, 2026.
 
 Use [`multi-sync-plan.md`](multi-sync-plan.md) for overall implementation
 status, [`shared-manifest-plan.md`](shared-manifest-plan.md) for the detailed
