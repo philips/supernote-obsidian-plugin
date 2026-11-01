@@ -2,6 +2,11 @@
 
 ## Project overview
 
+- The core project is `obsidian-journal-companion` at
+  `C:\Code\SolerSoft\obsidian-journal-companion` (formerly
+  `obsidian-supernote-companion`). Other workspace folders may be reference
+  implementations; do not treat them as the target project unless explicitly
+  requested. Keep edits and project-specific commands rooted here.
 - An Obsidian community plugin (TypeScript → bundled JavaScript) for viewing,
   exporting, and importing Supernote `*.note` files, plus device screen
   mirroring and Wi-Fi file transfer.
