@@ -34,6 +34,7 @@ import { CloudSessionStorage } from './sync/supernoteCloud/cloudSessionStorage';
 import { CloudSignInRequiredError, CloudSyncEngine } from './sync/supernoteCloud/cloudSyncEngine';
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
+import { AutomaticMarkdownExport } from './automaticMarkdownExport';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -390,8 +391,6 @@ class VaultWriter {
 	// export passes `imgs: null` but can still pass `images` so registered
 	// processors run, even though no image attachment gets saved.
 	async writeMarkdownFile(file: TFile, sn: SupernoteX, imgs: TFile[] | null, images: string[] | null = null): Promise<TFile> {
-		let content = '';
-
 		// Generate a non-conflicting filename - it has a bit of a race but that is OK
 		let filename = `${file.parent?.path}/${file.basename}.md`;
 		let i = 0;
@@ -399,7 +398,12 @@ class VaultWriter {
 			filename = `${file.parent?.path}/${file.basename} ${++i}.md`;
 		}
 
-		content = this.app.fileManager.generateMarkdownLink(file, filename);
+		const content = await this.renderMarkdownFile(file, sn, filename, imgs, images);
+		return this.app.vault.create(filename, content);
+	}
+
+	async renderMarkdownFile(file: TFile, sn: SupernoteX, filename: string, imgs: TFile[] | null = null, images: string[] | null = null): Promise<string> {
+		let content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
 
 		for (let i = 0; i < sn.pages.length; i++) {
@@ -422,7 +426,7 @@ class VaultWriter {
 			}
 		}
 
-		return this.app.vault.create(filename, content);
+		return content;
 	}
 
 	// `images` is already-rasterized page data URLs (see rasterizePages()) —
@@ -462,6 +466,12 @@ class VaultWriter {
 		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
 		const mdFile = await this.writeMarkdownFile(file, sn, null, images);
 		this.notifyExportComplete(mdFile);
+	}
+
+	async renderAutomaticMarkdown(file: TFile, destination: string, note: ArrayBuffer): Promise<string> {
+		const sn = new SupernoteX(new Uint8Array(note));
+		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
+		return this.renderMarkdownFile(file, sn, destination, null, images);
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -1151,6 +1161,7 @@ export default class SupernotePlugin extends Plugin {
 	vaultWriter!: VaultWriter;
 	private syncCoordinator!: SyncCoordinator;
 	private syncRootChange!: SyncRootChange;
+	private automaticMarkdownExport?: AutomaticMarkdownExport;
 	private noteViewerRegistered = false;
 	private cloudSignInModal: CloudSignInModal | null = null;
 	// Live reference handed to VaultWriter — registering/unregistering here
@@ -1232,6 +1243,25 @@ export default class SupernotePlugin extends Plugin {
 		});
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
+		this.automaticMarkdownExport = new AutomaticMarkdownExport(this.app, this.settings,
+			() => this.saveSettings(), (file, path, bytes) => this.vaultWriter.renderAutomaticMarkdown(file, path, bytes),
+			(source, destination, reason) => {
+				new Notice(`Automatic Markdown export skipped: ${source} → ${destination}: ${reason}`);
+			});
+		try {
+			await this.automaticMarkdownExport.recover();
+		} catch (error) {
+			new Notice(`Automatic Markdown rename recovery needs review: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		this.registerEvent(this.app.vault.on('create', (file) => {
+			if (file instanceof TFile) this.automaticMarkdownExport?.schedule(file);
+		}));
+		this.registerEvent(this.app.vault.on('modify', (file) => {
+			if (file instanceof TFile) this.automaticMarkdownExport?.schedule(file);
+		}));
+		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+			if (file instanceof TFile) this.automaticMarkdownExport?.rename(file, oldPath);
+		}));
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 
@@ -1760,6 +1790,7 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	onunload() {
+		this.automaticMarkdownExport?.stop();
 		terminateSharedWorkerPool();
 	}
 
@@ -1791,6 +1822,7 @@ export default class SupernotePlugin extends Plugin {
 	}
 
 	async saveSettings() {
+		this.automaticMarkdownExport?.settingsChanged();
 		await this.saveData(this.settings);
 	}
 }

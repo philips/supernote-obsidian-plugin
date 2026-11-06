@@ -44,6 +44,18 @@ export interface MarkdownExportMapping {
     outputDir: string;
 }
 
+export interface MarkdownExportRecord {
+    mappingId: string;
+    source: string;
+    destination: string;
+    hash: string;
+}
+
+export interface MarkdownExportMove {
+    from: MarkdownExportRecord;
+    to: MarkdownExportRecord;
+}
+
 function validateVaultDirectory(path: string): string | undefined {
     if (path === '') return;
     if (path.startsWith('/') || path.endsWith('/') || path.includes('\\') || path.includes(':') ||
@@ -212,6 +224,9 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     automaticMarkdownExportEnabled: boolean;
     markdownExportErrorLogEnabled: boolean;
     markdownExportMappings: MarkdownExportMapping[];
+    markdownExportRecords: Record<string, MarkdownExportRecord>;
+    markdownExportPendingMove: MarkdownExportMove | null;
+    markdownExportBlockedSources: Record<string, string>;
     /**
      * Device path glob patterns (comma/newline separated) scoping which
      * notes sync considers. Empty = sync everything. A single text field
@@ -244,6 +259,9 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     automaticMarkdownExportEnabled: false,
     markdownExportErrorLogEnabled: true,
     markdownExportMappings: [],
+    markdownExportRecords: {},
+    markdownExportPendingMove: null,
+    markdownExportBlockedSources: {},
     syncPathFiltersRaw: '',
     syncFileExtensionsRaw: '.note, .spd',
     noteSyncState: {},

@@ -1,10 +1,13 @@
 # Automatic Markdown Export Design and Implementation Plan
 
-**Status:** Implementation started November 1, 2026. Settings model, named
-mapping controls in both settings surfaces, and initial mapping validation are
-in place. Adding, removing, or toggling a pair saves immediately. Vault-event
-conversion, ownership protection, reporting, and end-to-end UI validation are
-not implemented yet. Branch facts checked October 31, 2026.
+**Status (November 6, 2026):** Settings and event-driven runtime sprints are
+implemented. Enabled mappings convert vault `.note` create/modify/rename events
+through the Markdown-only renderer; guarded ownership and restart-aware rename
+transfer protect edited and unmanaged outputs. Errors currently produce a
+coalesced notice only: the error-only Markdown Export Log and explicit conflict
+resume action are not implemented. User documentation and live Obsidian vault
+validation remain. See `auto-markdown-next-steps.md` for the next sprint. Branch
+facts below were checked October 31, 2026.
 
 The implementation target is `obsidian-journal-companion` at
 `C:\Code\SolerSoft\obsidian-journal-companion`. Petrify at
@@ -34,7 +37,9 @@ or modified, optionally limits watching to one folder, and can mirror the
 watched relative directory structure under one output folder. Retain its
 event-driven conversion, the existing Markdown-only writer and text processors,
 debouncing, quiet success behavior, and safe folder creation. It does not do
-startup scanning or deletion/rename cleanup.
+startup scanning or deletion/rename cleanup. Unlike the old branch, the new
+implementation must also follow a reliably detected `.note` rename by renaming
+its unchanged, managed Markdown export.
 
 The old implementation mixes automatic-output paths into the general
 `writeMarkdownFile` path, so manual attach/export commands would also use the
@@ -83,17 +88,32 @@ by that license.
   paths cannot collide. Disabling, removing, or changing a pair cancels its
   pending jobs and leaves old exports untouched.
 - Route each vault event to exactly one mapping, then to a converter for its
-  file type. **Only `.note` -> Markdown is supported now**, using the current
-  `VaultWriter` text/processor path. Keep event routing, mapping identity,
-  destination selection, write protection, and reporting independent of the
-  `.note` converter. A future mapping could opt into `.jpg` -> OCR -> Markdown
-  through another converter without replacing this pipeline; do not add JPG
-  watching, OCR UI/settings, dependencies, or OCR behavior yet.
+  file type. **Only `.note` -> Markdown is in scope for the initial runtime**,
+  using the current `VaultWriter` text/processor path. Keep event routing,
+  mapping identity, destination selection, write protection, and reporting
+  independent of the `.note` converter. A future mapping could opt into `.jpg`
+  -> OCR -> Markdown through another converter without replacing this pipeline;
+  do not add JPG watching, OCR UI/settings, dependencies, or OCR behavior yet.
 - Keep conversion ownership keyed by mapping ID, source path, and destination
   with the hash of last generated Markdown, separate from the raw-note shared
   sync manifest. A new destination after a mapping edit is unmanaged until
   safely created or deliberately adopted; changing settings must not bypass an
   existing conflict.
+- A reliably detected `.note` rename cancels old-path jobs and resolves both
+  paths against current enabled mappings. When both paths are watched and the
+  old destination has an ownership record for that source whose last-generated
+  hash still matches its content, move the managed Markdown to the new derived
+  destination only if that destination is vacant. Transfer its ownership record
+  to the new mapping ID, source, and destination; regenerate path-dependent
+  content (including source links) there, then keep refreshing it on subsequent
+  source changes while the hash still matches. Make the move, content refresh,
+  and record update restart-safe; never claim a path after an incomplete write.
+  If the old output was locally edited, missing, or unmanaged, or the new
+  destination is occupied, do not move or overwrite either file: report a
+  conflict requiring review. If no old export exists because this source has not
+  yet been converted, treat a rename into watched scope as a new guarded
+  creation. Renaming out of scope leaves the old Markdown untouched. Changing
+  pair settings alone is not a source rename and must not move old exports.
 
 ## Integration decisions to review
 
@@ -126,7 +146,8 @@ by that license.
    conflict for pre-existing unmanaged files or local edits. Record an initial
    write only after successful creation, and do not claim ownership after a
    failed save. If a setting or source path changes, treat the new destination
-   as new and leave the former output in place. Define a recoverable
+   as new and leave the former output in place, except for a verified source
+   rename that qualifies for the guarded move above. Define a recoverable
    record/write sequence so a restart between file creation and record
    persistence cannot silently overwrite an untracked file. Do not mix this
    record with the raw-note shared mirror manifest or its recovery protocol. On
@@ -141,24 +162,28 @@ by that license.
    overwriting it immediately; only a subsequent source change may update it.
    Never clear a conflict or replace the destination merely because another
    vault event arrived.
-5. **Handle event bursts as one latest-file job.** Listen for `create` and
-   `modify` of `.note` files, debounce both, serialize per pair/source, and
-   re-read/check the source when work executes. If the source changes while a
-   conversion is in flight, queue a final refresh rather than let an old
-   conversion win. Clear pending timers and stop queued work on unload or when
-   the option is turned off or a pair changes. Write conversion failures and
-   protected destinations to `<outputDir>/Markdown Export Log.md` for that pair,
-   or vault-root `Markdown Export Log.md` when it has no output directory. Pairs
-   sharing an output root share the log; identify the pair and source in each
-   entry. Keep it separate from `Sync Log.md`; use dated, bounded entries
-   similar to the sync log, with source/destination, a useful reason, and a
-   resolution hint. Provide a separate **Markdown export error log** toggle
-   (enabled by default), independent of the sync-log setting. Only on an error
-   or protected destination, and only when this toggle is on, create or append
-   to the log; never create, touch, or append to it for a successful export.
-   Turning the toggle off preserves any existing log and suppresses new log
-   writes, but does not suppress notices or conflict protection. Show a notice
-   for new failures/conflicts, but coalesce repeated notifications for the same
+5. **Handle event bursts as one latest-file job.** Listen for `create`,
+   `modify`, and `rename` of `.note` files. Debounce generation at the new path,
+   serialize per pair/source, and re-read/check the source when work executes. A
+   verified rename moves only unchanged managed output and transfers its
+   ownership before future updates; a conflicting rename never overwrites local
+   edits. A rename cancels old-path jobs and prevents in-flight work from
+   writing stale output. If the source changes during conversion, queue a final
+   refresh rather than let an old conversion win. Clear pending timers and stop
+   queued work on unload or when the option is turned off or a pair changes.
+   Write conversion failures and protected destinations to
+   `<outputDir>/Markdown Export Log.md` for that pair, or vault-root
+   `Markdown Export Log.md` when it has no output directory. Pairs sharing an
+   output root share the log; identify the pair and source in each entry. Keep
+   it separate from `Sync Log.md`; use dated, bounded entries similar to the
+   sync log, with source/destination, a useful reason, and a resolution hint.
+   Provide a separate **Markdown export error log** toggle (enabled by default),
+   independent of the sync-log setting. Only on an error or protected
+   destination, and only when this toggle is on, create or append to the log;
+   never create, touch, or append to it for a successful export. Turning the
+   toggle off preserves any existing log and suppresses new log writes, but does
+   not suppress notices or conflict protection. Show a notice for new
+   failures/conflicts, but coalesce repeated notifications for the same
    unresolved issue. If the log cannot be written, notify the user of that
    failure without masking the original conversion error; never overwrite a
    non-log file at the log path. If an output root is invalid or unwritable, do
@@ -168,50 +193,52 @@ by that license.
 
 ## Implementation sequence
 
-1. Add the global toggle, independent error-log toggle, and stable-ID
-   watch/output mappings in `src/settings.ts` with Add/Remove, per-pair enable,
-   vault-folder dropdowns in a named Add pair modal, validation, and immediate
-   saves. Implement both the declarative settings definitions and the legacy
-   `display()` fallback. Put these controls near Convert, not inside the active
-   engine's schedule controls. Test defaults, persistence, invalid/overlapping
-   mappings, destination/log collisions, and both settings surfaces in
-   `src/settings.test.ts`.
-2. Extract/reuse the Markdown-only rendering portion of `VaultWriter` in
-   `src/main.ts` without changing manual `attachMarkdownFile`, image export, or
-   `writeMarkdownFile` behavior. Add vault-event mapping resolution and a narrow
-   extension-to-converter boundary with `.note` only, deterministic per-pair
-   output paths, folder creation, guarded output ownership, and write state.
-   Keep processor-on-demand rasterization behavior intact. Add focused tests for
-   paths (including same-folder output for root and nested sources), pair
-   isolation, ownership, resume-without-overwrite, restart/failure, and
-   generated links from mirrored directories; place helpers/tests beside
-   existing source rather than reshaping either sync engine.
-3. Register vault event handling in `src/main.ts` after settings and writer
-   initialization. Test create/modify burst coalescing, slow conversions,
-   disable/unload, out-of-scope files, and a sync-engine write emitting a vault
-   event. Add per-output-root Markdown export reporting with bounded log writes,
-   conflict notices and the explicit resume action; test multiple output roots,
-   shared-root entries, vault-root logging for an empty output directory,
-   successful exports never creating or touching logs, the error-log toggle
-   on/off, repeated failures, log-write failures, conflicts, and independence
-   from the sync log settings. Confirm the existing coordinator timer and
-   manual/scheduled sync command behavior remain unchanged.
-4. Update user-facing documentation for the opt-in toggle, multiple watch/output
-   pairs, same-folder output, error-only log toggle and log location per pair,
-   conflict resolution, and the distinction from timed raw-file sync. Run
-   focused tests, then `npm test`, `npm run build`, `npm run lint`, and
-   `git diff --check`. For UI/rendering behavior, inspect both settings surfaces
-   and representative generated files in a disposable Obsidian test vault; do
-   not mutate real-device or Cloud contents.
+1. **Completed (settings sprint):** Add the global toggle, independent error-log
+   toggle, and stable-ID watch/output mappings in `src/settings.ts` with
+   Add/Remove, per-pair enable, vault-folder dropdowns in a named Add pair
+   modal, validation, and immediate saves. The declarative and legacy settings
+   surfaces have a separate Automatic Markdown Export group whose dependent
+   settings hide when disabled. Names are labels, not paths; blank, duplicate,
+   control-character, and over-80-character names are rejected.
+   `src/settings.test.ts` covers persistence and mapping validation; real
+   Obsidian UI validation remains outstanding.
+2. **Completed (event-driven runtime sprint):** `VaultWriter` renders Markdown
+   for a supplied destination while manual export retains its existing filename
+   and attachment path. `src/automaticMarkdownExport.ts` routes enabled mappings
+   for `.note` only, derives root/nested and beside-source paths, debounces
+   events, rechecks source bytes, guards updates with `vault.process`, and
+   stores mapping/source/destination hashes separately from sync state. Vault
+   create, modify, and rename events are registered after writer initialization.
+   A verified rename transfers unchanged managed Markdown to a vacant
+   destination with a pending-move recovery record and refreshes path-dependent
+   links; conflicts leave outputs alone. Focused tests cover paths, edits,
+   unmanaged files, remapping, in-flight changes, rename bursts, and
+   write/restart failures. Full tests, build, lint (warnings only), and diff
+   check passed. Real Obsidian settings and generated-file checks, including a
+   sync-engine-originated vault write, remain unverified.
+3. **Remaining:** Add bounded, error-only per-output-root Markdown Export Log
+   reporting, actionable coalesced notices, and an explicit **Resume automatic
+   export for this file** action that adopts the reviewed destination hash
+   without changing its contents. Test log toggle on/off, shared/separate and
+   vault-root logs, repeated conflicts, failed log writes, and resume across
+   reload. Keep reporting independent of IP/Cloud sync and avoid touching logs
+   on successful exports.
+4. **Remaining:** Update user-facing documentation for the opt-in toggle,
+   multiple watch/output pairs, same-folder output, error-only log toggle and
+   log location per pair, conflict resolution, and the distinction from timed
+   raw-file sync. Run focused tests, then `npm test`, `npm run build`,
+   `npm run lint`, and `git diff --check`. For UI/rendering behavior, inspect
+   both settings surfaces and representative generated files in a disposable
+   Obsidian test vault; do not mutate real-device or Cloud contents.
 
 ## Acceptance criteria
 
 - Off by default: existing manual exports and scheduled IP/Cloud runs behave
   exactly as on `main`. Turning on Markdown export does not enable a timer.
-- A new or updated watched `.note` produces one latest Markdown-only output
-  under its matching pair's output directory, or beside the source when it is
-  empty, preserving relative paths, source links, and processed text. Multiple
-  independent pairs work; JPG/OCR conversion is not active.
+- A new, updated, or renamed watched `.note` produces one latest Markdown-only
+  output under its matching pair's output directory, or beside the source when
+  it is empty, preserving relative paths, source links, and processed text.
+  Multiple independent pairs work; JPG/OCR conversion is not active.
 - Repeated events do not create numbered duplicates; unmanaged or locally edited
   Markdown is never overwritten, and changing folder settings leaves old output
   untouched. Conflicts and failures produce actionable notices and entries in
@@ -221,4 +248,8 @@ by that license.
   continue when logging is off. Resolving a conflict requires a deliberate
   resume action after review.
 - Vault-root and nested paths, multiple sync events, reloads, failed writes, and
-  stopping the plugin do not produce incorrect paths or stale overwrites.
+  stopping the plugin do not produce incorrect paths or stale overwrites. A
+  reliably detected rename of a watched source moves its unchanged managed
+  Markdown to the new derived path, updates its links, and continues guarded
+  updates there. An edited old output or occupied new destination is never moved
+  or overwritten; a rename out of scope leaves the old output alone.
