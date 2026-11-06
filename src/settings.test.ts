@@ -3,8 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, markdownExportDestination, SupernoteSettingTab, validateMarkdownExportMappings } from './settings';
 import { trimSyncLog } from './sync/syncReporting';
 
+const picker = vi.hoisted(() => ({ select: (_path: string) => {}, path: null as string | null }));
+vi.mock('./VaultFolderPickerModal', () => ({ VaultFolderPickerModal: class {
+    constructor(_app: unknown, path: string | null, _allowRoot: boolean, onSelect: (folder: { path: string }) => void) {
+        picker.path = path;
+        picker.select = (selected: string) => onSelect({ path: selected });
+    }
+    open() {}
+} }));
+
 vi.mock('obsidian', () => {
-    const element = (): unknown => ({ createDiv: element, createEl: element, empty: () => {}, setText: () => {}, hidden: false });
+    const element = (): unknown => ({ createDiv: element, createEl: element,
+        empty: () => {}, setText: () => {}, hidden: false });
     return {
         TFolder: class TFolder { path = ''; },
         Modal: class MockModal {
@@ -27,9 +37,22 @@ vi.mock('obsidian', () => {
             static texts: { name: string; change: (value: string) => void }[] = [];
             static dropdowns: { name: string; options: [string, string][]; change: (value: string) => void }[] = [];
             static names: string[] = [];
+            static rows: { name: string; classes: Set<string> }[] = [];
             descEl = { createDiv: element };
+            settingEl = { name: '', classes: new Set<string>(),
+                addClass(name: string) { this.classes.add(name); },
+                toggleClass(name: string, enabled: boolean) {
+                    if (enabled) this.classes.add(name);
+                    else this.classes.delete(name);
+                } };
             name = '';
-            setName(name: string) { this.name = name; MockSetting.names.push(name); return this; }
+            setName(name: string) {
+                this.name = name;
+                this.settingEl.name = name;
+                MockSetting.names.push(name);
+                MockSetting.rows.push(this.settingEl);
+                return this;
+            }
             setDesc() { return this; }
             addToggle(configure: (toggle: unknown) => void) {
                 const toggle = { name: this.name, change: (_enabled: boolean): void | Promise<void> => {} };
@@ -72,7 +95,7 @@ vi.mock('obsidian', () => {
                 return this;
             }
             addButton(configure: (button: unknown) => void) {
-                const button = { label: '', disabled: false, click: (() => {}) as () => void | Promise<void> };
+                const button = { name: this.name, label: '', disabled: false, click: (() => {}) as () => void | Promise<void> };
                 MockSetting.buttons.push(button);
                 const input = {
                     setButtonText: (label: string) => {
@@ -202,7 +225,7 @@ describe('automatic Markdown export settings', () => {
         const folder = (path: string) => Object.assign(new TFolder(), { path });
         const app = { vault: {
             getAbstractFileByPath: () => null, getFiles: () => [],
-            getAllLoadedFiles: () => [folder('Notes'), folder('Journal'), folder('Exports')],
+            getFolderByPath: (path: string) => ['Notes', 'Journal', 'Exports'].includes(path) ? folder(path) : null,
         } } as never;
         const tab = new SupernoteSettingTab(app, { settings, saveSettings, ...engineRegistry } as never);
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Automatic Markdown Export');
@@ -210,10 +233,11 @@ describe('automatic Markdown export settings', () => {
         const editor = group.items.find((item) => 'name' in item && item.name === 'Watch and output folders');
         if (!editor || !('render' in editor)) throw new Error('Mapping editor missing');
         const controls = Setting as unknown as {
-            buttons: { label: string; disabled: boolean; click: () => void | Promise<void> }[];
+            buttons: { name: string; label: string; disabled: boolean; click: () => void | Promise<void> }[];
             texts: { name: string; change: (value: string) => void }[];
             dropdowns: { name: string; options: [string, string][]; change: (value: string) => void }[];
             names: string[];
+            rows: { name: string; classes: Set<string> }[];
             extraButtons: { name: string; click: () => void }[];
             toggles: { name: string; change: (enabled: boolean) => void | Promise<void> }[];
         };
@@ -221,6 +245,7 @@ describe('automatic Markdown export settings', () => {
         controls.texts.length = 0;
         controls.dropdowns.length = 0;
         controls.names.length = 0;
+        controls.rows.length = 0;
         controls.extraButtons.length = 0;
         controls.toggles.length = 0;
         editor.render(new Setting({} as never));
@@ -234,12 +259,17 @@ describe('automatic Markdown export settings', () => {
         expect(settings.markdownExportMappings).toEqual([namedFirst]);
 
         const added = add?.click();
-        expect(controls.dropdowns.find((dropdown) => dropdown.name === 'Watch folder')?.options[0]).toEqual(['', '(Whole vault)']);
-        expect(controls.dropdowns.find((dropdown) => dropdown.name === 'Output folder')?.options[0]).toEqual(['', '(Beside source)']);
+        expect(controls.buttons.filter((button) => button.label === 'Browse…').map((button) => button.name))
+            .toEqual(['Watch folder', 'Output folder', 'Watch folder', 'Output folder']);
         const name = controls.texts.slice().reverse().find((text) => text.name === 'Name');
-        const watch = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Watch folder');
-        const output = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Output folder');
+        const watch = controls.buttons.slice().reverse().find((button) => button.name === 'Watch folder');
+        const output = controls.buttons.slice().reverse().find((button) => button.name === 'Output folder');
+        const location = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Output location');
+        const outputRow = controls.rows.slice().reverse().find((row) => row.name === 'Output folder');
         const ok = controls.buttons.slice().reverse().find((button) => button.label === 'OK');
+        expect(location?.options).toEqual([['beside', 'Beside source'], ['folder', 'Specific folder']]);
+        expect(controls.names.lastIndexOf('Output location')).toBeLessThan(controls.names.lastIndexOf('Output folder'));
+        expect(outputRow?.classes.has('supernote-export-output-hidden')).toBe(true);
         expect(ok?.disabled).toBe(true);
         name?.change('a'.repeat(81));
         expect(ok?.disabled).toBe(true);
@@ -248,13 +278,24 @@ describe('automatic Markdown export settings', () => {
         name?.change(' existing ');
         expect(ok?.disabled).toBe(true);
         name?.change('Journal');
-        watch?.change('Notes');
-        output?.change('Exports');
+        void watch?.click();
+        picker.select('Notes');
+        location?.change('folder');
+        expect(outputRow?.classes.has('supernote-export-output-hidden')).toBe(false);
         expect(ok?.disabled).toBe(true);
-        watch?.change('Journal');
+        void output?.click();
+        picker.select('Exports');
         expect(ok?.disabled).toBe(true);
-        output?.change('');
+        void watch?.click();
+        picker.select('Journal');
+        expect(ok?.disabled).toBe(true);
+        location?.change('beside');
+        expect(outputRow?.classes.has('supernote-export-output-hidden')).toBe(true);
         expect(ok?.disabled).toBe(false);
+        location?.change('folder');
+        void output?.click();
+        expect(picker.path).toBe('Exports');
+        location?.change('beside');
         await ok?.click();
         await added;
         expect(controls.names).toContain('Journal');

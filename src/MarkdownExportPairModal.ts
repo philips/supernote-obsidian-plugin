@@ -1,5 +1,6 @@
 import { App, Modal, Setting, TFolder } from 'obsidian';
 import type { MarkdownExportMapping } from './settings';
+import { VaultFolderPickerModal } from './VaultFolderPickerModal';
 
 export interface MarkdownExportPairChoice {
     name: string;
@@ -29,17 +30,20 @@ export class MarkdownExportPairModal extends Modal {
     onOpen(): void {
         this.setTitle('Add automatic Markdown export pair');
         this.contentEl.empty();
-        const folders = this.app.vault.getAllLoadedFiles()
-            .filter((file): file is TFolder => file instanceof TFolder && !!file.path)
-            .sort((left, right) => left.path.localeCompare(right.path));
         const choice: MarkdownExportPairChoice = { name: '', watchDir: '', outputDir: '' };
+        let besideSource = true;
+        let lastOutputDir = '';
         const warning = this.contentEl.createEl('p', { cls: 'supernote-sync-folder-warning' });
         let confirmButton: { setDisabled(disabled: boolean): unknown };
         const validate = () => {
             const name = choice.name.trim().toLocaleLowerCase();
+            const missingFolder = (path: string) => !!path && !this.app.vault.getFolderByPath(path);
             const error = !name ? 'Enter a name for this pair'
                 : this.existing.some((pair) => pair.name?.trim().toLocaleLowerCase() === name)
                     ? 'A pair with that name already exists'
+                    : !besideSource && !choice.outputDir ? 'Select an output folder or choose Beside source'
+                    : missingFolder(choice.watchDir) || missingFolder(choice.outputDir)
+                        ? 'Selected folder no longer exists'
                     : this.existing.some((pair) => pair.watchDir === choice.watchDir && pair.outputDir === choice.outputDir)
                         ? 'A pair with those watch and output folders already exists'
                         : this.validate(choice);
@@ -51,15 +55,37 @@ export class MarkdownExportPairModal extends Modal {
 
         new Setting(this.contentEl).setName('Name').addText((text) => text
             .setPlaceholder('Pair name').onChange((name) => { choice.name = name; validate(); }));
-        const addFolderDropdown = (name: string, emptyLabel: string, update: (path: string) => void) => {
-            new Setting(this.contentEl).setName(name).addDropdown((dropdown) => {
-                dropdown.addOption('', emptyLabel);
-                for (const folder of folders) dropdown.addOption(folder.path, folder.path);
-                dropdown.onChange((path) => { update(path); validate(); });
+        const watchSetting = new Setting(this.contentEl).setName('Watch folder').setDesc('/')
+            .addButton((button) => button.setButtonText('Browse…').onClick(() => {
+                new VaultFolderPickerModal(this.app, choice.watchDir, true, (folder: TFolder) => {
+                    choice.watchDir = folder.path;
+                    watchSetting.setDesc(folder.path || '/');
+                    validate();
+                }).open();
+            }));
+        let outputSetting: Setting;
+        new Setting(this.contentEl).setName('Output location').addDropdown((dropdown) => dropdown
+            .addOption('beside', 'Beside source')
+            .addOption('folder', 'Specific folder')
+            .onChange((value) => {
+                besideSource = value === 'beside';
+                choice.outputDir = besideSource ? '' : lastOutputDir;
+                outputSetting.settingEl.toggleClass('supernote-export-output-hidden', besideSource);
+                outputSetting.setDesc(choice.outputDir || 'Select a folder');
+                validate();
+            }));
+        outputSetting = new Setting(this.contentEl).setName('Output folder').setDesc('Select a folder');
+        outputSetting.settingEl.addClass('supernote-export-output-hidden');
+        outputSetting.addButton((button) => {
+            button.setButtonText('Browse…').onClick(() => {
+                new VaultFolderPickerModal(this.app, choice.outputDir || null, false, (folder: TFolder) => {
+                    choice.outputDir = folder.path;
+                    lastOutputDir = folder.path;
+                    outputSetting.setDesc(folder.path);
+                    validate();
+                }).open();
             });
-        };
-        addFolderDropdown('Watch folder', '(Whole vault)', (path) => { choice.watchDir = path; });
-        addFolderDropdown('Output folder', '(Beside source)', (path) => { choice.outputDir = path; });
+        });
         new Setting(this.contentEl).addButton((button) => {
             confirmButton = button;
             button.setButtonText('OK').setCta().setDisabled(true).onClick(() => {

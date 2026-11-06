@@ -1,4 +1,5 @@
 import { App, Modal, Setting, TFolder } from 'obsidian';
+import { VaultFolderPickerModal } from '../VaultFolderPickerModal';
 
 export interface SyncFolderChoice {
     root: string;
@@ -25,14 +26,11 @@ export class ChangeSyncFolderModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         contentEl.createEl('p', { text: `Current folder: ${this.currentRoot}` });
-        const folders = this.app.vault.getAllLoadedFiles()
-            .filter((file): file is TFolder => file instanceof TFolder)
-            .sort((left, right) => left.path.localeCompare(right.path));
         let destination = '';
         let warningEl: HTMLParagraphElement;
         const buttons: { setDisabled(disabled: boolean): unknown }[] = [];
         const validDestination = (path: string) => {
-            const folder = this.app.vault.getAbstractFileByPath(path);
+            const folder = this.app.vault.getFolderByPath(path);
             return folder instanceof TFolder && folder.children.length === 0
                 && path !== this.currentRoot
                 && !path.startsWith(`${this.currentRoot}/`)
@@ -45,13 +43,13 @@ export class ChangeSyncFolderModal extends Modal {
             if (!warningEl.hidden) warningEl.setText('Select an empty vault folder');
             for (const button of buttons) button.setDisabled(!valid);
         };
-        new Setting(contentEl).setName('New folder').addDropdown((dropdown) => {
-            dropdown.addOption('', 'Select a folder');
-            for (const folder of folders) {
-                if (folder.path) dropdown.addOption(folder.path, folder.path);
-            }
-            dropdown.onChange(updateSelection);
-        });
+        const folderSetting = new Setting(contentEl).setName('New folder').setDesc('Select a folder')
+            .addButton((button) => button.setButtonText('Browse…').onClick(() => {
+                new VaultFolderPickerModal(this.app, destination || null, false, (folder) => {
+                    updateSelection(folder.path);
+                    folderSetting.setDesc(folder.path);
+                }).open();
+            }));
         warningEl = contentEl.createEl('p', { cls: 'supernote-sync-folder-warning' });
         warningEl.hidden = true;
         contentEl.createEl('p', { text: this.hasContent

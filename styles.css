@@ -6,11 +6,78 @@
     color: var(--text-warning);
 }
 
+.supernote-folder-picker-tree {
+    max-height: min(50vh, 400px);
+    overflow: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    padding: var(--size-4-2);
+}
+
+.supernote-folder-picker-entry {
+    display: flex;
+    align-items: center;
+}
+
+.supernote-folder-picker-toggle,
+.supernote-folder-picker-spacer {
+    flex: 0 0 28px;
+    width: 28px;
+}
+
+.modal .supernote-folder-picker-tree button.supernote-folder-picker-toggle {
+    padding: 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.modal .supernote-folder-picker-tree button.supernote-folder-picker-row {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    height: auto;
+    margin: 0;
+    padding: 4px 8px;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-align: left;
+    color: var(--text-normal);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.modal .supernote-folder-picker-tree button.supernote-folder-picker-row:hover,
+.modal .supernote-folder-picker-tree button.supernote-folder-picker-row.is-selected {
+    background: var(--background-modifier-hover);
+}
+
+.modal .supernote-folder-picker-tree button.supernote-folder-picker-row.is-selected {
+    color: var(--text-accent);
+}
+
+.modal .supernote-folder-picker-tree button:focus-visible {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: -2px;
+}
+
+.supernote-folder-picker-branch {
+    margin-left: 14px;
+    border-left: 1px solid var(--background-modifier-border);
+}
+
 .supernote-sync-interval-validation {
     color: var(--text-error);
 }
 
 .supernote-settings-hidden {
+    display: none;
+}
+
+.modal .setting-item.supernote-export-output-hidden {
     display: none;
 }
 

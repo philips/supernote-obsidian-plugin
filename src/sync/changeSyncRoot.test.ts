@@ -5,6 +5,11 @@ import { SyncRootChange } from './changeSyncRoot';
 import { ObsidianMirrorManifestStorage } from './obsidianMirrorManifestStorage';
 import { loadMirrorManifest, saveMirrorManifest } from './sharedMirrorManifestStore';
 
+vi.mock('../VaultFolderPickerModal', () => ({ VaultFolderPickerModal: class {
+    constructor(_app: App, _path: string | null, _allowRoot: boolean, private select: (folder: TFolder) => void) {}
+    open() { controls.chooseParent = (path: string) => this.select(Object.assign(new TFolder(), { path })); }
+} }));
+
 const controls = vi.hoisted(() => ({
     buttons: new Map<string, () => void>(),
     disabled: new Map<string, boolean>(),
@@ -116,11 +121,12 @@ beforeEach(() => { vi.clearAllMocks(); controls.buttons.clear(); controls.disabl
 it('stages an existing destination for move and leaves cancellation without a choice', async () => {
     const notes = Object.assign(new TFolder(), { path: 'Notes' });
     const app = { vault: { getAllLoadedFiles: () => [notes],
-        getAbstractFileByPath: (path: string) => path === 'Notes' ? notes : null } } as unknown as App;
+            getFolderByPath: (path: string) => path === 'Notes' ? notes : null } } as unknown as App;
     const modal = new ChangeSyncFolderModal(app, 'Mirror', true);
     const choice = modal.choose();
     expect(controls.disabled.get('Move files')).toBe(true);
     expect(controls.disabled.get('Leave files and start fresh')).toBe(true);
+    controls.buttons.get('Browse…')?.();
     controls.chooseParent('Notes');
     expect(controls.disabled.get('Move files')).toBe(false);
     expect(controls.disabled.get('Leave files and start fresh')).toBe(false);
@@ -135,10 +141,11 @@ it('stages an existing destination for move and leaves cancellation without a ch
 it('stages an existing folder and presents a single choice when there is nothing to move', async () => {
     const empty = Object.assign(new TFolder(), { path: 'Empty' });
     const app = { vault: { getAllLoadedFiles: () => [empty],
-        getAbstractFileByPath: (path: string) => path === 'Empty' ? empty : null } } as unknown as App;
+            getFolderByPath: (path: string) => path === 'Empty' ? empty : null } } as unknown as App;
     const choice = new ChangeSyncFolderModal(app, 'Mirror', false).choose();
     expect(controls.buttons.has('Move files')).toBe(false);
     expect(controls.disabled.get('Change destination')).toBe(true);
+    controls.buttons.get('Browse…')?.();
     controls.chooseParent('Empty');
     expect(controls.disabled.get('Change destination')).toBe(false);
     controls.buttons.get('Change destination')?.();
@@ -151,13 +158,14 @@ it('warns on occupied and invalid selections and enables actions only for an emp
     const nested = Object.assign(new TFolder(), { path: 'Mirror/Child' });
     const folders = [empty, occupied, nested];
     const app = { vault: { getAllLoadedFiles: () => folders,
-        getAbstractFileByPath: (path: string) => folders.find((folder) => folder.path === path) ?? null } } as unknown as App;
+        getFolderByPath: (path: string) => folders.find((folder) => folder.path === path) ?? null } } as unknown as App;
     const choice = new ChangeSyncFolderModal(app, 'Mirror', true).choose();
     const warning = controls.paragraphs.find((element) => element.cls === 'supernote-sync-folder-warning');
     expect(warning).toBeDefined();
     expect(controls.paragraphs.indexOf(warning!)).toBeLessThan(controls.paragraphs.findIndex(
         (element) => element.text.startsWith('Select an empty folder for the new location')));
     expect(warning?.hidden).toBe(true);
+    controls.buttons.get('Browse…')?.();
     for (const path of ['Occupied', 'Missing', 'Mirror/Child']) {
         controls.chooseParent(path);
         expect(warning).toMatchObject({ text: 'Select an empty vault folder', hidden: false });
