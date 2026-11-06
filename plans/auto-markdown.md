@@ -1,8 +1,9 @@
 # Automatic Markdown Export Design and Implementation Plan
 
-**Status:** Implementation started November 1, 2026. Settings model, staged
+**Status:** Implementation started November 1, 2026. Settings model, named
 mapping controls in both settings surfaces, and initial mapping validation are
-in place. Vault-event conversion, ownership protection, reporting, and
+in place. Adding, removing, or toggling a pair saves immediately. Vault-event
+conversion, ownership protection, reporting, and
 end-to-end UI validation are not implemented yet. Branch facts checked October
 31, 2026.
 
@@ -47,7 +48,8 @@ behaviors to redesign, not carry forward.
 Petrify's `packages/obsidian-plugin/src/settings.ts` and `settings-tab.ts`
 provide the better model for multiple mappings: an opt-in list of independently
 enabled watch/output pairs with Add, Remove, per-pair toggles, directory inputs,
-and staged Save. Adapt that UI pattern to vault-relative paths and this plugin's
+and staged Save. The current UI instead uses a named Add pair modal and saves
+changes immediately. Adapt the mapping model to vault-relative paths and this plugin's
 declarative and legacy settings surfaces. Its `WatcherPort` separates file
 events from conversion, while its parser registry suggests a future format
 boundary. But Petrify's `ChokidarWatcher` watches OS paths at depth zero rather
@@ -73,7 +75,7 @@ by that license.
   `Notes/Journal/day.md`, including for nested folders and vault-root files. The
   empty output is an explicit "same folder as source" option in each pair, not a
   separate shared output directory. Ignore generated `.md` events.
-- Validate each pair on Save and before writing: vault-relative canonical paths,
+- Validate each pair before saving and before writing: vault-relative canonical paths,
   directory/file collisions, traversal, and overlapping enabled watch
   directories (including an empty watch covering all). Reject configurations
   that can produce the same destination from different sources, including
@@ -169,7 +171,7 @@ by that license.
 
 1. Add the global toggle, independent error-log toggle, and stable-ID
    watch/output mappings in `src/settings.ts` with Add/Remove, per-pair enable,
-   vault-folder inputs, validation, and staged Save inspired by Petrify's UI.
+  vault-folder dropdowns in a named Add pair modal, validation, and immediate saves.
    Implement both the declarative settings definitions and the legacy
    `display()` fallback. Put these controls near Convert, not inside the active
    engine's schedule controls. Test defaults, persistence, invalid/overlapping

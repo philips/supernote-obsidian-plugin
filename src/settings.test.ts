@@ -4,21 +4,41 @@ import { DEFAULT_SETTINGS, markdownExportDestination, SupernoteSettingTab, valid
 import { trimSyncLog } from './sync/syncReporting';
 
 vi.mock('obsidian', () => {
-    const element = (): unknown => ({ createDiv: element, empty: () => {}, setText: () => {} });
+    const element = (): unknown => ({ createDiv: element, createEl: element, empty: () => {}, setText: () => {}, hidden: false });
     return {
+        TFolder: class TFolder { path = ''; },
+        Modal: class MockModal {
+            static current: MockModal;
+            contentEl = element();
+            app: unknown;
+            constructor(app: unknown) { this.app = app; MockModal.current = this; }
+            setTitle() {}
+            open() { (this as unknown as { onOpen(): void }).onOpen(); }
+            close() { (this as unknown as { onClose(): void }).onClose(); }
+        },
         PluginSettingTab: class PluginSettingTab {
             app: unknown;
             constructor(app: unknown) { this.app = app; }
         },
         Setting: class MockSetting {
-            static buttons: { label: string; click: () => void | Promise<void> }[] = [];
+            static buttons: { label: string; disabled: boolean; click: () => void | Promise<void> }[] = [];
+            static extraButtons: { name: string; click: () => void }[] = [];
+            static toggles: { name: string; change: (enabled: boolean) => void | Promise<void> }[] = [];
             static texts: { name: string; change: (value: string) => void }[] = [];
+            static dropdowns: { name: string; options: [string, string][]; change: (value: string) => void }[] = [];
+            static names: string[] = [];
             descEl = { createDiv: element };
             name = '';
-            setName(name: string) { this.name = name; return this; }
+            setName(name: string) { this.name = name; MockSetting.names.push(name); return this; }
             setDesc() { return this; }
             addToggle(configure: (toggle: unknown) => void) {
-                configure({ setValue: () => ({ onChange: () => {} }) });
+                const toggle = { name: this.name, change: (_enabled: boolean): void | Promise<void> => {} };
+                MockSetting.toggles.push(toggle);
+                const input = {
+                    setValue: () => input,
+                    onChange: (change: (enabled: boolean) => void | Promise<void>) => { toggle.change = change; },
+                };
+                configure(input);
                 return this;
             }
             addText(configure: (text: unknown) => void) {
@@ -30,13 +50,38 @@ vi.mock('obsidian', () => {
                 configure(input);
                 return this;
             }
+            addDropdown(configure: (dropdown: unknown) => void) {
+                const dropdown = { name: this.name, options: [] as [string, string][], change: (_value: string) => {} };
+                const input = {
+                    addOption: (value: string, label: string) => { dropdown.options.push([value, label]); return input; },
+                    onChange: (change: (value: string) => void) => { dropdown.change = change; },
+                };
+                MockSetting.dropdowns.push(dropdown);
+                configure(input);
+                return this;
+            }
+            addExtraButton(configure: (button: unknown) => void) {
+                const button = { name: this.name, click: () => {} };
+                MockSetting.extraButtons.push(button);
+                const input = {
+                    setIcon: () => input,
+                    setTooltip: () => input,
+                    onClick: (click: () => void) => { button.click = click; },
+                };
+                configure(input);
+                return this;
+            }
             addButton(configure: (button: unknown) => void) {
+                const button = { label: '', disabled: false, click: (() => {}) as () => void | Promise<void> };
+                MockSetting.buttons.push(button);
                 const input = {
                     setButtonText: (label: string) => {
-                        const button: { label: string; click: () => void | Promise<void> } = { label, click: () => {} };
-                        MockSetting.buttons.push(button);
-                        return { onClick: (click: () => void | Promise<void>) => { button.click = click; } };
+                        button.label = label;
+                        return input;
                     },
+                    setCta: () => input,
+                    setDisabled: (disabled: boolean) => { button.disabled = disabled; return input; },
+                    onClick: (click: () => void | Promise<void>) => { button.click = click; return input; },
                 };
                 configure(input);
                 return this;
@@ -67,6 +112,13 @@ describe('automatic Markdown export settings', () => {
     });
 
     it('rejects noncanonical paths, duplicate identities, overlapping watches and shared output roots', () => {
+        expect(validateMarkdownExportMappings([first, { ...first, id: 'second', name: '  ' }])).toMatch(/name/);
+        expect(validateMarkdownExportMappings([{ ...first, name: 'a'.repeat(81) }])).toMatch(/80 characters/);
+        expect(validateMarkdownExportMappings([{ ...first, name: 'Journal\nnotes' }])).toMatch(/control characters/);
+        expect(validateMarkdownExportMappings([{ ...first, name: 'Journal\u007fnotes' }])).toMatch(/control characters/);
+        expect(validateMarkdownExportMappings([{ ...first, name: 'Journal / notes' }])).toBeUndefined();
+        expect(validateMarkdownExportMappings([{ ...first, name: 'Journal' }, { ...first, id: 'second', name: 'journal', watchDir: 'Other' }])).toMatch(/name/);
+        expect(validateMarkdownExportMappings([first, { ...first, id: 'second', enabled: false }])).toMatch(/watch and output folders/);
         expect(validateMarkdownExportMappings([{ ...first, watchDir: '../Notes' }])).toMatch(/Watch folder/);
         expect(validateMarkdownExportMappings([{ ...first, watchDir: 'C:/Notes' }])).toMatch(/Watch folder/);
         expect(validateMarkdownExportMappings([{ ...first, watchDir: 'Notes/ ' }])).toMatch(/Watch folder/);
@@ -142,31 +194,79 @@ describe('automatic Markdown export settings', () => {
             .toMatch(/export log/);
     });
 
-    it('stages mapping edits until Save and refuses invalid drafts', async () => {
-        const settings = { ...DEFAULT_SETTINGS, markdownExportMappings: [first] };
+    it('saves additions, removals and enabled changes immediately, but not cancelled dialogs', async () => {
+        const namedFirst = { ...first, name: 'Existing' };
+        const settings = { ...DEFAULT_SETTINGS, markdownExportMappings: [namedFirst] };
         const saveSettings = vi.fn(async () => {});
-        const app = { vault: { getAbstractFileByPath: () => null, getFiles: () => [] } } as never;
+        const { TFolder, Modal } = await import('obsidian');
+        const folder = (path: string) => Object.assign(new TFolder(), { path });
+        const app = { vault: {
+            getAbstractFileByPath: () => null, getFiles: () => [],
+            getAllLoadedFiles: () => [folder('Notes'), folder('Journal'), folder('Exports')],
+        } } as never;
         const tab = new SupernoteSettingTab(app, { settings, saveSettings, ...engineRegistry } as never);
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Automatic Markdown Export');
         if (!group || !('items' in group)) throw new Error('Automatic Markdown Export group missing');
         const editor = group.items.find((item) => 'name' in item && item.name === 'Watch and output folders');
         if (!editor || !('render' in editor)) throw new Error('Mapping editor missing');
         const controls = Setting as unknown as {
-            buttons: { label: string; click: () => void | Promise<void> }[];
+            buttons: { label: string; disabled: boolean; click: () => void | Promise<void> }[];
             texts: { name: string; change: (value: string) => void }[];
+            dropdowns: { name: string; options: [string, string][]; change: (value: string) => void }[];
+            names: string[];
+            extraButtons: { name: string; click: () => void }[];
+            toggles: { name: string; change: (enabled: boolean) => void | Promise<void> }[];
         };
         controls.buttons.length = 0;
         controls.texts.length = 0;
+        controls.dropdowns.length = 0;
+        controls.names.length = 0;
+        controls.extraButtons.length = 0;
+        controls.toggles.length = 0;
         editor.render(new Setting({} as never));
-        controls.texts.find((text) => text.name === 'Watch folder')?.change('../unsafe');
-        await controls.buttons.find((button) => button.label === 'Save pairs')?.click();
+        const add = controls.buttons.find((button) => button.label === 'Add pair');
+        const modal = Modal as unknown as { current: { close(): void } };
+        const cancelled = add?.click();
+        modal.current.close();
+        await cancelled;
+        expect(controls.buttons.filter((button) => button.label === 'Remove pair')).toHaveLength(0);
         expect(saveSettings).not.toHaveBeenCalled();
-        expect(settings.markdownExportMappings).toEqual([first]);
+        expect(settings.markdownExportMappings).toEqual([namedFirst]);
 
-        controls.texts.find((text) => text.name === 'Watch folder')?.change('Journal');
-        await controls.buttons.find((button) => button.label === 'Save pairs')?.click();
-        expect(settings.markdownExportMappings).toEqual([{ ...first, watchDir: 'Journal' }]);
+        const added = add?.click();
+        expect(controls.dropdowns.find((dropdown) => dropdown.name === 'Watch folder')?.options[0]).toEqual(['', '(Whole vault)']);
+        expect(controls.dropdowns.find((dropdown) => dropdown.name === 'Output folder')?.options[0]).toEqual(['', '(Beside source)']);
+        const name = controls.texts.slice().reverse().find((text) => text.name === 'Name');
+        const watch = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Watch folder');
+        const output = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Output folder');
+        const ok = controls.buttons.slice().reverse().find((button) => button.label === 'OK');
+        expect(ok?.disabled).toBe(true);
+        name?.change('a'.repeat(81));
+        expect(ok?.disabled).toBe(true);
+        name?.change('Notes\nJournal');
+        expect(ok?.disabled).toBe(true);
+        name?.change(' existing ');
+        expect(ok?.disabled).toBe(true);
+        name?.change('Journal');
+        watch?.change('Notes');
+        output?.change('Exports');
+        expect(ok?.disabled).toBe(true);
+        watch?.change('Journal');
+        expect(ok?.disabled).toBe(true);
+        output?.change('');
+        expect(ok?.disabled).toBe(false);
+        await ok?.click();
+        await added;
+        expect(controls.names).toContain('Journal');
+        expect(controls.buttons.some((button) => button.label === 'Save pairs')).toBe(false);
+        expect(settings.markdownExportMappings).toEqual([namedFirst, expect.objectContaining({ name: 'Journal', watchDir: 'Journal', outputDir: '', enabled: true })]);
         expect(saveSettings).toHaveBeenCalledOnce();
+        await controls.toggles.slice().reverse().find((toggle) => toggle.name === 'Journal')?.change(false);
+        expect(settings.markdownExportMappings[1].enabled).toBe(false);
+        expect(saveSettings).toHaveBeenCalledTimes(2);
+        controls.extraButtons.slice().reverse().find((button) => button.name === 'Journal')?.click();
+        await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(3));
+        expect(settings.markdownExportMappings).toEqual([namedFirst]);
     });
 });
 

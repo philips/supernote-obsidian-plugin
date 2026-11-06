@@ -6,6 +6,7 @@ import { SyncManifest } from './sync/directIP/deviceSync';
 import { SyncEngineId } from './sync/syncAbstraction';
 import { validateFileExtensionAllowlist } from './sync/syncFilters';
 import { trimSyncLog } from './sync/syncReporting';
+import { MarkdownExportPairModal } from './MarkdownExportPairModal';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
@@ -37,6 +38,7 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
 
 export interface MarkdownExportMapping {
     id: string;
+    name?: string;
     enabled: boolean;
     watchDir: string;
     outputDir: string;
@@ -61,9 +63,25 @@ export function markdownExportDestination(mapping: MarkdownExportMapping, source
 
 export function validateMarkdownExportMappings(mappings: MarkdownExportMapping[], app?: App): string | undefined {
     const ids = new Set<string>();
+    const names = new Set<string>();
+    const folders = new Set<string>();
     for (const mapping of mappings) {
         if (!mapping.id || ids.has(mapping.id)) return 'Each mapping needs a unique ID';
         ids.add(mapping.id);
+        if (mapping.name !== undefined) {
+            const trimmedName = mapping.name.trim();
+            if (!trimmedName) return 'Enter a name for each pair';
+            if (trimmedName.length > 80) return 'Pair names must be 80 characters or fewer';
+            if ([...trimmedName].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+                return 'Pair names cannot contain line breaks or control characters';
+            }
+            const name = trimmedName.toLocaleLowerCase();
+            if (names.has(name)) return 'A pair with that name already exists';
+            names.add(name);
+        }
+        const folderKey = JSON.stringify([mapping.watchDir, mapping.outputDir]);
+        if (folders.has(folderKey)) return 'A pair with those watch and output folders already exists';
+        folders.add(folderKey);
         const watchError = validateVaultDirectory(mapping.watchDir);
         if (watchError) return `Watch folder: ${watchError}`;
         const outputError = validateVaultDirectory(mapping.outputDir);
@@ -234,7 +252,6 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
 
 export class SupernoteSettingTab extends PluginSettingTab {
     plugin: SupernotePlugin;
-    private markdownExportDraft?: MarkdownExportMapping[];
 
     constructor(app: App, plugin: SupernotePlugin) {
         super(app, plugin);
@@ -248,38 +265,52 @@ export class SupernoteSettingTab extends PluginSettingTab {
     private renderMarkdownExportMappings(setting: Setting): void {
         setting.setName('Watch and output folders')
             .setDesc('Watch .note files in each vault folder and write Markdown to its output folder. Empty watch means the whole vault; empty output means beside the source.');
-        this.markdownExportDraft ??= (this.plugin.settings.markdownExportMappings ?? []).map((mapping) => ({ ...mapping }));
         const editor = setting.descEl.createDiv({ cls: 'supernote-markdown-export-mappings' });
         const message = editor.createDiv();
         const rows = editor.createDiv();
+        const persist = async (mappings: MarkdownExportMapping[]) => {
+            const error = validateMarkdownExportMappings(mappings, this.app);
+            if (error) {
+                message.setText(error);
+                return false;
+            }
+            const previous = this.plugin.settings.markdownExportMappings;
+            this.plugin.settings.markdownExportMappings = mappings;
+            try {
+                await this.plugin.saveSettings();
+            } catch (error) {
+                this.plugin.settings.markdownExportMappings = previous;
+                message.setText(error instanceof Error ? error.message : 'Could not save export pairs');
+                return false;
+            }
+            message.setText('');
+            renderRows();
+            return true;
+        };
         const renderRows = () => {
             rows.empty();
-            for (const [index, mapping] of this.markdownExportDraft!.entries()) {
-                const row = rows.createDiv({ cls: 'supernote-markdown-export-mapping' });
-                new Setting(row).setName(`Pair ${index + 1}`).addToggle((toggle) => toggle
-                    .setValue(mapping.enabled).onChange((enabled) => { mapping.enabled = enabled; }));
-                new Setting(row).setName('Watch folder').addText((text) => text
-                    .setPlaceholder('Whole vault').setValue(mapping.watchDir)
-                    .onChange((value) => { mapping.watchDir = value; }));
-                new Setting(row).setName('Output folder').addText((text) => text
-                    .setPlaceholder('Beside source').setValue(mapping.outputDir)
-                    .onChange((value) => { mapping.outputDir = value; }));
-                new Setting(row).addButton((button) => button.setButtonText('Remove pair').onClick(() => {
-                    this.markdownExportDraft!.splice(index, 1);
-                    renderRows();
-                }));
+            for (const [index, mapping] of (this.plugin.settings.markdownExportMappings ?? []).entries()) {
+                new Setting(rows).setName(mapping.name ?? `Pair ${index + 1}`)
+                    .setDesc(`${mapping.watchDir || '(Whole vault)'} → ${mapping.outputDir || '(Beside source)'}`)
+                    .addToggle((toggle) => toggle.setValue(mapping.enabled)
+                        .onChange(async (enabled) => {
+                            if (!await persist(this.plugin.settings.markdownExportMappings.map((pair) =>
+                                pair.id === mapping.id ? { ...pair, enabled } : pair))) renderRows();
+                        }))
+                    .addExtraButton((button) => button.setIcon('trash-2').setTooltip('Remove pair').onClick(() => {
+                        void persist(this.plugin.settings.markdownExportMappings.filter((pair) => pair.id !== mapping.id));
+                    }));
             }
         };
         renderRows();
-        new Setting(editor).addButton((button) => button.setButtonText('Add pair').onClick(() => {
-            this.markdownExportDraft!.push({ id: crypto.randomUUID(), enabled: true, watchDir: '', outputDir: '' });
-            renderRows();
-        })).addButton((button) => button.setButtonText('Save pairs').onClick(async () => {
-            const error = validateMarkdownExportMappings(this.markdownExportDraft!, this.app);
-            message.setText(error ?? '');
-            if (error) return;
-            this.plugin.settings.markdownExportMappings = this.markdownExportDraft!.map((mapping) => ({ ...mapping }));
-            await this.plugin.saveSettings();
+        new Setting(editor).addButton((button) => button.setButtonText('Add pair').onClick(async () => {
+            const choice = await new MarkdownExportPairModal(this.app, this.plugin.settings.markdownExportMappings, (candidate) =>
+                validateMarkdownExportMappings([
+                    ...this.plugin.settings.markdownExportMappings,
+                    { ...candidate, id: crypto.randomUUID(), enabled: true },
+                ], this.app)).choose();
+            if (!choice) return;
+            await persist([...this.plugin.settings.markdownExportMappings, { ...choice, id: crypto.randomUUID(), enabled: true }]);
         }));
     }
 
