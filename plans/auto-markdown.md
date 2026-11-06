@@ -1,7 +1,10 @@
 # Automatic Markdown Export Design and Implementation Plan
 
-**Status:** Proposal for review; no feature code has been ported. Branch facts
-checked October 31, 2026.
+**Status:** Implementation started November 1, 2026. Settings model, staged
+mapping controls in both settings surfaces, and initial mapping validation are
+in place. Vault-event conversion, ownership protection, reporting, and
+end-to-end UI validation are not implemented yet. Branch facts checked October
+31, 2026.
 
 The implementation target is `obsidian-journal-companion` at
 `C:\Code\SolerSoft\obsidian-journal-companion`. Petrify at

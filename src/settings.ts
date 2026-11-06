@@ -35,6 +35,76 @@ export const PAGE_EXPORT_IMAGE_FORMAT_LABELS: Record<PageExportImageFormat, stri
     svg: 'SVG',
 };
 
+export interface MarkdownExportMapping {
+    id: string;
+    enabled: boolean;
+    watchDir: string;
+    outputDir: string;
+}
+
+function validateVaultDirectory(path: string): string | undefined {
+    if (path === '') return;
+    if (path.startsWith('/') || path.endsWith('/') || path.includes('\\') || path.includes(':') ||
+        path.split('/').some((part) => part !== part.trim() || part === '' || part === '.' || part === '..' ||
+            [...part].some((character) => character.charCodeAt(0) < 32))) {
+        return 'Use a vault-relative folder path without empty, . or .. segments';
+    }
+}
+
+export function markdownExportDestination(mapping: MarkdownExportMapping, sourcePath: string): string {
+    const relative = mapping.outputDir
+        ? sourcePath.slice(mapping.watchDir ? mapping.watchDir.length + 1 : 0)
+        : sourcePath;
+    const name = `${relative.slice(0, -'.note'.length)}.md`;
+    return mapping.outputDir ? `${mapping.outputDir}/${name}` : name;
+}
+
+export function validateMarkdownExportMappings(mappings: MarkdownExportMapping[], app?: App): string | undefined {
+    const ids = new Set<string>();
+    for (const mapping of mappings) {
+        if (!mapping.id || ids.has(mapping.id)) return 'Each mapping needs a unique ID';
+        ids.add(mapping.id);
+        const watchError = validateVaultDirectory(mapping.watchDir);
+        if (watchError) return `Watch folder: ${watchError}`;
+        const outputError = validateVaultDirectory(mapping.outputDir);
+        if (outputError) return `Output folder: ${outputError}`;
+        for (const folder of [mapping.watchDir, mapping.outputDir]) {
+            const segments = folder.split('/');
+            for (let count = 1; count <= segments.length && folder; count++) {
+                const existing = app?.vault.getAbstractFileByPath(segments.slice(0, count).join('/'));
+                if (existing && 'extension' in existing) return `Folder path is occupied by a file: ${existing.path}`;
+            }
+        }
+    }
+    const active = mappings.filter((mapping) => mapping.enabled);
+    for (let index = 0; index < active.length; index++) {
+        for (const other of active.slice(index + 1)) {
+            const first = active[index].watchDir;
+            const second = other.watchDir;
+            if (!first || !second || first === second || first.startsWith(`${second}/`) || second.startsWith(`${first}/`)) {
+                return 'Enabled watch folders must not overlap';
+            }
+            if (active[index].outputDir && active[index].outputDir === other.outputDir) {
+                return 'Pairs with different watch folders cannot share the same output folder';
+            }
+        }
+    }
+    const destinations = new Map<string, string>();
+    for (const file of app?.vault.getFiles() ?? []) {
+        if (file.extension.toLowerCase() !== 'note') continue;
+        for (const mapping of active) {
+            if (mapping.watchDir && !file.path.startsWith(`${mapping.watchDir}/`)) continue;
+            const destination = markdownExportDestination(mapping, file.path);
+            const logPath = mapping.outputDir ? `${mapping.outputDir}/Markdown Export Log.md` : 'Markdown Export Log.md';
+            if (destination === logPath) return `Export would overwrite the Markdown export log: ${destination}`;
+            if (destinations.has(destination) && destinations.get(destination) !== file.path) {
+                return `Multiple sources would write to ${destination}`;
+            }
+            destinations.set(destination, file.path);
+        }
+    }
+}
+
 function validateSyncMinutes(value: string): string | undefined {
     if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
         return 'Enter a positive whole number of minutes';
@@ -121,6 +191,9 @@ export interface SupernotePluginSettings extends CustomDictionarySettings {
     syncFolder: string;
     syncLogEnabled: boolean;
     syncLogHistoryCount: number;
+    automaticMarkdownExportEnabled: boolean;
+    markdownExportErrorLogEnabled: boolean;
+    markdownExportMappings: MarkdownExportMapping[];
     /**
      * Device path glob patterns (comma/newline separated) scoping which
      * notes sync considers. Empty = sync everything. A single text field
@@ -150,6 +223,9 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
     syncFolder: 'Supernote sync',
     syncLogEnabled: true,
     syncLogHistoryCount: 8,
+    automaticMarkdownExportEnabled: false,
+    markdownExportErrorLogEnabled: true,
+    markdownExportMappings: [],
     syncPathFiltersRaw: '',
     syncFileExtensionsRaw: '.note, .spd',
     noteSyncState: {},
@@ -158,6 +234,7 @@ export const DEFAULT_SETTINGS: SupernotePluginSettings = {
 
 export class SupernoteSettingTab extends PluginSettingTab {
     plugin: SupernotePlugin;
+    private markdownExportDraft?: MarkdownExportMapping[];
 
     constructor(app: App, plugin: SupernotePlugin) {
         super(app, plugin);
@@ -166,6 +243,44 @@ export class SupernoteSettingTab extends PluginSettingTab {
 
     private syncEngineLabels(): Record<string, string> {
         return Object.fromEntries(this.plugin.getSyncEngines().map((engine) => [engine.id, engine.name]));
+    }
+
+    private renderMarkdownExportMappings(setting: Setting): void {
+        setting.setName('Watch and output folders')
+            .setDesc('Watch .note files in each vault folder and write Markdown to its output folder. Empty watch means the whole vault; empty output means beside the source.');
+        this.markdownExportDraft ??= (this.plugin.settings.markdownExportMappings ?? []).map((mapping) => ({ ...mapping }));
+        const editor = setting.descEl.createDiv({ cls: 'supernote-markdown-export-mappings' });
+        const message = editor.createDiv();
+        const rows = editor.createDiv();
+        const renderRows = () => {
+            rows.empty();
+            for (const [index, mapping] of this.markdownExportDraft!.entries()) {
+                const row = rows.createDiv({ cls: 'supernote-markdown-export-mapping' });
+                new Setting(row).setName(`Pair ${index + 1}`).addToggle((toggle) => toggle
+                    .setValue(mapping.enabled).onChange((enabled) => { mapping.enabled = enabled; }));
+                new Setting(row).setName('Watch folder').addText((text) => text
+                    .setPlaceholder('Whole vault').setValue(mapping.watchDir)
+                    .onChange((value) => { mapping.watchDir = value; }));
+                new Setting(row).setName('Output folder').addText((text) => text
+                    .setPlaceholder('Beside source').setValue(mapping.outputDir)
+                    .onChange((value) => { mapping.outputDir = value; }));
+                new Setting(row).addButton((button) => button.setButtonText('Remove pair').onClick(() => {
+                    this.markdownExportDraft!.splice(index, 1);
+                    renderRows();
+                }));
+            }
+        };
+        renderRows();
+        new Setting(editor).addButton((button) => button.setButtonText('Add pair').onClick(() => {
+            this.markdownExportDraft!.push({ id: crypto.randomUUID(), enabled: true, watchDir: '', outputDir: '' });
+            renderRows();
+        })).addButton((button) => button.setButtonText('Save pairs').onClick(async () => {
+            const error = validateMarkdownExportMappings(this.markdownExportDraft!, this.app);
+            message.setText(error ?? '');
+            if (error) return;
+            this.plugin.settings.markdownExportMappings = this.markdownExportDraft!.map((mapping) => ({ ...mapping }));
+            await this.plugin.saveSettings();
+        }));
     }
 
     private renderSyncInterval(setting: Setting): void {
@@ -384,6 +499,41 @@ export class SupernoteSettingTab extends PluginSettingTab {
                                 }
                             })();
                         },
+                    },
+                ],
+            },
+            {
+                type: 'group',
+                heading: 'Automatic Markdown Export',
+                items: [
+                    {
+                        name: 'Enable automatic export',
+                        render: (setting) => {
+                            setting.setDesc('Export watched .note files when they change. Independent of automatic sync. Off by default.')
+                                .addToggle((toggle) => toggle.setValue(this.plugin.settings.automaticMarkdownExportEnabled)
+                                    .onChange(async (enabled) => {
+                                        this.plugin.settings.automaticMarkdownExportEnabled = enabled;
+                                        await this.plugin.saveSettings();
+                                        (this as PluginSettingTab & { update?: () => void }).update?.();
+                                    }));
+                        },
+                    },
+                    {
+                        name: 'Markdown export error log',
+                        visible: () => this.plugin.settings.automaticMarkdownExportEnabled,
+                        render: (setting) => {
+                            setting.setDesc('Log export errors and protected destinations in each output root. Successful exports are not logged.')
+                                .addToggle((toggle) => toggle.setValue(this.plugin.settings.markdownExportErrorLogEnabled)
+                                    .onChange(async (enabled) => {
+                                        this.plugin.settings.markdownExportErrorLogEnabled = enabled;
+                                        await this.plugin.saveSettings();
+                                    }));
+                        },
+                    },
+                    {
+                        name: 'Watch and output folders',
+                        visible: () => this.plugin.settings.automaticMarkdownExportEnabled,
+                        render: (setting) => this.renderMarkdownExportMappings(setting),
                     },
                 ],
             },
@@ -653,6 +803,30 @@ export class SupernoteSettingTab extends PluginSettingTab {
             .setDesc('You can add custom entries to fix errors in supernote\'s recognized text when it is converted to Markdown. Raw files copied by sync engines are not modified.');
         customDictionarySetting.settingEl.classList.add('supernote-settings-custom-dictionary-setting');
         createCustomDictionarySettingsUI(customDictionarySetting.settingEl, this.plugin);
+
+        sectionEl = createSection('Automatic Markdown Export');
+        const markdownExportSettingsEl = sectionEl.createDiv();
+        new Setting(sectionEl)
+            .setName('Enable automatic export')
+            .setDesc('Export watched .note files when they change. Independent of automatic sync. Off by default.')
+            .addToggle((toggle) => toggle.setValue(this.plugin.settings.automaticMarkdownExportEnabled)
+                .onChange(async (enabled) => {
+                    this.plugin.settings.automaticMarkdownExportEnabled = enabled;
+                    await this.plugin.saveSettings();
+                    markdownExportSettingsEl.hidden = !enabled;
+                }));
+        markdownExportSettingsEl.hidden = !this.plugin.settings.automaticMarkdownExportEnabled;
+
+        new Setting(markdownExportSettingsEl)
+            .setName('Markdown export error log')
+            .setDesc('Log export errors and protected destinations in each output root. Successful exports are not logged.')
+            .addToggle((toggle) => toggle.setValue(this.plugin.settings.markdownExportErrorLogEnabled)
+                .onChange(async (enabled) => {
+                    this.plugin.settings.markdownExportErrorLogEnabled = enabled;
+                    await this.plugin.saveSettings();
+                }));
+
+        this.renderMarkdownExportMappings(new Setting(markdownExportSettingsEl));
 
         sectionEl = createSection('Date-based import');
         new Setting(sectionEl)

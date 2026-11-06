@@ -2,11 +2,6 @@
 
 ## Project overview
 
-- The core project is `obsidian-journal-companion` at
-  `C:\Code\SolerSoft\obsidian-journal-companion` (formerly
-  `obsidian-supernote-companion`). Other workspace folders may be reference
-  implementations; do not treat them as the target project unless explicitly
-  requested. Keep edits and project-specific commands rooted here.
 - An Obsidian community plugin (TypeScript → bundled JavaScript) for viewing,
   exporting, and importing Supernote `*.note` files, plus device screen
   mirroring and Wi-Fi file transfer.
@@ -16,6 +11,33 @@
 - Plugin ID is `supernote` (see `manifest.json`) — never change this; it's
   Obsidian's stable identifier for installs, settings storage, and the community
   plugin listing.
+
+## Important Locations and Resources
+
+- The core project is `obsidian-journal-companion` at
+  `C:\Code\SolerSoft\obsidian-journal-companion` (formerly
+  `obsidian-supernote-companion`).
+- A test vault is `Marie` at `C:\Code\JBienz\Obsidian\Marie`. The plugin is
+  installed there though a symbolic link and is kept updated through
+  `npm run dev` and Obsidian Hot Reload.
+- Other workspace folders may be reference implementations; do not treat them as
+  the target project unless explicitly requested. Keep edits and
+  project-specific commands rooted here.
+- The Obsidian Hot Reload plugin is installed and enabled.
+- A configured Obsidian Local REST API MCP server in VS Code can list registered
+  Obsidian commands and invoke them, which is useful for narrow in-app checks.
+  An `OK` response confirms dispatch, not completion of an asynchronous command;
+  verify a user-visible result or explicit non-secret postcondition as well.
+
+## Before starting work
+
+- The command `npm run dev` should be executed once as a long-running background
+  task before development begins. This ensures that changes are observed and
+  automatically built. Before starting `npm run dev`, check whether an esbuild
+  watcher is already running for the current project. Reuse an existing watcher
+  rather than starting a duplicate. If the process cannot be confidently
+  associated with the current project, do not terminate it or assume it is safe
+  to replace.
 
 ## Autonomous blocks of work
 
@@ -93,10 +115,6 @@ npm test                              # vitest run
   renderer process. Keep the debugging port bound to localhost; do not expose it
   to the network. This attaches to the Electron renderer, not Obsidian's main
   process.
-- A configured Obsidian Local REST API MCP server in VS Code can list registered
-  Obsidian commands and invoke them, which is useful for narrow in-app checks.
-  An `OK` response confirms dispatch, not completion of an asynchronous command;
-  verify a user-visible result or explicit non-secret postcondition as well.
 - Use synthetic credentials and a test vault for automated checks. Never expose
   tokens, account identifiers, filenames, paths, or response bodies in command
   output or diagnostic markers.
