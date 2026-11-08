@@ -6,7 +6,7 @@ import { SyncManifest } from './sync/directIP/deviceSync';
 import { SyncEngineId } from './sync/syncAbstraction';
 import { validateFileExtensionAllowlist } from './sync/syncFilters';
 import { trimSyncLog } from './sync/syncReporting';
-import { MarkdownExportPairModal } from './MarkdownExportPairModal';
+import { MarkdownExportFolderModal } from './MarkdownExportFolderModal';
 
 export const IP_VALIDATION_PATTERN = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
 
@@ -42,13 +42,24 @@ export interface MarkdownExportMapping {
     enabled: boolean;
     watchDir: string;
     outputDir: string;
+    noteConversion?: NoteConversion;
 }
+
+export type NoteConversion = 'markdown' | 'png' | 'svg';
+
+export const NOTE_CONVERSION_LABELS: Record<NoteConversion, string> = {
+    markdown: 'Markdown, no page attachment',
+    png: 'Markdown with a PNG page attachment',
+    svg: 'Markdown with a SVG page attachment',
+};
 
 export interface MarkdownExportRecord {
     mappingId: string;
     source: string;
     destination: string;
     hash: string;
+    sourceHash?: string;
+    attachments?: Record<string, string>;
 }
 
 export interface MarkdownExportMove {
@@ -79,20 +90,21 @@ export function validateMarkdownExportMappings(mappings: MarkdownExportMapping[]
     const folders = new Set<string>();
     for (const mapping of mappings) {
         if (!mapping.id || ids.has(mapping.id)) return 'Each mapping needs a unique ID';
+        if (mapping.noteConversion && !Object.hasOwn(NOTE_CONVERSION_LABELS, mapping.noteConversion)) return 'Invalid .Note conversion';
         ids.add(mapping.id);
         if (mapping.name !== undefined) {
             const trimmedName = mapping.name.trim();
-            if (!trimmedName) return 'Enter a name for each pair';
-            if (trimmedName.length > 80) return 'Pair names must be 80 characters or fewer';
+            if (!trimmedName) return 'Enter a name for each folder';
+            if (trimmedName.length > 80) return 'Folder names must be 80 characters or fewer';
             if ([...trimmedName].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
-                return 'Pair names cannot contain line breaks or control characters';
+                return 'Folder names cannot contain line breaks or control characters';
             }
             const name = trimmedName.toLocaleLowerCase();
-            if (names.has(name)) return 'A pair with that name already exists';
+            if (names.has(name)) return 'A folder with that name already exists';
             names.add(name);
         }
         const folderKey = JSON.stringify([mapping.watchDir, mapping.outputDir]);
-        if (folders.has(folderKey)) return 'A pair with those watch and output folders already exists';
+        if (folders.has(folderKey)) return 'A folder with those watch and output folders already exists';
         folders.add(folderKey);
         const watchError = validateVaultDirectory(mapping.watchDir);
         if (watchError) return `Watch folder: ${watchError}`;
@@ -115,7 +127,7 @@ export function validateMarkdownExportMappings(mappings: MarkdownExportMapping[]
                 return 'Enabled watch folders must not overlap';
             }
             if (active[index].outputDir && active[index].outputDir === other.outputDir) {
-                return 'Pairs with different watch folders cannot share the same output folder';
+                return 'Folders with different watch folders cannot share the same output folder';
             }
         }
     }
@@ -281,8 +293,8 @@ export class SupernoteSettingTab extends PluginSettingTab {
     }
 
     private renderMarkdownExportMappings(setting: Setting): void {
-        setting.setName('Watch and output folders')
-            .setDesc('Watch .note files in each vault folder and write Markdown to its output folder. Empty watch means the whole vault; empty output means beside the source.');
+        setting.setName('Watch folders')
+            .setDesc('Monitor .note files in vault folders and export them as Markdown in a chosen format. Select a destination folder or save beside the source.');
         const editor = setting.descEl.createDiv({ cls: 'supernote-markdown-export-mappings' });
         const message = editor.createDiv();
         const rows = editor.createDiv();
@@ -298,7 +310,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                 await this.plugin.saveSettings();
             } catch (error) {
                 this.plugin.settings.markdownExportMappings = previous;
-                message.setText(error instanceof Error ? error.message : 'Could not save export pairs');
+                message.setText(error instanceof Error ? error.message : 'Could not save export folders');
                 return false;
             }
             message.setText('');
@@ -308,21 +320,31 @@ export class SupernoteSettingTab extends PluginSettingTab {
         const renderRows = () => {
             rows.empty();
             for (const [index, mapping] of (this.plugin.settings.markdownExportMappings ?? []).entries()) {
-                new Setting(rows).setName(mapping.name ?? `Pair ${index + 1}`)
+                new Setting(rows).setName(mapping.name ?? `Folder ${index + 1}`)
                     .setDesc(`${mapping.watchDir || '(Whole vault)'} → ${mapping.outputDir || '(Beside source)'}`)
                     .addToggle((toggle) => toggle.setValue(mapping.enabled)
                         .onChange(async (enabled) => {
                             if (!await persist(this.plugin.settings.markdownExportMappings.map((pair) =>
                                 pair.id === mapping.id ? { ...pair, enabled } : pair))) renderRows();
                         }))
-                    .addExtraButton((button) => button.setIcon('trash-2').setTooltip('Remove pair').onClick(() => {
+                    .addExtraButton((button) => button.setIcon('pencil').setTooltip('Edit folder').onClick(() => {
+                        const otherFolders = this.plugin.settings.markdownExportMappings.filter((folder) => folder.id !== mapping.id);
+                        void new MarkdownExportFolderModal(this.app, otherFolders, (candidate) =>
+                            validateMarkdownExportMappings([...otherFolders, { ...mapping, ...candidate }], this.app), mapping)
+                            .choose().then(async (choice) => {
+                                if (!choice) return;
+                                await persist(this.plugin.settings.markdownExportMappings.map((folder) =>
+                                    folder.id === mapping.id ? { ...folder, ...choice } : folder));
+                            });
+                    }))
+                    .addExtraButton((button) => button.setIcon('trash-2').setTooltip('Remove folder').onClick(() => {
                         void persist(this.plugin.settings.markdownExportMappings.filter((pair) => pair.id !== mapping.id));
                     }));
             }
         };
         renderRows();
-        new Setting(editor).addButton((button) => button.setButtonText('Add pair').onClick(async () => {
-            const choice = await new MarkdownExportPairModal(this.app, this.plugin.settings.markdownExportMappings, (candidate) =>
+        new Setting(editor).addButton((button) => button.setButtonText('Add folder').onClick(async () => {
+            const choice = await new MarkdownExportFolderModal(this.app, this.plugin.settings.markdownExportMappings, (candidate) =>
                 validateMarkdownExportMappings([
                     ...this.plugin.settings.markdownExportMappings,
                     { ...candidate, id: crypto.randomUUID(), enabled: true },
@@ -580,7 +602,7 @@ export class SupernoteSettingTab extends PluginSettingTab {
                         },
                     },
                     {
-                        name: 'Watch and output folders',
+                        name: 'Watch folders',
                         visible: () => this.plugin.settings.automaticMarkdownExportEnabled,
                         render: (setting) => this.renderMarkdownExportMappings(setting),
                     },

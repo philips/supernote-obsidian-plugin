@@ -21,8 +21,9 @@ vi.mock('obsidian', () => {
             static current: MockModal;
             contentEl = element();
             app: unknown;
+            title = '';
             constructor(app: unknown) { this.app = app; MockModal.current = this; }
-            setTitle() {}
+            setTitle(title: string) { this.title = title; }
             open() { (this as unknown as { onOpen(): void }).onOpen(); }
             close() { (this as unknown as { onClose(): void }).onClose(); }
         },
@@ -35,7 +36,7 @@ vi.mock('obsidian', () => {
             static extraButtons: { name: string; click: () => void }[] = [];
             static toggles: { name: string; change: (enabled: boolean) => void | Promise<void> }[] = [];
             static texts: { name: string; change: (value: string) => void }[] = [];
-            static dropdowns: { name: string; options: [string, string][]; change: (value: string) => void }[] = [];
+            static dropdowns: { name: string; value: string; options: [string, string][]; change: (value: string) => void }[] = [];
             static names: string[] = [];
             static rows: { name: string; classes: Set<string> }[] = [];
             descEl = { createDiv: element };
@@ -74,9 +75,10 @@ vi.mock('obsidian', () => {
                 return this;
             }
             addDropdown(configure: (dropdown: unknown) => void) {
-                const dropdown = { name: this.name, options: [] as [string, string][], change: (_value: string) => {} };
+                const dropdown = { name: this.name, value: '', options: [] as [string, string][], change: (_value: string) => {} };
                 const input = {
                     addOption: (value: string, label: string) => { dropdown.options.push([value, label]); return input; },
+                    setValue: (value: string) => { dropdown.value = value; return input; },
                     onChange: (change: (value: string) => void) => { dropdown.change = change; },
                 };
                 MockSetting.dropdowns.push(dropdown);
@@ -168,7 +170,7 @@ describe('automatic Markdown export settings', () => {
         expect(convert.items.map((item) => 'name' in item && item.name)).toContain('Export current page as');
         expect(convert.items.map((item) => 'name' in item && item.name)).not.toContain('Watch and output folders');
         expect(exportGroup.items.map((item) => 'name' in item && item.name)).toEqual([
-            'Enable automatic export', 'Markdown export error log', 'Watch and output folders',
+            'Enable automatic export', 'Markdown export error log', 'Watch folders',
         ]);
         const [enable, ...dependent] = exportGroup.items;
         expect(dependent.every((item) => 'visible' in item && item.visible?.() === false)).toBe(true);
@@ -230,12 +232,12 @@ describe('automatic Markdown export settings', () => {
         const tab = new SupernoteSettingTab(app, { settings, saveSettings, ...engineRegistry } as never);
         const group = tab.getSettingDefinitions().find((item) => 'heading' in item && item.heading === 'Automatic Markdown Export');
         if (!group || !('items' in group)) throw new Error('Automatic Markdown Export group missing');
-        const editor = group.items.find((item) => 'name' in item && item.name === 'Watch and output folders');
+        const editor = group.items.find((item) => 'name' in item && item.name === 'Watch folders');
         if (!editor || !('render' in editor)) throw new Error('Mapping editor missing');
         const controls = Setting as unknown as {
             buttons: { name: string; label: string; disabled: boolean; click: () => void | Promise<void> }[];
             texts: { name: string; change: (value: string) => void }[];
-            dropdowns: { name: string; options: [string, string][]; change: (value: string) => void }[];
+            dropdowns: { name: string; value: string; options: [string, string][]; change: (value: string) => void }[];
             names: string[];
             rows: { name: string; classes: Set<string> }[];
             extraButtons: { name: string; click: () => void }[];
@@ -249,12 +251,12 @@ describe('automatic Markdown export settings', () => {
         controls.extraButtons.length = 0;
         controls.toggles.length = 0;
         editor.render(new Setting({} as never));
-        const add = controls.buttons.find((button) => button.label === 'Add pair');
+        const add = controls.buttons.find((button) => button.label === 'Add folder');
         const modal = Modal as unknown as { current: { close(): void } };
         const cancelled = add?.click();
         modal.current.close();
         await cancelled;
-        expect(controls.buttons.filter((button) => button.label === 'Remove pair')).toHaveLength(0);
+        expect(controls.buttons.filter((button) => button.label === 'Remove folder')).toHaveLength(0);
         expect(saveSettings).not.toHaveBeenCalled();
         expect(settings.markdownExportMappings).toEqual([namedFirst]);
 
@@ -265,9 +267,15 @@ describe('automatic Markdown export settings', () => {
         const watch = controls.buttons.slice().reverse().find((button) => button.name === 'Watch folder');
         const output = controls.buttons.slice().reverse().find((button) => button.name === 'Output folder');
         const location = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Output location');
+        const conversion = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === '.Note conversion');
         const outputRow = controls.rows.slice().reverse().find((row) => row.name === 'Output folder');
         const ok = controls.buttons.slice().reverse().find((button) => button.label === 'OK');
         expect(location?.options).toEqual([['beside', 'Beside source'], ['folder', 'Specific folder']]);
+        expect(conversion?.options).toEqual([
+            ['markdown', 'Markdown, no page attachment'],
+            ['png', 'Markdown with a PNG page attachment'],
+            ['svg', 'Markdown with a SVG page attachment'],
+        ]);
         expect(controls.names.lastIndexOf('Output location')).toBeLessThan(controls.names.lastIndexOf('Output folder'));
         expect(outputRow?.classes.has('supernote-export-output-hidden')).toBe(true);
         expect(ok?.disabled).toBe(true);
@@ -296,11 +304,12 @@ describe('automatic Markdown export settings', () => {
         void output?.click();
         expect(picker.path).toBe('Exports');
         location?.change('beside');
+        conversion?.change('svg');
         await ok?.click();
         await added;
         expect(controls.names).toContain('Journal');
-        expect(controls.buttons.some((button) => button.label === 'Save pairs')).toBe(false);
-        expect(settings.markdownExportMappings).toEqual([namedFirst, expect.objectContaining({ name: 'Journal', watchDir: 'Journal', outputDir: '', enabled: true })]);
+        expect(controls.buttons.some((button) => button.label === 'Save folders')).toBe(false);
+        expect(settings.markdownExportMappings).toEqual([namedFirst, expect.objectContaining({ name: 'Journal', watchDir: 'Journal', outputDir: '', noteConversion: 'svg', enabled: true })]);
         expect(saveSettings).toHaveBeenCalledOnce();
         await controls.toggles.slice().reverse().find((toggle) => toggle.name === 'Journal')?.change(false);
         expect(settings.markdownExportMappings[1].enabled).toBe(false);
@@ -308,6 +317,28 @@ describe('automatic Markdown export settings', () => {
         controls.extraButtons.slice().reverse().find((button) => button.name === 'Journal')?.click();
         await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(3));
         expect(settings.markdownExportMappings).toEqual([namedFirst]);
+
+        const edit = controls.extraButtons.find((button) => button.name === 'Existing');
+        edit?.click();
+        expect(modal.current).toHaveProperty('title', 'Edit monitored export folder');
+        expect(controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === 'Output location')?.value).toBe('folder');
+        expect(controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === '.Note conversion')?.value).toBe('markdown');
+        const editOk = controls.buttons.slice().reverse().find((button) => button.label === 'OK');
+        expect(editOk?.disabled).toBe(false);
+        modal.current.close();
+        expect(saveSettings).toHaveBeenCalledTimes(3);
+        expect(settings.markdownExportMappings).toEqual([namedFirst]);
+
+        edit?.click();
+        const editName = controls.texts.slice().reverse().find((text) => text.name === 'Name');
+        const editConversion = controls.dropdowns.slice().reverse().find((dropdown) => dropdown.name === '.Note conversion');
+        const saveEdit = controls.buttons.slice().reverse().find((button) => button.label === 'OK');
+        editName?.change('Updated');
+        editConversion?.change('png');
+        expect(saveEdit?.disabled).toBe(false);
+        await saveEdit?.click();
+        await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(4));
+        expect(settings.markdownExportMappings).toEqual([{ ...namedFirst, name: 'Updated', noteConversion: 'png' }]);
     });
 });
 

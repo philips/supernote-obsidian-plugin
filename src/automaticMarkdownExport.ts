@@ -1,11 +1,22 @@
 import { App, TFile } from 'obsidian';
 import { hashBytes } from './sync/directIP/deviceSync';
 import { markdownExportDestination, validateMarkdownExportMappings } from './settings';
-import type { MarkdownExportMapping, MarkdownExportRecord, SupernotePluginSettings } from './settings';
+import type { MarkdownExportMapping, MarkdownExportRecord, NoteConversion, SupernotePluginSettings } from './settings';
+import { retainSyncLogEntries } from './sync/syncReporting';
 
 const hash = (content: string): string => hashBytes(new TextEncoder().encode(content));
 
 class ExportConflictError extends Error {}
+
+export interface AutomaticMarkdownAttachment {
+    path: string;
+    content: ArrayBuffer;
+}
+
+export interface AutomaticMarkdownResult {
+    content: string;
+    attachments: AutomaticMarkdownAttachment[];
+}
 
 export class AutomaticMarkdownExport {
     private readonly timers = new Map<string, ReturnType<typeof window.setTimeout>>();
@@ -18,7 +29,7 @@ export class AutomaticMarkdownExport {
     private configVersion = 0;
 
     constructor(private readonly app: App, private readonly settings: SupernotePluginSettings,
-        private readonly save: () => Promise<void>, private readonly convert: (file: TFile, path: string, bytes: ArrayBuffer) => Promise<string>,
+        private readonly save: () => Promise<void>, private readonly convert: (file: TFile, path: string, bytes: ArrayBuffer, format: NoteConversion) => Promise<string | AutomaticMarkdownResult>,
         private readonly report: (source: string, destination: string, reason: string) => void) {
         this.config = this.configuration();
     }
@@ -63,6 +74,17 @@ export class AutomaticMarkdownExport {
         if (this.stopped || file.extension.toLowerCase() !== 'note') return;
         this.settingsChanged();
         this.invalidate(file.path);
+        if (!this.settings.automaticMarkdownExportEnabled) return;
+        const invalid = validateMarkdownExportMappings(this.settings.markdownExportMappings, this.app);
+        if (invalid) {
+            const reason = `Invalid automatic Markdown export settings: ${invalid}`;
+            const key = `${file.path}:${reason}`;
+            if (!this.reported.has(key)) {
+                this.reported.add(key);
+                this.report(file.path, file.path, reason);
+            }
+            return;
+        }
         const pair = this.mapping(file.path);
         if (!pair) return;
         const version = this.versions.get(file.path);
@@ -82,10 +104,94 @@ export class AutomaticMarkdownExport {
         if (this.reported.has(key)) return;
         this.reported.add(key);
         this.report(source, destination, reason);
+        if (this.settings.markdownExportErrorLogEnabled) {
+            void this.writeErrorLog(source, destination, reason).catch((error: unknown) => {
+                const message = error instanceof Error ? error.message : String(error);
+                this.report(source, destination, `Could not write Markdown export log: ${message}`);
+            });
+        }
+    }
+
+    private async writeErrorLog(source: string, destination: string, reason: string): Promise<void> {
+        const pair = this.mapping(source);
+        if (!pair) throw new Error('No enabled mapping for source');
+        const path = pair.outputDir ? `${pair.outputDir}/Markdown Export Log.md` : 'Markdown Export Log.md';
+        const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const entry = `## ${timestamp} (Markdown export)\n- Mapping: ${pair.name ?? pair.id} (${pair.id})\n- Source: ${source}\n- Destination: ${destination}\n- Reason: ${reason}\n- Resolution: Review the destination and use Resume automatic export for this file after resolving the conflict.\n\n`;
+        await this.ensureParent(path);
+        const existing = this.app.vault.getAbstractFileByPath(path);
+        if (existing && (!(existing instanceof TFile) || existing.extension.toLowerCase() !== 'md')) {
+            throw new Error(`Log path is occupied: ${path}`);
+        }
+        if (existing) {
+            await this.app.vault.process(existing, (current) => {
+                if (!/^## \d{4}-\d\d-\d\d \d\d:\d\d:\d\d \(Markdown export\)/.test(current)) {
+                    throw new Error(`Log path is occupied: ${path}`);
+                }
+                return retainSyncLogEntries(entry + current, 8);
+            });
+        } else {
+            await this.app.vault.create(path, entry);
+        }
     }
 
     private async persist(): Promise<void> {
         await this.save();
+    }
+
+    resumeCandidate(destination: string): { mapping: string; source: string; destination: string } | undefined {
+        if (this.stopped) return;
+        const matches = this.app.vault.getFiles().filter((file) => file.extension.toLowerCase() === 'note' &&
+            this.mapping(file.path) && markdownExportDestination(this.mapping(file.path)!, file.path) === destination);
+        if (matches.length !== 1 || !(this.app.vault.getAbstractFileByPath(destination) instanceof TFile)) return;
+        const source = matches[0].path;
+        const pair = this.mapping(source)!;
+        return { mapping: pair.name ?? pair.id, source, destination };
+    }
+
+    async resume(destination: string): Promise<void> {
+        await this.queue;
+        const candidate = this.resumeCandidate(destination);
+        if (!candidate) throw new Error('The source, mapping, or destination changed; review the conflict again');
+        const pair = this.mapping(candidate.source)!;
+        const file = this.app.vault.getFileByPath(destination);
+        if (!file) throw new Error('The destination no longer exists');
+        const previous = this.settings.markdownExportRecords[destination];
+        const blocked = this.settings.markdownExportBlockedSources?.[candidate.source];
+        const pending = this.settings.markdownExportPendingMove;
+        const content = await this.app.vault.read(file);
+        const sourceFile = this.app.vault.getFileByPath(candidate.source);
+        if (!sourceFile) throw new Error('The source no longer exists');
+        const sourceHash = hashBytes(new Uint8Array(await this.app.vault.readBinary(sourceFile)));
+        const attachments: Record<string, string> = {};
+        for (const path of Object.keys(previous?.attachments ?? {})) {
+            const image = this.app.vault.getFileByPath(path);
+            if (!image) throw new Error(`Page attachment is missing: ${path}; review the export before resuming`);
+            attachments[path] = hashBytes(new Uint8Array(await this.app.vault.readBinary(image)));
+        }
+        if (!this.resumeCandidate(destination) || this.app.vault.getFileByPath(destination) !== file) {
+            throw new Error('The destination changed; review the conflict again');
+        }
+        this.settings.markdownExportRecords[destination] = {
+            mappingId: pair.id, source: candidate.source, destination, hash: hash(content), sourceHash, attachments,
+        };
+        if (blocked === destination) delete this.settings.markdownExportBlockedSources[candidate.source];
+        if (pending?.to.source === candidate.source && pending.to.destination === destination) {
+            this.settings.markdownExportPendingMove = null;
+        }
+        try {
+            await this.persist();
+        } catch (error) {
+            if (previous) this.settings.markdownExportRecords[destination] = previous;
+            else delete this.settings.markdownExportRecords[destination];
+            if (blocked) this.settings.markdownExportBlockedSources[candidate.source] = blocked;
+            this.settings.markdownExportPendingMove = pending;
+            throw error;
+        }
+        this.invalidate(candidate.source);
+        for (const key of this.reported) {
+            if (key.startsWith(`${candidate.source}:${destination}:`)) this.reported.delete(key);
+        }
     }
 
     private async ensureParent(path: string): Promise<void> {
@@ -106,7 +212,24 @@ export class AutomaticMarkdownExport {
         if (!file) return;
         try {
             const original = new Uint8Array(await this.app.vault.readBinary(file));
-            const content = await this.convert(file, destination, original.buffer);
+            const previousRecord = this.settings.markdownExportRecords?.[destination];
+            if (previousRecord?.mappingId === pair.id && previousRecord.source === source &&
+                previousRecord.sourceHash === hashBytes(original)) {
+                const existing = this.app.vault.getFileByPath(destination);
+                if (!existing || hash(await this.app.vault.read(existing)) !== previousRecord.hash) {
+                    this.issue(source, destination, 'Destination is missing or locally edited');
+                }
+                for (const [path, expected] of Object.entries(previousRecord.attachments ?? {})) {
+                    const image = this.app.vault.getFileByPath(path);
+                    if (!image || hashBytes(new Uint8Array(await this.app.vault.readBinary(image))) !== expected) {
+                        this.issue(source, destination, `Page attachment is missing or locally edited: ${path}`);
+                    }
+                }
+                return;
+            }
+            const converted = await this.convert(file, destination, original.buffer, pair.noteConversion ?? 'markdown');
+            const { content, attachments } = typeof converted === 'string'
+                ? { content: converted, attachments: [] } : converted;
             if (!this.current(source, version, config) || this.app.vault.getFileByPath(source) !== file) return;
             if (hashBytes(new Uint8Array(await this.app.vault.readBinary(file))) !== hashBytes(original)) {
                 this.schedule(file);
@@ -124,24 +247,64 @@ export class AutomaticMarkdownExport {
                     return;
                 }
                 if (!this.current(source, version, config)) return;
-                if (hash(content) !== previous.hash) {
+            } else {
+                if (previous) {
+                    this.issue(source, destination, 'Managed destination is missing');
+                    return;
+                }
+            }
+            const nextAttachments: Record<string, string> = {};
+            for (const attachment of attachments) {
+                if (nextAttachments[attachment.path] || attachment.path === destination) throw new ExportConflictError('Duplicate page attachment path');
+                nextAttachments[attachment.path] = hashBytes(new Uint8Array(attachment.content));
+                const image = this.app.vault.getAbstractFileByPath(attachment.path);
+                if (image && (!(image instanceof TFile) || previous?.attachments?.[attachment.path] !==
+                    hashBytes(new Uint8Array(await this.app.vault.readBinary(image))))) {
+                    this.issue(source, destination, `Page attachment is unmanaged or locally edited: ${attachment.path}`);
+                    return;
+                }
+                if (!image && previous?.attachments?.[attachment.path]) {
+                    this.issue(source, destination, `Managed page attachment is missing: ${attachment.path}`);
+                    return;
+                }
+            }
+            if (previous && Object.keys(previous.attachments ?? {}).some((path) => !nextAttachments[path])) {
+                this.issue(source, destination, 'Page count or conversion format changed; review old attachments');
+                return;
+            }
+            if (!this.current(source, version, config)) return;
+            for (const attachment of attachments) {
+                if (!this.current(source, version, config)) return;
+                const image = this.app.vault.getFileByPath(attachment.path);
+                if (image) {
+                    if (nextAttachments[attachment.path] !== previous?.attachments?.[attachment.path]) {
+                        const expected = previous?.attachments?.[attachment.path];
+                        if (!expected) throw new ExportConflictError(`Page attachment is unmanaged: ${attachment.path}`);
+                        if (hashBytes(new Uint8Array(await this.app.vault.readBinary(image))) !== expected) {
+                            throw new ExportConflictError(`Page attachment changed during export: ${attachment.path}`);
+                        }
+                        await this.app.vault.modifyBinary(image, attachment.content);
+                    }
+                } else {
+                    await this.ensureParent(attachment.path);
+                    await this.app.vault.createBinary(attachment.path, attachment.content);
+                }
+            }
+            if (existing instanceof TFile) {
+                if (hash(content) !== previous?.hash) {
                     await this.app.vault.process(existing, (current) => {
-                        if (hash(current) !== previous.hash || !this.current(source, version, config)) {
+                        if (hash(current) !== previous?.hash || !this.current(source, version, config)) {
                             throw new ExportConflictError('Destination changed during export');
                         }
                         return content;
                     });
                 }
             } else {
-                if (previous) {
-                    this.issue(source, destination, 'Managed destination is missing');
-                    return;
-                }
                 await this.ensureParent(destination);
                 if (!this.current(source, version, config)) return;
                 await this.app.vault.create(destination, content);
             }
-            records[destination] = { mappingId: pair.id, source, destination, hash: hash(content) };
+            records[destination] = { mappingId: pair.id, source, destination, hash: hash(content), attachments: nextAttachments };
             try {
                 await this.persist();
             } catch (error) {
@@ -187,10 +350,16 @@ export class AutomaticMarkdownExport {
             }
             const oldRecord = Object.values(this.settings.markdownExportRecords ?? {}).find((record) => record.source === oldPath);
             const oldPair = this.mapping(oldPath);
+            if (oldRecord && Object.keys(oldRecord.attachments ?? {}).length) {
+                const destination = markdownExportDestination(pair, file.path);
+                await this.block(file.path, destination);
+                this.issue(file.path, destination, 'Rename of an export with page attachments needs review; original files were left untouched');
+                return;
+            }
             if (oldRecord && oldPair?.id !== oldRecord.mappingId) {
                 const destination = markdownExportDestination(pair, file.path);
                 await this.block(file.path, destination);
-                this.issue(file.path, destination, 'Previous managed export belongs to a different pair');
+                this.issue(file.path, destination, 'Previous managed export belongs to a different folder');
                 return;
             }
             if (!oldRecord && oldPair) {

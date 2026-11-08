@@ -1,13 +1,14 @@
 # Automatic Markdown Export Design and Implementation Plan
 
-**Status (November 6, 2026):** Settings and event-driven runtime sprints are
-implemented. Enabled mappings convert vault `.note` create/modify/rename events
-through the Markdown-only renderer; guarded ownership and restart-aware rename
-transfer protect edited and unmanaged outputs. Errors currently produce a
-coalesced notice only: the error-only Markdown Export Log and explicit conflict
-resume action are not implemented. User documentation and live Obsidian vault
-validation remain. See `auto-markdown-next-steps.md` for the next sprint. Branch
-facts below were checked October 31, 2026.
+**Status (November 8, 2026):** Settings, event-driven runtime, per-output-root
+error-only logs, coalesced notices, explicit conflict resume, and user
+documentation are implemented. Guarded ownership and restart-aware rename
+transfer protect edited and unmanaged outputs. Live Marie checks confirmed
+nested/root output, source links, guarded refresh, conflict logging, and
+repeat-event coalescing; UI rename/resume and sync-originated writes remain
+unverified. The next sprint adds a per-folder .note conversion format without
+changing .spd support; see `auto-markdown-next-steps.md`. Branch facts below
+were checked October 31, 2026.
 
 The implementation target is `obsidian-journal-companion` at
 `C:\Code\SolerSoft\obsidian-journal-companion`. Petrify at
@@ -214,22 +215,61 @@ by that license.
    links; conflicts leave outputs alone. Focused tests cover paths, edits,
    unmanaged files, remapping, in-flight changes, rename bursts, and
    write/restart failures. Full tests, build, lint (warnings only), and diff
-   check passed. Real Obsidian settings and generated-file checks, including a
-   sync-engine-originated vault write, remain unverified.
-3. **Remaining:** Add bounded, error-only per-output-root Markdown Export Log
-   reporting, actionable coalesced notices, and an explicit **Resume automatic
-   export for this file** action that adopts the reviewed destination hash
-   without changing its contents. Test log toggle on/off, shared/separate and
-   vault-root logs, repeated conflicts, failed log writes, and resume across
-   reload. Keep reporting independent of IP/Cloud sync and avoid touching logs
-   on successful exports.
-4. **Remaining:** Update user-facing documentation for the opt-in toggle,
-   multiple watch/output pairs, same-folder output, error-only log toggle and
-   log location per pair, conflict resolution, and the distinction from timed
-   raw-file sync. Run focused tests, then `npm test`, `npm run build`,
-   `npm run lint`, and `git diff --check`. For UI/rendering behavior, inspect
-   both settings surfaces and representative generated files in a disposable
-   Obsidian test vault; do not mutate real-device or Cloud contents.
+   check passed. Later Marie checks verified Markdown-only nested/watch-root
+   generated files and guarded updates; settings UI and a sync-engine-originated
+   vault write remain unverified.
+3. **Completed (reporting and conflict sprint):** Error-only, eight-entry
+   bounded Markdown Export Logs live in each pair's output root (vault root for
+   beside-source output); occupied paths and write failures leave the original
+   error visible. Coalesced notices open the destination, and the
+   command-palette resume action confirms the pair/source/destination before
+   adopting the current destination and source hashes. An unchanged source event
+   cannot overwrite reviewed Markdown. The README describes the opt-in workflow
+   and its separation from timed raw-file sync. Focused tests, full tests,
+   build, lint (warnings only), and diff check passed.
+4. **Remaining from the original sprint:** Inspect both settings surfaces,
+   notices, Obsidian-driven rename, manual export and explicit resume in Marie.
+   Verify a sync-originated vault write if possible without changing device or
+   Cloud contents. Preserve existing vault files and sync records.
+5. **In progress (folder/format sprint, November 8, 2026):** The Add folder
+   dialog and both settings surfaces use folder terminology; the renamed modal
+   saves `.Note conversion` as `markdown`, `png`, or `svg`, with absent values
+   continuing to mean Markdown-only. The automatic writer builds page PNGs or
+   SVGs with deterministic paths and links. Export records track attachment
+   hashes and block unmanaged/edited files. Renaming a source with managed page
+   attachments stops with a conflict to avoid moving Markdown alone; full
+   multi-file rename/recovery and live UI/rendering checks remain. Focused
+   settings/export tests and a production build passed in this session.
+
+## Next sprint: folder terminology and .note conversion
+
+- **Started:** Replace user-facing "pair" terminology with "folder": **Watch
+  folders**, **Add folder**, and **Add monitored export folder** (including the
+  modal's filename and type). Update the settings description and validation
+  messages. Keep the existing `markdownExportMappings` persistence key, `id`,
+  `watchDir`, and `outputDir` so existing saved exports and ownership records
+  retain their identity; no stored structure or field should use "pair". Rename
+  local variables and types that describe these entries to export/folder
+  terminology.
+- **Implemented, pending live checks:** Add a **.Note conversion** dropdown to
+  the add-folder dialog, saved with each folder: **Markdown, no page
+  attachment** (default, including legacy entries without a format), **Markdown
+  with a PNG page attachment**, and **Markdown with a SVG page attachment**. Do
+  not watch or change `.spd`. The automatic event path must generate the
+  selected output and links while manual export remains unchanged. A format
+  change must not silently claim unmanaged files or erase old attachments.
+- **Partially implemented:** Design attachment ownership before writing images:
+  deterministic per-page destinations, collision checks, content hashes, and an
+  explicit update/ rename/restart policy. An edited, missing, or unmanaged image
+  must not be overwritten or silently replaced; report an actionable conflict.
+  Preserve the Markdown guard and avoid partial Markdown links or orphaned files
+  if a page write or settings save fails. Test create/modify/rename, page-count
+  and format changes, interruption and resume, as well as successful image
+  embeds.
+- Recheck documentation and focused tests, full `npm test`, `npm run build`,
+  `npm run lint`, and `git diff --check`; validate the new controls and outputs
+  in Marie with uniquely named local copies only. The remaining earlier manual
+  UI and sync-originated checks remain separate until verified.
 
 ## Acceptance criteria
 

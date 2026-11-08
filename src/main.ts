@@ -1,5 +1,5 @@
 import { installAtPolyfill } from './polyfills';
-import { App, Modal, Notice, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
+import { App, Modal, Notice, Setting, TFile, Plugin, Editor, MarkdownView, MarkdownFileInfo, WorkspaceLeaf, FileView, Component, Scope, Platform, setIcon } from 'obsidian';
 import { SupernotePluginSettings, SupernoteSettingTab, DEFAULT_SETTINGS, ImportFormat, PageExportImageFormat } from './settings';
 import { tryRegisterNoteViewer } from './noteViewerRegistration';
 import { SupernoteX, ILink, RecognitionStatuses, fetchMirrorFrame, extractPdfPageData, addSvgPage, prepareVectorInkPages, buildVectorInkBackgroundNote, buildRasterInkOverlayNote, toSvg } from 'supernote-typescript';
@@ -35,6 +35,8 @@ import { CloudSignInRequiredError, CloudSyncEngine } from './sync/supernoteCloud
 import { SupernoteAtelierEmbed, SupernoteAtelierView, VIEW_TYPE_SUPERNOTE_ATELIER, renderAtelierCompositeDataUrl, renderAtelierCompositeFromBuffer } from './atelierView';
 import { PDFDocument } from 'pdf-lib';
 import { AutomaticMarkdownExport } from './automaticMarkdownExport';
+import type { AutomaticMarkdownResult } from './automaticMarkdownExport';
+import type { NoteConversion } from './settings';
 
 function generateTimestamp(): string {
 	const date = new Date();
@@ -402,7 +404,7 @@ class VaultWriter {
 		return this.app.vault.create(filename, content);
 	}
 
-	async renderMarkdownFile(file: TFile, sn: SupernoteX, filename: string, imgs: TFile[] | null = null, images: string[] | null = null): Promise<string> {
+	async renderMarkdownFile(file: TFile, sn: SupernoteX, filename: string, imgs: TFile[] | null = null, images: string[] | null = null, imagePaths: string[] = []): Promise<string> {
 		let content = this.app.fileManager.generateMarkdownLink(file, filename);
 		content += '\n';
 
@@ -423,6 +425,10 @@ class VaultWriter {
 
 				const link = generateMarkdownImageEmbed(this.app, imgs[i], filename, alt);
 				content += `${link}\n`;
+			}
+			if (imagePaths[i]) {
+				const alt = this.settings.invertColorsWhenDark ? 'supernote-invert-dark' : '';
+				content += `![${alt}](${encodeURI(imagePaths[i])})\n`;
 			}
 		}
 
@@ -468,10 +474,16 @@ class VaultWriter {
 		this.notifyExportComplete(mdFile);
 	}
 
-	async renderAutomaticMarkdown(file: TFile, destination: string, note: ArrayBuffer): Promise<string> {
+	async renderAutomaticMarkdown(file: TFile, destination: string, note: ArrayBuffer, format: NoteConversion): Promise<AutomaticMarkdownResult> {
 		const sn = new SupernoteX(new Uint8Array(note));
-		const images = this.processors.size > 0 ? await this.rasterizePages(sn) : null;
-		return this.renderMarkdownFile(file, sn, destination, null, images);
+		const images = this.processors.size > 0 || format !== 'markdown' ? await this.rasterizePages(sn) : null;
+		const attachments = images && format !== 'markdown' ? images.map((image, index) => ({
+			path: `${destination.slice(0, -3)}-pages/${index + 1}.${format}`,
+			content: format === 'png' ? dataUrlToBuffer(image)
+				: new TextEncoder().encode(buildSvgForPage(sn, index + 1, image)).buffer,
+		})) : [];
+		const imagePaths = attachments.map((attachment) => attachment.path.slice(destination.lastIndexOf('/') + 1));
+		return { content: await this.renderMarkdownFile(file, sn, destination, null, images, imagePaths), attachments };
 	}
 
 	async attachNoteFiles(file: TFile) {
@@ -1244,9 +1256,19 @@ export default class SupernotePlugin extends Plugin {
 		vw = new VaultWriter(this.app, this.settings, this.pageTextProcessors);
 		this.vaultWriter = vw;
 		this.automaticMarkdownExport = new AutomaticMarkdownExport(this.app, this.settings,
-			() => this.saveSettings(), (file, path, bytes) => this.vaultWriter.renderAutomaticMarkdown(file, path, bytes),
+			() => this.saveSettings(), (file, path, bytes, format) => this.vaultWriter.renderAutomaticMarkdown(file, path, bytes, format),
 			(source, destination, reason) => {
-				new Notice(`Automatic Markdown export skipped: ${source} → ${destination}: ${reason}`);
+				const logRoot = this.settings.markdownExportMappings.find((pair) => pair.enabled &&
+					(!pair.watchDir || source.startsWith(`${pair.watchDir}/`)))?.outputDir;
+				const logHint = this.settings.markdownExportErrorLogEnabled && logRoot !== undefined &&
+					!reason.startsWith('Could not write Markdown export log') &&
+					!reason.startsWith('Invalid automatic Markdown export settings')
+					? ` See ${logRoot ? `${logRoot}/` : ''}Markdown Export Log.md.` : '';
+				const notice = new Notice(`Automatic Markdown export skipped: ${source} → ${destination}: ${reason}.${logHint} Click to open destination.`, 12000);
+				notice.messageEl.addEventListener('click', () => {
+					const file = this.app.vault.getFileByPath(destination);
+					if (file) void this.app.workspace.getLeaf().openFile(file);
+				});
 			});
 		try {
 			await this.automaticMarkdownExport.recover();
@@ -1264,6 +1286,33 @@ export default class SupernotePlugin extends Plugin {
 		}));
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
+		this.addCommand({
+			id: 'resume-automatic-markdown-export',
+			name: 'Resume automatic export for this file',
+			checkCallback: (checking) => {
+				const destination = this.app.workspace.getActiveFile()?.path;
+				const candidate = destination && this.automaticMarkdownExport?.resumeCandidate(destination);
+				if (!candidate) return false;
+				if (!checking) {
+					const modal = new Modal(this.app);
+					modal.setTitle('Resume automatic export for this file');
+					modal.contentEl.createEl('p', { text: `Mapping: ${candidate.mapping}` });
+					modal.contentEl.createEl('p', { text: `Source: ${candidate.source}` });
+					modal.contentEl.createEl('p', { text: `Destination: ${candidate.destination}` });
+					modal.contentEl.createEl('p', { text: 'Confirm that you have reviewed this Markdown file. Its current content becomes the baseline; it will not be overwritten until the source changes again.' });
+					new Setting(modal.contentEl).addButton((button) => button.setButtonText('Resume automatic export').setCta().onClick(() => {
+						void this.automaticMarkdownExport!.resume(candidate.destination).then(() => {
+							modal.close();
+							new Notice('Automatic Markdown export resumed for this file');
+						}).catch((error: unknown) => {
+							new Notice(`Could not resume automatic Markdown export: ${error instanceof Error ? error.message : String(error)}`);
+						});
+					})).addButton((button) => button.setButtonText('Cancel').onClick(() => modal.close()));
+					modal.open();
+				}
+				return true;
+			},
+		});
 
 		this.addCommand({
 			id: 'attach-file-from-device',
