@@ -39,8 +39,8 @@ Scanned-journal support is a goal, not a feature in the current release.
 
 - 🎨 View Supernote Atelier `.spd` files with a layer-visibility sidebar.
 
-- ✒️ Render note ink as sharp vector paths in the viewer and PDF/SVG exports, with
-  a raster fallback if a note renders differently from the device.
+- ✒️ Render note ink as sharp vector paths in the viewer and PDF/SVG exports,
+  with a raster fallback if a note renders differently from the device.
 
 - 📺 Copy an image from a Supernote via
   [screen mirroring](https://support.supernote.com/en_US/organizing-managing/1791924-screen-mirroring)
