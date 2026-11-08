@@ -13,17 +13,20 @@ checks from the previous sprint passed for Markdown-only nested/watch-root
 creation, source links, page headings, managed refresh, edit protection,
 error-only logging, and repeat events. The earlier Obsidian-driven rename,
 explicit resume, manual export, and sync-originated writes still need
-validation. See `auto-markdown.md` for the design and safety rules.
+validation. Cloud-side renames currently arrive as raw-note create/Trash, not
+vault rename events; their guarded local move is deferred to
+`cloud-sync-next-steps.md` and does not block completing local auto-export. See
+`auto-markdown.md` for completed work and safety rules.
 
-Disposable local fixtures were left for the UI checks: source folder
-`Supernote/__copilot_auto_md_sprint_87b1e7d99c` and output folder
-`Supernote Markdown/__copilot_auto_md_sprint_87b1e7d99c`. The nested source
-`Nested/sample.note` has a managed output; `root-sample.md` contains a
-deliberate local edit and a conflict is recorded in
-`Supernote Markdown/Markdown Export Log.md`. Keep the original notes under
-`Supernote sync` and all sync records untouched.
+The user manually removed the previous disposable source folder and its
+auto-exported Markdown on November 8, 2026. Do not assume those fixtures or
+their managed outputs still exist. Create fresh, uniquely named local `.note`
+copies and output fixtures for the remaining checks; keep the original notes
+under `Supernote sync` and all sync records untouched. Any historical entries in
+`Supernote Markdown/Markdown Export Log.md` are not evidence of a current
+fixture or conflict.
 
-## Recommended next sprint: finish image lifecycle and live validation
+## Remaining before auto-export completion
 
 1. Finish the attachment lifecycle before relying on automatic image exports:
    specify and test restart-safe image/Markdown writes, failed settings saves,
@@ -35,22 +38,24 @@ deliberate local edit and a conflict is recorded in
    link resolution, ownership, recovery and resume.
 2. In running Obsidian, inspect the Automatic Markdown Export settings and
    folder controls, including editing an existing folder and all three
-   `.Note
-   conversion` choices, the conflict notice, and processed text in the
-   disposable output. Use new uniquely named local `.note` copies for PNG/SVG
-   output and link checks. Check the legacy settings surface separately where
-   available; on Obsidian 1.13+ the deprecated `display()` surface is bypassed.
-   Windows testing does not require the Linux/Xvfb headless harness.
-3. Rename `Supernote/__copilot_auto_md_sprint_87b1e7d99c/Nested/sample.note` to
-   `renamed.note` **inside Obsidian**, then confirm the managed output moves and
-   its source link updates. Open the disposable `root-sample.md` output, run
-   **Resume automatic export for this file**, review and confirm the modal, and
-   check that the local edit remains until a subsequent source change. Test
-   manual Markdown export without altering existing files.
+   `.Note conversion` choices, the conflict notice, and processed text in the
+   disposable output. Recreate fresh, uniquely named local `.note` copies for
+   Markdown-only and PNG/SVG output and link checks. Check the legacy settings
+   surface separately where available; on Obsidian 1.13+ the deprecated
+   `display()` surface is bypassed. Windows testing does not require the
+   Linux/Xvfb headless harness.
+3. Create a fresh nested local `.note` fixture with a managed Markdown-only
+   output, then rename it **inside Obsidian** and confirm the output moves and
+   its source link updates. For the resume check, create a separate managed
+   output, make a deliberate local edit, trigger a source change, and confirm
+   the resulting conflict before running **Resume automatic export for this
+   file**. Review and confirm the modal, and check that the edit remains until a
+   subsequent source change. Test manual Markdown export without altering
+   existing files.
 4. Check a live sync-originated vault write only if it can be initiated without
    changing device or Cloud contents; otherwise report it separately. Confirm
    scheduled sync remains independent and no Markdown-export timer was added.
-   After UI checks, remove only the uniquely named test source/output folders;
+   After UI checks, remove only the newly created test source/output folders;
    preserve the shared error log and all other vault files and sync records.
 5. Fix any issues discovered and recheck focused tests, `npm test`,
    `npm run build`, `npm run lint`, and `git diff --check` before release.

@@ -1,14 +1,15 @@
 # Automatic Markdown Export Design and Implementation Plan
 
 **Status (November 8, 2026):** Settings, event-driven runtime, per-output-root
-error-only logs, coalesced notices, explicit conflict resume, and user
-documentation are implemented. Guarded ownership and restart-aware rename
-transfer protect edited and unmanaged outputs. Live Marie checks confirmed
-nested/root output, source links, guarded refresh, conflict logging, and
-repeat-event coalescing; UI rename/resume and sync-originated writes remain
-unverified. The next sprint adds a per-folder .note conversion format without
-changing .spd support; see `auto-markdown-next-steps.md`. Branch facts below
-were checked October 31, 2026.
+error-only logs, coalesced notices, explicit conflict resume, editable watch
+folders, and per-folder Markdown/PNG/SVG conversion are implemented. Guarded
+ownership and restart-aware Markdown-only rename transfer protect edited and
+unmanaged outputs; source renames with image attachments currently report a
+conflict. Live Marie checks confirmed Markdown-only nested/root output, source
+links, guarded refresh, conflict logging, and repeat-event coalescing. The
+attachment lifecycle and live UI, PNG/SVG, rename/resume, manual export, and
+sync-originated checks remain before completion; see
+`auto-markdown-next-steps.md`. Branch facts below were checked October 31, 2026.
 
 The implementation target is `obsidian-journal-companion` at
 `C:\Code\SolerSoft\obsidian-journal-companion`. Petrify at
@@ -231,45 +232,37 @@ by that license.
    notices, Obsidian-driven rename, manual export and explicit resume in Marie.
    Verify a sync-originated vault write if possible without changing device or
    Cloud contents. Preserve existing vault files and sync records.
-5. **In progress (folder/format sprint, November 8, 2026):** The Add folder
-   dialog and both settings surfaces use folder terminology; the renamed modal
-   saves `.Note conversion` as `markdown`, `png`, or `svg`, with absent values
-   continuing to mean Markdown-only. The automatic writer builds page PNGs or
-   SVGs with deterministic paths and links. Export records track attachment
-   hashes and block unmanaged/edited files. Renaming a source with managed page
-   attachments stops with a conflict to avoid moving Markdown alone; full
-   multi-file rename/recovery and live UI/rendering checks remain. Focused
-   settings/export tests and a production build passed in this session.
+5. **Implemented, pending completion (folder/format sprint, November 8, 2026):**
+   Watch folders can be edited while retaining their ID and enabled state. The
+   Add/Edit controls and settings surfaces use folder terminology and save
+   `.Note conversion` as `markdown`, `png`, or `svg`; legacy entries default to
+   Markdown-only and `.spd` remains unchanged. The automatic writer builds
+   deterministic page attachments and links, with hashes that protect unmanaged
+   or edited output on create/refresh. Image-bearing rename currently reports a
+   conflict rather than moving only part of the export. Full multi-file
+   lifecycle/recovery and live UI/rendering checks remain. Focused
+   settings/export tests and a production build passed; the recorded full suite
+   passed (563 tests), lint had 0 errors and 20 existing warnings, and
+   `git diff --check` passed.
 
-## Next sprint: folder terminology and .note conversion
+## Remaining before completion
 
-- **Started:** Replace user-facing "pair" terminology with "folder": **Watch
-  folders**, **Add folder**, and **Add monitored export folder** (including the
-  modal's filename and type). Update the settings description and validation
-  messages. Keep the existing `markdownExportMappings` persistence key, `id`,
-  `watchDir`, and `outputDir` so existing saved exports and ownership records
-  retain their identity; no stored structure or field should use "pair". Rename
-  local variables and types that describe these entries to export/folder
-  terminology.
-- **Implemented, pending live checks:** Add a **.Note conversion** dropdown to
-  the add-folder dialog, saved with each folder: **Markdown, no page
-  attachment** (default, including legacy entries without a format), **Markdown
-  with a PNG page attachment**, and **Markdown with a SVG page attachment**. Do
-  not watch or change `.spd`. The automatic event path must generate the
-  selected output and links while manual export remains unchanged. A format
-  change must not silently claim unmanaged files or erase old attachments.
-- **Partially implemented:** Design attachment ownership before writing images:
-  deterministic per-page destinations, collision checks, content hashes, and an
-  explicit update/ rename/restart policy. An edited, missing, or unmanaged image
-  must not be overwritten or silently replaced; report an actionable conflict.
-  Preserve the Markdown guard and avoid partial Markdown links or orphaned files
-  if a page write or settings save fails. Test create/modify/rename, page-count
-  and format changes, interruption and resume, as well as successful image
-  embeds.
-- Recheck documentation and focused tests, full `npm test`, `npm run build`,
-  `npm run lint`, and `git diff --check`; validate the new controls and outputs
-  in Marie with uniquely named local copies only. The remaining earlier manual
-  UI and sync-originated checks remain separate until verified.
+- Finish the PNG/SVG attachment lifecycle: restart-safe image and Markdown
+  writes, failed settings saves, page-count and format changes, edited/missing
+  images, and `modifyBinary` races. Provide either a recoverable guarded move of
+  all managed attachments on source rename or a verified actionable conflict
+  resolution path; never move Markdown alone or erase user-edited content.
+- Validate both available settings surfaces, all conversion modes and links,
+  conflict/resume, Obsidian-driven Markdown-only rename, manual export, and a
+  sync-originated vault write when one can be tested without changing remote
+  contents. Use only disposable local fixtures and preserve existing vault and
+  sync records. Recheck focused tests, full `npm test`, `npm run build`,
+  `npm run lint`, and `git diff --check` after fixes.
+- Cloud-driven renames do not yet emit a local vault rename: Cloud sync creates
+  the new raw note and separately trashes the old one. Cloud ID stability and
+  guarded local move handling belong to the future Cloud sync sprint in
+  `cloud-sync-next-steps.md`, not to automatic export. Completion of local
+  auto-export must not be claimed as Cloud rename propagation.
 
 ## Acceptance criteria
 
