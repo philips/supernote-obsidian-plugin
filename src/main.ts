@@ -232,13 +232,12 @@ function processSupernoteText(text: string, settings: SupernotePluginSettings): 
 // In-process extension point for other Obsidian plugins that want to enrich
 // a page's text before it lands in the generated markdown — e.g. an OCR/LLM
 // companion plugin transcribing handwriting the device's own recognition
-// missed (see https://github.com/philips/supernote-obsidian-ocr-llm for a
-// reference implementation against a local OpenAI-compatible server).
+// missed (see ocr-plugins.md for the integration contract).
 // Undocumented by design: the
 // same "reach into another plugin's loaded instance" pattern Templater/
 // Dataview expose their own APIs through, since Obsidian has no formal
 // inter-plugin dependency mechanism. Callers must feature-detect
-// (`app.plugins.plugins['supernote']?.registerPageTextProcessor`) and accept
+// (`app.plugins.plugins['journal-companion']?.registerPageTextProcessor`) and accept
 // that this can change across versions.
 export interface PageTextProcessorContext {
 	/** 1-indexed, matching the "## Page N" headings in the generated markdown. */
@@ -1185,8 +1184,7 @@ export default class SupernotePlugin extends Plugin {
 	 * it's written into the generated markdown — e.g. an OCR/LLM companion
 	 * plugin transcribing handwriting the device's own recognition missed.
 	 * See PageTextProcessor's doc comment (above VaultWriter) for the
-	 * contract, and https://github.com/philips/supernote-obsidian-ocr-llm
-	 * for a reference implementation.
+	 * contract and ocr-plugins.md for integration guidance.
 	 *
 	 * Undocumented/unstable: the same "reach into another plugin's loaded
 	 * instance" pattern Templater/Dataview use for their own APIs, not a

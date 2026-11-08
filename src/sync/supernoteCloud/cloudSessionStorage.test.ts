@@ -14,6 +14,11 @@ describe('Cloud session storage', () => {
             setSecret: (id: string, value: string) => { secrets.set(id, value); },
         } as App['secretStorage']);
         expect(storage.load()).toEqual({ token: 'existing-token', userId: '9223372036854775807' });
+        expect(secrets.get('journal-companion-cloud-access-token')).toBe('existing-token');
+        expect(secrets.get('journal-companion-cloud-account-id')).toBe('9223372036854775807');
+        storage.clear();
+        expect(storage.load()).toBeNull();
+        expect(secrets.get('supernote-cloud-access-token')).toBe('existing-token');
     });
 
     it('keeps token and account binding only in SecretStorage', () => {
@@ -31,13 +36,14 @@ describe('Cloud session storage', () => {
         expect(store.load()).toBeNull();
         store.save({ token: 'test-token', userId: '9223372036854775807' });
         expect(store.load()).toEqual({ token: 'test-token', userId: '9223372036854775807' });
-        expect(secrets.get('supernote-cloud-account-id')).toBe('9223372036854775807');
+        expect(secrets.get('journal-companion-cloud-account-id')).toBe('9223372036854775807');
         expect(saveLocalStorage).not.toHaveBeenCalled();
         expect(() => store.save({ token: 'different', userId: '2' })).toThrow('another account');
         expect(store.load()?.token).toBe('test-token');
         store.clear();
         expect(store.load()).toBeNull();
-        expect([...secrets.values()]).toEqual(['', '']);
+        expect(secrets.get('journal-companion-cloud-access-token')).toBe('');
+        expect(secrets.get('journal-companion-cloud-account-id')).toBe('');
         expect(saveLocalStorage).not.toHaveBeenCalled();
     });
 

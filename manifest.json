@@ -1,11 +1,10 @@
 {
-	"id": "supernote",
-	"name": "Supernote (Unofficial)",
-	"version": "3.1.3",
+	"id": "journal-companion",
+	"name": "Journal Companion",
+	"version": "0.1.0",
 	"minAppVersion": "1.13.0",
-	"description": "View Supernote notes, generate markdown from note and capture screen mirror.",
-	"author": "Brandon Philips",
-	"authorUrl": "https://ifup.org",
-	"fundingUrl": "https://github.com/philips/supernote-obsidian-plugin/blob/main/README.md#funding",
+	"description": "Work with physical and digital journals in Obsidian, with cloud synchronization  and automatic Markdown export.",
+	"author": "SolerSoft",
+	"authorUrl": "https://github.com/SolerSoft",
 	"isDesktopOnly": false
 }

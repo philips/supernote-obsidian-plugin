@@ -130,8 +130,8 @@ describe('Cloud engine', () => {
         const engine = new CloudSyncEngine(app, settings);
         vi.mocked(validateCloudProtocolSession).mockRejectedValueOnce(new Error('Supernote Cloud request failed (HTTP 401)'));
         await expect(engine.run({ kind: 'scheduled' })).rejects.toBeInstanceOf(CloudSignInRequiredError);
-        expect(setSecret).toHaveBeenCalledWith('supernote-cloud-access-token', '');
-        expect(setSecret).toHaveBeenCalledWith('supernote-cloud-account-id', '');
+        expect(setSecret).toHaveBeenCalledWith('journal-companion-cloud-access-token', '');
+        expect(setSecret).toHaveBeenCalledWith('journal-companion-cloud-account-id', '');
         setSecret.mockClear();
         vi.mocked(validateCloudProtocolSession).mockRejectedValueOnce(new Error('Supernote Cloud error E0000'));
         await expect(engine.run({ kind: 'manual', commandId: 'sync-now' })).rejects.toThrow('E0000');

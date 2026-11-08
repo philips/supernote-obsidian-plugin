@@ -7,11 +7,15 @@ this project becomes a new and completely separate fork of the original project.
 
 Here are some key metadata files that should change:
 
-Name: Supernote (Unofficial) -> Journal Companion Obsidian Plugin ID: supernote
--> journal-companion Version: v1.31.0 -> v0.1.0 Author: Brandon Philips ->
-SolerSoft LLC GitHub / BRAT:
-https://github.com/philips/supernote-obsidian-plugin ->
-https://github.com/SolerSoft/obsidian-journal-companion
+- Name: `Supernote (Unofficial)` -> `Journal Companion`
+- Obsidian Plugin ID: `supernote` -> `journal-companion`
+- Package IDs: (Match Obsidian Plugin IDs)
+- Version: `v1.31.0` -> `v0.1.0`
+- Author: `Brandon Philips` -> `SolerSoft LLC GitHub`
+- BRAT: `https://github.com/philips/supernote-obsidian-plugin` ->
+  `https://github.com/SolerSoft/obsidian-journal-companion`
+- Folder and Symbolic Link: Since the Obsidian Plugin ID changed, the folder
+  name / symbolic link in the `Marie` test vault also need to be recreated.
 
 Please identify any other important values that should be changed in this step.
 If you are unclear whether a value should change or what it's new value should

@@ -42,7 +42,8 @@ describe('Cloud session actions', () => {
         expect(new CloudSessionStorage(app.secretStorage).load()).toEqual({ token: 'private-token', userId: '42' });
         expect([...secrets.values()]).not.toContain(credentials.password);
         expect([...secrets.values()]).not.toContain('private-code');
-        expect([...secrets.keys()]).toHaveLength(2);
+        expect(secrets.get('journal-companion-cloud-account-id')).toBe('42');
+        expect(secrets.get('journal-companion-cloud-access-token')).toBe('private-token');
     });
 
     it('does not persist failures or cancelled attempts, including after verification', async () => {
@@ -135,7 +136,8 @@ describe('Cloud session actions', () => {
         transport.post.mockRejectedValueOnce(new Error('offline'));
         await signOutCloud(app, transport);
         expect(new CloudSessionStorage(app.secretStorage).load()).toBeNull();
-        expect([...secrets.values()]).toEqual(['', '']);
+        expect(secrets.get('journal-companion-cloud-access-token')).toBe('');
+        expect(secrets.get('journal-companion-cloud-account-id')).toBe('');
         expect(transport.post).toHaveBeenCalledWith(CLOUD_ROUTES.logout, {}, { accessToken: 'private-token' });
     });
 });

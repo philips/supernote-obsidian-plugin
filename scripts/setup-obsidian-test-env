@@ -75,7 +75,7 @@ else
 fi
 
 echo "==> Setting up test vault at $VAULT"
-PLUGIN_DIR="$VAULT/.obsidian/plugins/supernote"
+PLUGIN_DIR="$VAULT/.obsidian/plugins/journal-companion"
 mkdir -p "$PLUGIN_DIR"
 
 # Symlinked, not copied: a rebuild (npm run build / npm run dev) in the repo
@@ -86,7 +86,7 @@ ln -sf "$REPO_ROOT/main.js" "$PLUGIN_DIR/main.js"
 ln -sf "$REPO_ROOT/styles.css" "$PLUGIN_DIR/styles.css"
 
 if [ ! -f "$VAULT/.obsidian/community-plugins.json" ]; then
-	echo '["supernote"]' > "$VAULT/.obsidian/community-plugins.json"
+	echo '["journal-companion"]' > "$VAULT/.obsidian/community-plugins.json"
 fi
 
 # Drop in a real .note file to open, if the repo has one checked in and the

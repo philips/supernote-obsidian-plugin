@@ -346,8 +346,7 @@ export class ImageConverter {
     // `scale` (default 1, full resolution): a positive integer downsample
     // factor forwarded all the way to supernote-typescript's toImage(),
     // which decodes directly at the reduced resolution rather than
-    // downscaling a full-resolution decode afterward - see
-    // https://github.com/philips/supernote-typescript/issues/40. Meant for
+    // downscaling a full-resolution decode afterward. Meant for
     // SupernoteView's thumbnail sidebar (see ensureThumbnail()), which
     // otherwise paid the same decode/memory cost as actually viewing the
     // page just to fill in a ~140px preview.

@@ -8,9 +8,9 @@
 - Entry point: `src/main.ts`, compiled to `main.js` (esbuild bundle) and loaded
   by Obsidian.
 - Release artifacts: `main.js`, `manifest.json`, `styles.css`.
-- Plugin ID is `supernote` (see `manifest.json`) — never change this; it's
-  Obsidian's stable identifier for installs, settings storage, and the community
-  plugin listing.
+- Plugin ID is `journal-companion` (see `manifest.json`) — never change this;
+  it's Obsidian's stable identifier for installs, settings storage, and the
+  community plugin listing.
 
 ## Important Locations and Resources
 
@@ -260,10 +260,9 @@ Already fixed rather than argued with:
       on top, returned as an `image/svg+xml` data URL that drops into
       `<img src>` identically to the PNG data URLs. Full-res renders only —
       thumbnails keep the raster path (a `scale` downsample would corrupt vector
-      coordinates). The submodule exports those helpers from its public API
-      (philips/supernote-typescript PR #108) specifically so these
-      batched-worker paths can reach vector ink without the `toPdf`/`toSvg`
-      wrappers.
+      coordinates). The submodule exports those helpers from its public API so
+      these batched-worker paths can reach vector ink without the
+      `toPdf`/`toSvg` wrappers.
 - Don't commit build artifacts (`main.js`, `node_modules/`) — `main.js` is
   gitignored and shipped only via GitHub releases.
 
