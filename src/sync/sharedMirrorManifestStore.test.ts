@@ -12,6 +12,29 @@ function storage() {
 }
 
 describe('shared mirror manifest persistence', () => {
+    it('preserves a Cloud file ID and rejects duplicate or malformed identities and move intents', async () => {
+        const store = storage();
+        const initial = await loadMirrorManifest(store, {});
+        const source = { engineId: 'supernote-cloud' as const, md5: '0123456789abcdef0123456789abcdef', fileId: '42' };
+        const record = { contentHash: '0123456789abcdef', source };
+        const bound = await saveMirrorManifest(store, initial, { ...initial.manifest,
+            cloudAccountFingerprint: 'v1:synthetic-account', records: { 'Mirror/Note/Old.note': record } });
+        expect((await loadMirrorManifest(store, {})).manifest.records['Mirror/Note/Old.note'].source).toEqual(source);
+        await expect(saveMirrorManifest(store, bound, { ...bound.manifest,
+            records: { ...bound.manifest.records, 'Mirror/Note/Other.note': record } }))
+            .rejects.toThrow('Invalid shared mirror manifest');
+        await expect(saveMirrorManifest(store, bound, { ...bound.manifest,
+            records: { 'Mirror/Note/Old.note': { ...record, source: { ...source, fileId: '042' } } } }))
+            .rejects.toThrow('Invalid shared mirror manifest');
+        const pending = { kind: 'move' as const, root: 'Mirror', path: 'Mirror/Note/Old.note',
+            destination: 'Mirror/Note/New.note', beforeHash: record.contentHash, after: record };
+        const saved = await saveMirrorManifest(store, bound, { ...bound.manifest, pendingOperation: pending });
+        expect((await loadMirrorManifest(store, {})).manifest.pendingOperation).toEqual(pending);
+        await expect(saveMirrorManifest(store, saved, { ...saved.manifest,
+            pendingOperation: { ...pending, destination: 'Outside/New.note' } }))
+            .rejects.toThrow('Invalid shared mirror manifest');
+    });
+
     it('migrates IP history once, retaining legacy settings and refusing competing writes', async () => {
         const store = storage();
         const record = buildSyncRecord({ uri: '/Page.note', date: 'today', size: 3 }, 'Mirror/Page.note', 'hash');

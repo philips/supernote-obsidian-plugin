@@ -9,6 +9,7 @@ import { MirrorOperationExecutor } from '../mirrorOperationExecutor';
 export interface CloudMirrorVault {
     read(path: string): Promise<Uint8Array | null>;
     write(path: string, bytes: Uint8Array): Promise<void>;
+    rename?(path: string, destination: string): Promise<void>;
     trash?(path: string): Promise<void>;
     trashEmptyFolder?(path: string): Promise<boolean>;
     listFolders?(root: string): Promise<string[]>;
@@ -65,7 +66,7 @@ export async function applyCloudDownload(
 
     const outcome = existingHash === incomingHash ? 'already-current' : 'written';
     const nextRecord = { contentHash: incomingHash,
-        source: { engineId: 'supernote-cloud' as const, md5: expectedMd5 } };
+        source: { engineId: 'supernote-cloud' as const, md5: expectedMd5, fileId: candidate.item.id } };
     if (executor) await executor.write(candidate.vaultPath, bytes, nextRecord, (path, content) => vault.write(path, content));
     else if (outcome === 'written') await vault.write(candidate.vaultPath, bytes);
     return {

@@ -38,7 +38,7 @@ describe('Cloud raw-byte mirror boundary', () => {
         expect(result.outcome).toBe('written');
         expect(vault.contents()).toEqual(content);
         expect(result.manifest.records[vaultPath]).toEqual({
-            contentHash: hashBytes(content), source: { engineId: 'supernote-cloud', md5 },
+            contentHash: hashBytes(content), source: { engineId: 'supernote-cloud', md5, fileId: '1' },
         });
         expect(manifest.records).toEqual({});
     });
@@ -64,7 +64,7 @@ describe('Cloud raw-byte mirror boundary', () => {
             owned.transfer, CLOUD_MAX_MOBILE_FILE_BYTES);
         expect(adopted.outcome).toBe('already-current');
         expect(owned.vault.write).not.toHaveBeenCalled();
-        expect(adopted.manifest.records[vaultPath].source).toEqual({ engineId: 'supernote-cloud', md5 });
+        expect(adopted.manifest.records[vaultPath].source).toEqual({ engineId: 'supernote-cloud', md5, fileId: '1' });
 
         const unowned = fixture(new Uint8Array([5]));
         const refused = await applyCloudDownload(candidate, unowned.manifest, 'v1:synthetic-account', unowned.vault,

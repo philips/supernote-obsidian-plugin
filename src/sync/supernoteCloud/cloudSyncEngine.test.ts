@@ -75,8 +75,8 @@ beforeEach(() => {
     vi.mocked(downloadCloudBytes).mockResolvedValue(new Uint8Array([1, 2, 3]));
     vi.mocked(runVerifiedCloudMirror).mockImplementation(async (options) => {
         await options.transfer.download(candidate);
-        return { synced: 1, unchanged: 0, excluded: 0, removed: 0, removedFolders: 2, protected: [], failed: [],
-            failureCategories: [], warningCategories: [] };
+        return { synced: 1, unchanged: 0, excluded: 0, removed: 0, removedFolders: 2, moved: 0,
+            protected: [], moveConflicts: [], failed: [], failureCategories: [], warningCategories: [] };
     });
 });
 
@@ -167,7 +167,7 @@ describe('Cloud engine', () => {
 
     it('does not announce downloads when every file is unchanged or excluded', async () => {
         vi.mocked(runVerifiedCloudMirror).mockResolvedValue({ synced: 0, unchanged: 1, excluded: 1, removed: 0, removedFolders: 0,
-            protected: [], failed: [], failureCategories: [], warningCategories: [] });
+            moved: 0, protected: [], moveConflicts: [], failed: [], failureCategories: [], warningCategories: [] });
         await new CloudSyncEngine(app, settings).run({ kind: 'manual', commandId: 'sync-now' });
         expect(notice.mock.calls).toEqual([['Supernote cloud mirror started']]);
         expect(downloadCloudBytes).not.toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe('Cloud engine', () => {
 
     it('carries protected and failed paths in memory for shared reporting', async () => {
         vi.mocked(runVerifiedCloudMirror).mockResolvedValue({ synced: 0, unchanged: 0, excluded: 0, removed: 0, removedFolders: 0,
-            protected: ['Mirror/Note/edited.note'], failed: ['Mirror/Note/failed.note'],
+            moved: 0, protected: ['Mirror/Note/edited.note'], moveConflicts: [], failed: ['Mirror/Note/failed.note'],
             failureCategories: ['Missing Cloud checksum'], warningCategories: [] });
         const result = await new CloudSyncEngine(app, settings).run({ kind: 'scheduled' });
         expect(result.issues).toEqual([

@@ -6,6 +6,20 @@ import { retainSyncLogEntries } from './sync/syncReporting';
 
 const hash = (content: string): string => hashBytes(new TextEncoder().encode(content));
 
+function renamedContentHash(content: string, from: MarkdownExportRecord, to: MarkdownExportRecord): string | undefined {
+    const currentHash = hash(content);
+    if (currentHash === from.hash) return currentHash;
+    const oldParts = from.source.split('/');
+    const newParts = to.source.split('/');
+    let original = content;
+    for (let count = Math.min(oldParts.length, newParts.length); count > 0; count--) {
+        const oldSuffix = oldParts.slice(-count).join('/');
+        const newSuffix = newParts.slice(-count).join('/');
+        if (newSuffix !== oldSuffix) original = original.replaceAll(newSuffix, oldSuffix);
+    }
+    return original !== content && hash(original) === from.hash ? currentHash : undefined;
+}
+
 class ExportConflictError extends Error {}
 
 export interface AutomaticMarkdownAttachment {
@@ -139,6 +153,70 @@ export class AutomaticMarkdownExport {
         await this.save();
     }
 
+    missingExportCandidate(source: string): { mapping: string; source: string; destination: string } | undefined {
+        const file = this.app.vault.getFileByPath(source);
+        const pair = this.mapping(source);
+        if (this.stopped || !file || file.extension.toLowerCase() !== 'note' || !pair) return;
+        const destination = markdownExportDestination(pair, source);
+        const pending = this.settings.markdownExportPendingMove;
+        const related = pending && (pending.from.source === source || pending.to.source === source) ? pending : null;
+        if (related) {
+            const otherSource = related.from.source === source ? related.to.source : related.from.source;
+            if (otherSource !== source && this.app.vault.getAbstractFileByPath(otherSource)) return;
+        }
+        const destinations = new Set([destination]);
+        if (related) {
+            destinations.add(related.from.destination);
+            destinations.add(related.to.destination);
+        }
+        for (const path of [source, related?.from.source, related?.to.source]) {
+            if (path && this.settings.markdownExportBlockedSources?.[path] &&
+                !destinations.has(this.settings.markdownExportBlockedSources[path])) return;
+        }
+        for (const path of destinations) {
+            if (this.app.vault.getAbstractFileByPath(path)) return;
+            const record = this.settings.markdownExportRecords?.[path];
+            if (record && (record.destination !== path || record.mappingId !== pair.id ||
+                (record.source !== source && record.source !== related?.from.source && record.source !== related?.to.source) ||
+                Object.keys(record.attachments ?? {}).length)) return;
+        }
+        if (related && (Object.keys(related.from.attachments ?? {}).length || Object.keys(related.to.attachments ?? {}).length)) return;
+        if (!related && !destinations.has(this.settings.markdownExportBlockedSources?.[source]) &&
+            !this.settings.markdownExportRecords?.[destination]) return;
+        return { mapping: pair.name ?? pair.id, source, destination };
+    }
+
+    async restartMissingExport(source: string): Promise<void> {
+        await this.queue;
+        const candidate = this.missingExportCandidate(source);
+        if (!candidate) throw new Error('The source, mapping, or missing export state changed; review it again');
+        const pending = this.settings.markdownExportPendingMove;
+        const related = pending && (pending.from.source === source || pending.to.source === source) ? pending : null;
+        const records = this.settings.markdownExportRecords;
+        const blocked = this.settings.markdownExportBlockedSources;
+        const previousRecords = { ...records };
+        const previousBlocked = { ...blocked };
+        delete records[candidate.destination];
+        delete blocked[source];
+        if (related) {
+            delete records[related.from.destination];
+            delete records[related.to.destination];
+            const otherSource = related.from.source === source ? related.to.source : related.from.source;
+            if (otherSource !== source) delete blocked[otherSource];
+            this.settings.markdownExportPendingMove = null;
+        }
+        try {
+            await this.persist();
+        } catch (error) {
+            this.settings.markdownExportRecords = previousRecords;
+            this.settings.markdownExportBlockedSources = previousBlocked;
+            this.settings.markdownExportPendingMove = pending;
+            throw error;
+        }
+        const file = this.app.vault.getFileByPath(source);
+        if (file) this.schedule(file);
+    }
+
     resumeCandidate(destination: string): { mapping: string; source: string; destination: string } | undefined {
         if (this.stopped) return;
         const matches = this.app.vault.getFiles().filter((file) => file.extension.toLowerCase() === 'note' &&
@@ -159,6 +237,10 @@ export class AutomaticMarkdownExport {
         const previous = this.settings.markdownExportRecords[destination];
         const blocked = this.settings.markdownExportBlockedSources?.[candidate.source];
         const pending = this.settings.markdownExportPendingMove;
+        if (pending?.to.source === candidate.source && pending.to.destination === destination &&
+            this.app.vault.getAbstractFileByPath(pending.from.destination)) {
+            throw new Error('The original Markdown export still exists; review and resolve the pending move before resuming at this destination');
+        }
         const content = await this.app.vault.read(file);
         const sourceFile = this.app.vault.getFileByPath(candidate.source);
         if (!sourceFile) throw new Error('The source no longer exists');
@@ -375,12 +457,14 @@ export class AutomaticMarkdownExport {
                 const destination = markdownExportDestination(pair, file.path);
                 if (destination === oldRecord.destination) {
                     const existing = this.app.vault.getFileByPath(destination);
-                    if (!existing || hash(await this.app.vault.read(existing)) !== oldRecord.hash) {
+                    const next: MarkdownExportRecord = { ...oldRecord, mappingId: pair.id, source: file.path };
+                    const currentHash = existing && renamedContentHash(await this.app.vault.read(existing), oldRecord, next);
+                    if (!currentHash) {
                         await this.block(file.path, destination);
                         this.issue(file.path, destination, 'Rename blocked by edited or missing destination');
                         return;
                     }
-                    this.settings.markdownExportRecords[destination] = { ...oldRecord, mappingId: pair.id, source: file.path };
+                    this.settings.markdownExportRecords[destination] = { ...next, hash: currentHash };
                     try { await this.persist(); } catch (error) {
                         this.settings.markdownExportRecords[destination] = oldRecord;
                         this.issue(file.path, destination, error instanceof Error ? error.message : String(error));
@@ -389,15 +473,17 @@ export class AutomaticMarkdownExport {
                 } else {
                     try {
                         const oldFile = this.app.vault.getFileByPath(oldRecord.destination);
-                        if (!oldFile || hash(await this.app.vault.read(oldFile)) !== oldRecord.hash ||
-                            this.app.vault.getAbstractFileByPath(destination)) {
+                        const next: MarkdownExportRecord = { ...oldRecord, mappingId: pair.id, source: file.path, destination };
+                        const currentHash = oldFile && renamedContentHash(await this.app.vault.read(oldFile), oldRecord, next);
+                        if (!currentHash || this.app.vault.getAbstractFileByPath(destination)) {
                             await this.block(file.path, destination);
                             this.issue(file.path, destination, 'Rename blocked by edited, missing, or occupied destination');
                             return;
                         }
                         if (!renameCurrent()) return;
-                        const next: MarkdownExportRecord = { ...oldRecord, mappingId: pair.id, source: file.path, destination };
-                        this.settings.markdownExportPendingMove = { from: oldRecord, to: next };
+                        this.settings.markdownExportPendingMove = {
+                            from: { ...oldRecord, hash: currentHash }, to: { ...next, hash: currentHash },
+                        };
                         try {
                             await this.persist();
                         } catch (error) {
@@ -409,15 +495,18 @@ export class AutomaticMarkdownExport {
                             return;
                         }
                         await this.ensureParent(destination);
-                        if (!renameCurrent() || this.app.vault.getAbstractFileByPath(destination) ||
-                            hash(await this.app.vault.read(oldFile)) !== oldRecord.hash) {
+                        if (!renameCurrent() || this.app.vault.getAbstractFileByPath(destination)) {
                             await this.recover(renameCurrent());
-                            this.issue(file.path, destination, 'Rename changed during move; review the destinations');
+                            return;
+                        }
+                        const latestHash = renamedContentHash(await this.app.vault.read(oldFile), oldRecord, next);
+                        if (!latestHash) {
+                            await this.recover();
                             return;
                         }
                         await this.app.vault.rename(oldFile, destination);
                         delete this.settings.markdownExportRecords[oldRecord.destination];
-                        this.settings.markdownExportRecords[destination] = next;
+                        this.settings.markdownExportRecords[destination] = { ...next, hash: latestHash };
                         await this.persist();
                         this.settings.markdownExportPendingMove = null;
                         await this.persist();
@@ -453,26 +542,36 @@ export class AutomaticMarkdownExport {
         const moved = this.app.vault.getFileByPath(pending.to.destination);
         const original = this.app.vault.getFileByPath(pending.from.destination);
         let needsRefresh = false;
-        if (moved && !original && hash(await this.app.vault.read(moved)) === pending.from.hash) {
+        const movedHash = moved && !original && renamedContentHash(await this.app.vault.read(moved), pending.from, pending.to);
+        const originalHash = original && !moved && renamedContentHash(await this.app.vault.read(original), pending.from, pending.to);
+        if (movedHash) {
             this.settings.markdownExportRecords ??= {};
             delete this.settings.markdownExportRecords[pending.from.destination];
-            this.settings.markdownExportRecords[pending.to.destination] = pending.to;
+            this.settings.markdownExportRecords[pending.to.destination] = { ...pending.to, hash: movedHash };
             await this.persist();
             needsRefresh = true;
-        } else if (original && !moved && hash(await this.app.vault.read(original)) === pending.from.hash) {
+        } else if (original && originalHash) {
             if (!retryMove) {
                 this.settings.markdownExportPendingMove = null;
                 await this.persist();
                 return;
             }
+            const source = this.app.vault.getFileByPath(pending.to.source);
+            if (!source || this.mapping(source.path)?.id !== pending.to.mappingId) {
+                await this.block(pending.to.source, pending.to.destination);
+                this.issue(pending.to.source, pending.to.destination,
+                    'Interrupted rename needs review: source is missing or automatic export mapping changed');
+                return;
+            }
             try {
                 await this.ensureParent(pending.to.destination);
-                if (this.app.vault.getAbstractFileByPath(pending.to.destination) ||
-                    hash(await this.app.vault.read(original)) !== pending.from.hash) throw new Error('Destination changed during recovery');
+                if (this.app.vault.getAbstractFileByPath(pending.to.destination)) throw new Error('Destination changed during recovery');
+                const latestHash = renamedContentHash(await this.app.vault.read(original), pending.from, pending.to);
+                if (!latestHash) throw new Error('Destination changed during recovery');
                 await this.app.vault.rename(original, pending.to.destination);
                 this.settings.markdownExportRecords ??= {};
                 delete this.settings.markdownExportRecords[pending.from.destination];
-                this.settings.markdownExportRecords[pending.to.destination] = pending.to;
+                this.settings.markdownExportRecords[pending.to.destination] = { ...pending.to, hash: latestHash };
                 await this.persist();
                 needsRefresh = true;
             } catch (error) {
@@ -483,7 +582,8 @@ export class AutomaticMarkdownExport {
             }
         } else {
             await this.block(pending.to.source, pending.to.destination);
-            this.issue(pending.to.source, pending.to.destination, 'Interrupted rename needs review');
+            this.issue(pending.to.source, pending.to.destination,
+                'Interrupted rename needs review: managed Markdown changed or a destination is missing or occupied; review both locations before resuming');
             return;
         }
         this.settings.markdownExportPendingMove = null;

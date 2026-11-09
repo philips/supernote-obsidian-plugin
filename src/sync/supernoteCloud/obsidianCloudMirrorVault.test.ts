@@ -24,12 +24,45 @@ function fakeVault() {
             entries.set(file.path, new Uint8Array(buffer));
         }),
     };
-    const fileManager = { trashFile: vi.fn(async (file: TFile | TFolder) => { entries.delete(file.path); }) };
+    const fileManager = {
+        trashFile: vi.fn(async (file: TFile | TFolder) => { entries.delete(file.path); }),
+        renameFile: vi.fn(async (file: TFile, destination: string) => {
+            entries.set(destination, entries.get(file.path)!);
+            entries.delete(file.path);
+        }),
+    };
     return { entries, vault, fileManager,
         adapter: new ObsidianCloudMirrorVault({ vault, fileManager } as unknown as App) };
 }
 
 describe('Obsidian Cloud mirror vault', () => {
+    it('renames a real file through FileManager after creating its destination parents', async () => {
+        const { entries, vault, fileManager, adapter } = fakeVault();
+        const bytes = new Uint8Array([1, 2]);
+        entries.set('Mirror', null);
+        entries.set('Mirror/Note', null);
+        entries.set('Mirror/Note/Old.note', bytes);
+        await adapter.rename('Mirror/Note/Old.note', 'Mirror/Note/Archive/New.note');
+        expect(vault.createFolder).toHaveBeenCalledExactlyOnceWith('Mirror/Note/Archive');
+        expect(fileManager.renameFile).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ path: 'Mirror/Note/Old.note' }), 'Mirror/Note/Archive/New.note');
+        expect(entries.get('Mirror/Note/Archive/New.note')).toEqual(bytes);
+        expect(entries.has('Mirror/Note/Old.note')).toBe(false);
+    });
+
+    it('refuses an occupied destination and a non-file source before invoking FileManager', async () => {
+        const { entries, fileManager, adapter } = fakeVault();
+        entries.set('Mirror', null);
+        entries.set('Mirror/Note', null);
+        entries.set('Mirror/Note/Old.note', new Uint8Array([1]));
+        entries.set('Mirror/Note/New.note', new Uint8Array([2]));
+        await expect(adapter.rename('Mirror/Note/Old.note', 'Mirror/Note/New.note'))
+            .rejects.toThrow('occupied');
+        await expect(adapter.rename('Mirror/Note', 'Mirror/Note/Folder.note'))
+            .rejects.toThrow('not a file');
+        expect(fileManager.renameFile).not.toHaveBeenCalled();
+    });
+
     it('creates nested parent folders and writes exact bytes at the planned path', async () => {
         const { entries, vault, adapter } = fakeVault();
         await adapter.write('Mirror/Note/fixture.note', new Uint8Array([0, 255, 1]));

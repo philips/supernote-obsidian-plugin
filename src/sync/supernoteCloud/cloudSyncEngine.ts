@@ -135,9 +135,11 @@ export class CloudSyncEngine implements SyncEngine {
         });
         return {
             engineId: this.id, synced: result.synced, unchanged: result.unchanged,
-            excluded: result.excluded, removed: result.removed, removedFolders: result.removedFolders,
+            excluded: result.excluded, removed: result.removed, removedFolders: result.removedFolders, moved: result.moved,
             issues: [
-                ...result.protected.map((item) => ({ kind: 'protected' as const, item, message: 'Vault copy was edited locally' })),
+                ...result.protected.map((item) => ({ kind: 'protected' as const, item,
+                    message: result.moveConflicts?.includes(item) ? 'Cloud move conflict; inspect both paths'
+                        : 'Vault copy was edited locally' })),
                 ...result.failureCategories.map((category, index) => ({ kind: 'failure' as const, item: result.failed[index], message: category })),
                 ...result.warningCategories.map((category) => ({ kind: 'warning' as const, message: category })),
             ],

@@ -39,13 +39,15 @@ export function formatSyncLogEntry(result: SyncRunResult, engineName: string, no
     const protectedIssues = result.issues.filter((issue) => issue.kind === 'protected');
     const failures = result.issues.filter((issue) => issue.kind === 'failure');
     const warnings = result.issues.filter((issue) => issue.kind === 'warning');
-    if (!protectedIssues.length && !failures.length && !warnings.length && !result.removed && !result.removedFolders) return null;
+    if (!protectedIssues.length && !failures.length && !warnings.length && !result.removed && !result.removedFolders && !result.moved) return null;
 
     if (result.engineId === 'supernote-cloud') {
         const lines = [
-            `${result.synced} downloaded, ${result.unchanged} unchanged, ${result.excluded} out of scope, ${result.removed} files moved to Trash, ${result.removedFolders ?? 0} folders moved to Trash`,
-            `${protectedIssues.length} skipped (locally edited), ${failures.length} failed, ${warnings.length} warnings`,
-            ...protectedIssues.map((issue) => `Skipped (edited locally since last sync): \`${issue.item}\``),
+            `${result.synced} downloaded, ${result.unchanged} unchanged, ${result.moved ?? 0} files renamed, ${result.excluded} out of scope, ${result.removed} files moved to Trash, ${result.removedFolders ?? 0} folders moved to Trash`,
+            `${protectedIssues.length} skipped (protected), ${failures.length} failed, ${warnings.length} warnings`,
+            ...protectedIssues.map((issue) => issue.message === 'Cloud move conflict; inspect both paths'
+                ? `Skipped (Cloud move conflict): \`${issue.item}\``
+                : `Skipped (edited locally since last sync): \`${issue.item}\``),
             ...failures.map((issue) => {
                 const category = CLOUD_LOG_CATEGORIES.has(issue.message) ? issue.message : 'Cloud sync failure';
                 return issue.item ? `Failed: \`${issue.item}\` — ${category}` : `Failed: ${category}`;

@@ -61,7 +61,9 @@ function validRecord(entry: SharedMirrorManifest['records'][string]): boolean {
             && typeof source.deviceDate === 'string' && Number.isSafeInteger(source.deviceSize)
             && source.deviceSize >= 0
         : source.engineId === 'supernote-cloud' && typeof source.md5 === 'string'
-            && /^[a-f\d]{32}$/i.test(source.md5);
+            && /^[a-f\d]{32}$/i.test(source.md5)
+            && (source.fileId === undefined || typeof source.fileId === 'string'
+                && /^(0|[1-9]\d*)$/.test(source.fileId));
 }
 
 function validManifest(value: unknown): value is SharedMirrorManifest {
@@ -74,14 +76,26 @@ function validManifest(value: unknown): value is SharedMirrorManifest {
         || (manifest.legacyHistoryRetired !== undefined && manifest.legacyHistoryRetired !== true)
         || (manifest.pendingOperation !== undefined && (() => {
             const pending = manifest.pendingOperation;
-            if (!pending || (pending.kind !== 'write' && pending.kind !== 'trash')
+            const previousSource = pending && manifest.records[pending.path]?.source;
+            if (!pending || (pending.kind !== 'write' && pending.kind !== 'trash' && pending.kind !== 'move')
                 || typeof pending.root !== 'string' || !validPath(pending.root)
                 || typeof pending.path !== 'string' || !validPath(pending.path)
                 || !pending.path.startsWith(`${pending.root}/`)
+                || (pending.kind === 'move'
+                    ? typeof pending.destination !== 'string' || !validPath(pending.destination)
+                        || !pending.destination.startsWith(`${pending.root}/`)
+                        || pending.destination === pending.path || !!manifest.records[pending.destination]
+                        || previousSource?.engineId !== 'supernote-cloud'
+                        || pending.after?.source.engineId !== 'supernote-cloud'
+                        || pending.after.source.fileId !== previousSource.fileId
+                        || !pending.after.source.fileId
+                        || pending.after.contentHash !== manifest.records[pending.path].contentHash
+                        || pending.beforeHash !== pending.after.contentHash : pending.destination !== undefined)
                 || (pending.kind === 'write' ? !validRecord(pending.after!)
-                    || !/^[a-f\d]{16}$/.test(pending.after!.contentHash) : pending.after !== null
-                    || !manifest.records[pending.path]
-                    || pending.beforeHash !== manifest.records[pending.path].contentHash)
+                    || !/^[a-f\d]{16}$/.test(pending.after!.contentHash) : pending.kind === 'trash'
+                        ? pending.after !== null || !manifest.records[pending.path]
+                            || pending.beforeHash !== manifest.records[pending.path].contentHash
+                        : !validRecord(pending.after!))
                 || (pending.beforeHash !== null && !/^[a-f\d]{16}$/.test(pending.beforeHash))) return true;
             return false;
         })())
@@ -97,7 +111,15 @@ function validManifest(value: unknown): value is SharedMirrorManifest {
                     || manifest.records[manifest.accountChange.pendingPath]?.source.engineId !== 'supernote-cloud'))))) {
         return false;
     }
-    return Object.entries(manifest.records).every(([path, entry]) => validPath(path) && validRecord(entry));
+    const cloudIds = new Set<string>();
+    return Object.entries(manifest.records).every(([path, entry]) => {
+        if (!validPath(path) || !validRecord(entry)) return false;
+        if (entry.source.engineId === 'supernote-cloud' && entry.source.fileId !== undefined) {
+            if (!manifest.cloudAccountFingerprint || cloudIds.has(entry.source.fileId)) return false;
+            cloudIds.add(entry.source.fileId);
+        }
+        return true;
+    });
 }
 
 function decode(contents: string): StoredManifest | null {

@@ -26,6 +26,7 @@ export interface SyncRunResult {
     excluded: number;
     removed: number;
     removedFolders?: number;
+    moved?: number;
     issues: SyncIssue[];
 }
 
@@ -35,12 +36,13 @@ export function formatSyncSummary(result: SyncRunResult): string {
     const warningCount = result.issues.filter((issue) => issue.kind === 'warning').length;
     const cloud = result.engineId === 'supernote-cloud';
     const parts = [`${result.synced} ${cloud ? 'downloaded' : 'synced'}`, `${result.unchanged} unchanged`];
+    if (cloud && result.moved) parts.push(`${result.moved} ${result.moved === 1 ? 'file' : 'files'} renamed`);
     if (cloud || result.excluded > 0) parts.push(`${result.excluded} out of scope`);
     if (cloud || result.removed > 0) parts.push(cloud
         ? `${result.removed} ${result.removed === 1 ? 'file' : 'files'} moved to Trash`
         : `${result.removed} removed`);
     if (cloud && result.removedFolders) parts.push(`${result.removedFolders} empty ${result.removedFolders === 1 ? 'folder' : 'folders'} moved to Trash`);
-    if (cloud || protectedCount > 0) parts.push(`${protectedCount} skipped (locally edited)`);
+    if (cloud || protectedCount > 0) parts.push(`${protectedCount} skipped (${cloud ? 'protected' : 'locally edited'})`);
     if (cloud || failureCount > 0) parts.push(`${failureCount} failed`);
     if (warningCount > 0) parts.push(`${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'}`);
     return `Supernote sync: ${parts.join(', ')}`;

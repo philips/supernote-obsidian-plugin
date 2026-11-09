@@ -37,7 +37,7 @@ describe('Cloud mirror planning boundary', () => {
         ];
         const manifest = {
             'Mirror/Note/Changed.note': { contentHash: 'ours', cloudMd5: 'old' },
-            'Mirror/Note/Kept.note': { contentHash: 'ours', cloudMd5: '0123456789abcdef0123456789abcdef' },
+            'Mirror/Note/Kept.note': { contentHash: 'ours', cloudMd5: '0123456789abcdef0123456789abcdef', cloudId: '2' },
             'Mirror/Note/Edited.spd': { contentHash: 'ours', cloudMd5: 'old' },
             'Mirror/Note/Missing.note': { contentHash: 'ours', cloudMd5: '0123456789abcdef0123456789abcdef' },
         };

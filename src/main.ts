@@ -1285,6 +1285,32 @@ export default class SupernotePlugin extends Plugin {
 
 		this.addSettingTab(new SupernoteSettingTab(this.app, this));
 		this.addCommand({
+			id: 'restart-missing-automatic-markdown-export',
+			name: 'Regenerate missing Markdown export for this note',
+			checkCallback: (checking) => {
+				const source = this.app.workspace.getActiveFile()?.path;
+				const candidate = source && this.automaticMarkdownExport?.missingExportCandidate(source);
+				if (!candidate) return false;
+				if (!checking) {
+					const modal = new Modal(this.app);
+					modal.setTitle('Regenerate missing Markdown export');
+					modal.contentEl.createEl('p', { text: `Source: ${candidate.source}` });
+					modal.contentEl.createEl('p', { text: `Destination: ${candidate.destination}` });
+					modal.contentEl.createEl('p', { text: 'Discard the missing export\'s saved ownership and pending rename history, then generate a new Markdown export. Existing files and exports with page attachments will not be changed.' });
+					new Setting(modal.contentEl).addButton((button) => button.setButtonText('Regenerate').setCta().onClick(() => {
+						void this.automaticMarkdownExport!.restartMissingExport(candidate.source).then(() => {
+							modal.close();
+							new Notice('Missing Markdown export history cleared; regeneration queued');
+						}).catch((error: unknown) => {
+							new Notice(`Could not regenerate Markdown export: ${error instanceof Error ? error.message : String(error)}`);
+						});
+					})).addButton((button) => button.setButtonText('Cancel').onClick(() => modal.close()));
+					modal.open();
+				}
+				return true;
+			},
+		});
+		this.addCommand({
 			id: 'resume-automatic-markdown-export',
 			name: 'Resume automatic export for this file',
 			checkCallback: (checking) => {

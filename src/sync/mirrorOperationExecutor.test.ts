@@ -25,6 +25,81 @@ function harness() {
 }
 
 describe('ordinary mirror operation recovery', () => {
+    it('keeps the old record when an interrupted move never renamed the vault file', async () => {
+        const fixture = harness();
+        const cloudRecord = { contentHash: hashBytes(before),
+            source: { engineId: 'supernote-cloud' as const, md5: '0123456789abcdef0123456789abcdef', fileId: '42' } };
+        const initial = await fixture.service.load({});
+        const loaded = await fixture.service.commit(initial, { ...initial.manifest,
+            cloudAccountFingerprint: 'v1:synthetic-account', records: { [path]: cloudRecord } });
+        fixture.files.set(path, before);
+        const destination = 'Mirror/Note/Renamed.note';
+        await fixture.service.commit(loaded, { ...loaded.manifest,
+            pendingOperation: { kind: 'move', root: 'Mirror', path, destination,
+                beforeHash: cloudRecord.contentHash, after: cloudRecord } });
+        await recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read);
+        expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
+        expect((await fixture.load()).manifest.records).toEqual({ [path]: cloudRecord });
+        expect(fixture.files.has(destination)).toBe(false);
+    });
+
+    it('recovers an interrupted Cloud move and refuses uncertain paths', async () => {
+        const fixture = harness();
+        const cloudRecord = { contentHash: hashBytes(before),
+            source: { engineId: 'supernote-cloud' as const, md5: '0123456789abcdef0123456789abcdef', fileId: '42' } };
+        const destination = 'Mirror/Note/Renamed.note';
+        const initial = await fixture.service.load({});
+        const loaded = await fixture.service.commit(initial, { ...initial.manifest,
+            cloudAccountFingerprint: 'v1:synthetic-account', records: { [path]: cloudRecord } });
+        fixture.files.set(path, before);
+        const originalCommit = fixture.service.commit.bind(fixture.service);
+        let commits = 0;
+        fixture.service.commit = async (previous, manifest) => {
+            if (++commits === 2) throw new Error('interrupted');
+            return originalCommit(previous, manifest);
+        };
+        const rename = vi.fn(async (from: string, to: string) => {
+            expect((await fixture.load()).manifest.pendingOperation).toMatchObject({ kind: 'move', destination });
+            fixture.files.set(to, fixture.files.get(from)!);
+            fixture.files.delete(from);
+        });
+        await expect(new MirrorOperationExecutor(fixture.service, 'Mirror', loaded, fixture.read)
+            .move(path, destination, cloudRecord, rename)).rejects.toThrow('interrupted');
+        expect(rename).toHaveBeenCalledOnce();
+        fixture.service.commit = originalCommit;
+        await recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read);
+        expect((await fixture.load()).manifest.records).toEqual({ [destination]: cloudRecord });
+        expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
+
+        const next = await fixture.load();
+        await fixture.service.commit(next, { ...next.manifest,
+            records: { [path]: cloudRecord }, pendingOperation: { kind: 'move', root: 'Mirror', path,
+                destination, beforeHash: cloudRecord.contentHash, after: cloudRecord } });
+        fixture.files.set(path, before);
+        await expect(recoverMirrorOperation(fixture.service, await fixture.load(), 'Mirror', fixture.read))
+            .rejects.toBeInstanceOf(MirrorRecoveryAttentionError);
+    });
+
+    it('does not rename an edited source or occupied destination', async () => {
+        const fixture = harness();
+        const cloudRecord = { contentHash: hashBytes(before),
+            source: { engineId: 'supernote-cloud' as const, md5: '0123456789abcdef0123456789abcdef', fileId: '42' } };
+        const initial = await fixture.service.load({});
+        const loaded = await fixture.service.commit(initial, { ...initial.manifest,
+            cloudAccountFingerprint: 'v1:synthetic-account', records: { [path]: cloudRecord } });
+        const destination = 'Mirror/Note/Renamed.note';
+        const rename = vi.fn();
+        fixture.files.set(path, after);
+        await expect(new MirrorOperationExecutor(fixture.service, 'Mirror', loaded, fixture.read)
+            .move(path, destination, cloudRecord, rename)).rejects.toThrow('changed or destination is occupied');
+        fixture.files.set(path, before);
+        fixture.files.set(destination, after);
+        await expect(new MirrorOperationExecutor(fixture.service, 'Mirror', loaded, fixture.read)
+            .move(path, destination, cloudRecord, rename)).rejects.toThrow('changed or destination is occupied');
+        expect(rename).not.toHaveBeenCalled();
+        expect((await fixture.load()).manifest.pendingOperation).toBeUndefined();
+    });
+
     it('commits intent before writing and clears it with the new record', async () => {
         const fixture = harness();
         const loaded = await fixture.seed();

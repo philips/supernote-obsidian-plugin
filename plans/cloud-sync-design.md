@@ -586,6 +586,15 @@ compatible error-code evidence.
 - A remote rename or move preserves the local file only when its shared manifest
   entry and unchanged local content are established. Otherwise it is reported as
   protected rather than duplicated or removed silently.
+- A successful local raw-note rename can trigger a separate automatic Markdown
+  export rename. A change solely to the linked note's name or path is accepted
+  when reversing that rewrite restores the saved managed hash; any other
+  Markdown change preserves the file and blocks ownership transfer instead of
+  silently overwriting it. A raw-note move succeeding alone does not imply its
+  Markdown export moved. The user verified a Cloud-to-Markdown A to B and B to A
+  round trip in Marie after the exporter fix. The initial failed reverse move
+  differed only by a rewritten link, but its writer and event order were not
+  independently captured; this is not direct proof of hosted file-ID stability.
 - A current path or file-extension filter excludes a remote file from
   download/update work. Previously mirrored local copies remain in the vault
   when filters change, matching the IP engine's non-destructive behavior.

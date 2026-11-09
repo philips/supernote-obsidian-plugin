@@ -8,8 +8,11 @@ lookup was separately validated with an existing session. Live different-account
 switching and its destructive cleanup remain **unresolved**, not validated: the
 current user has no second Cloud account (one cannot be created without another
 device). This remains a Cloud-specific live validation gap, not a blocker to the
-implemented Cloud feature set. A new Cloud rename/move sprint is proposed but
-not implemented. Updated November 8, 2026.
+implemented Cloud feature set. Local ID-matched rename handling is implemented
+with synthetic tests. The user has now verified Cloud-to-raw-note-to-Markdown
+renames in Marie in both directions (A to B and B to A). A direct before/after
+hosted file-ID and checksum comparison remains unverified. Updated November 9,
+2026.
 
 This document tracks implementation sequencing, engineering decisions, and
 validation status. The user-observable behavior, endpoint contract, protocol
@@ -271,43 +274,45 @@ requirements remain in [`cloud-protocol-harness.md`](cloud-protocol-harness.md).
   does not exercise the account-change confirmation, which only arises during
   interactive sign-in with a different verified account.
 
-### Future sprint: Cloud file rename and move
+### Sprint 8: Local Cloud rename handling (complete)
 
-The Cloud listing supplies an opaque file `id`, name, parent ID, and checksum;
-verified path queries bind the ID to a canonical path. The shared manifest
-currently keys records by vault path and persists the Cloud checksum but not the
-file ID. A Cloud rename therefore downloads the new path and separately trashes
-the old managed raw file after deletion verification. That emits a vault create
-and Trash, not the vault rename event consumed by automatic Markdown export. The
-service's file-ID stability across a rename or move has not yet been
-demonstrated. The observed `TestFileRenamedToo.note` to `TestFileRenamed.note`
-case cannot prove identity retrospectively: its old ID was not saved.
+Cloud records persist optional account-bound file IDs. Matching a verified new
+path to an old managed ID with unchanged checksum and local bytes, a vacant
+destination, and two matching inventories permits a guarded local FileManager
+rename before download or Trash. Nested file moves cover file-bearing folder
+moves; empty folders have no identity. Move intent is persisted and reconciled
+after restart. Different IDs and legacy path-only records are never matched by
+name or hash. Synthetic tests cover conflicts, recovery, repeated runs, and the
+Markdown-only exporter handoff. No remote Cloud write route was added.
 
-In a later sprint, first establish with a controlled, replaceable Cloud fixture
-whether a rename preserves the file ID (and whether a move does). If it does,
-persist account-bound IDs for future observations, pair old and new verified
-paths by ID, and prefer a guarded local Obsidian rename over download plus
-Trash. Preserve local edits, occupied destinations, filters, pending-operation
-recovery, and the verified-inventory deletion gate; legacy path-only records
-must not be guessed into rename matches. A successful vault rename should let
-the separate auto-export monitor handle its own Markdown rename, with its
-existing conflict behavior for image attachments. If IDs change, retain the
-current conservative create/Trash behavior and document the limitation; do not
-infer identity from matching checksums or filenames. Detailed gates and tests
-are in [`cloud-sync-next-steps.md`](cloud-sync-next-steps.md). This is planning
-only.
+The initial reverse rename left the raw note renamed but the managed Markdown
+blocked. Read-only comparison established that the Markdown differed from its
+saved managed hash solely by a rewritten link to the newly named note; reversing
+that exact name change reproduced the saved hash. The actor and precise event
+order were not independently captured. The exporter now accepts only a source
+link name/path rewrite that reverses to the saved hash, including during pending
+move recovery; unrelated content edits, occupied destinations, missing files,
+and exports with page attachments remain protected. A command can discard stale
+ownership for a genuinely missing Markdown-only export and queue regeneration.
+The user subsequently verified in Marie that a rename originating in Cloud
+propagates through the raw note to its Markdown export in both directions, A to
+B and B to A. This completes the local rename handoff. It is not a direct
+before/after hosted file-ID and checksum comparison.
 
 ## Implementation Closeout
 
-The existing Cloud feature set is complete; the future rename/move sprint above
-is a new, unimplemented proposal. Ordinary download/write and remote-deletion
-Trash crash recovery is tracked as a deferred Multi-Sync scope decision in
-[`multi-sync-plan.md`](multi-sync-plan.md), not as incomplete Cloud
-implementation and not as a promise of the next shared-manifest sprint. Other
-unobserved hosted-service cases remain documented as unknowns with fail-closed
-behavior in [`cloud-sync-design.md`](cloud-sync-design.md); they do not by
-themselves call for another Cloud sprint. Live account-switch validation remains
-the separate unresolved evidence gap above, not a completed release gate.
+The existing Cloud feature set and local rename handling are implemented and the
+user has verified the Cloud-to-Markdown rename round trip. Direct hosted
+identity comparison remains optional validation; see
+[`cloud-sync-next-steps.md`](cloud-sync-next-steps.md). Ordinary download/write
+and remote-deletion Trash crash recovery is tracked as a deferred Multi-Sync
+scope decision in [`multi-sync-plan.md`](multi-sync-plan.md), not as incomplete
+Cloud implementation and not as a promise of the next shared-manifest sprint.
+Other unobserved hosted-service cases remain documented as unknowns with
+fail-closed behavior in [`cloud-sync-design.md`](cloud-sync-design.md); they do
+not by themselves call for another Cloud sprint. Live account-switch validation
+remains the separate unresolved evidence gap above, not a completed release
+gate.
 
 ### Remaining Live Validation: Different-Account Switch
 
@@ -324,9 +329,9 @@ no-background-sign-in only; it does not exercise this interactive flow.
 
 Ordinary download/write and remote-deletion Trash crash recovery is tracked
 separately in [`multi-sync-plan.md`](multi-sync-plan.md); it is not incomplete
-Cloud implementation. The proposed rename/move work is tracked separately in
-[`cloud-sync-next-steps.md`](cloud-sync-next-steps.md) and requires evidence
-that Cloud file IDs survive a rename before implementation.
+Cloud implementation. The completed rename work is recorded above; its live
+round trip must not be mistaken for a direct proof that hosted file IDs survive
+renames.
 
 ## Validation Gates
 
@@ -365,6 +370,17 @@ the value supplied by the user; it was not retained. The username UI changes
 passed `npm test` (449 passing), `npm run build`, `npm run lint` (0 errors, 12
 warnings), and `git diff --check`. Scheduled-sync outcomes are user-reported as
 recorded in Sprint 7, not independently captured.
+
+Sprint 8 and its reverse-rename diagnostic handoff passed focused automatic
+export tests, `npm test` (580 passing), `npm run build`, `npm run lint` (zero
+errors, 20 existing warnings), and `git diff --check`. Forward/reverse behavior
+was subsequently verified by the user in Marie, their designated test vault. The
+link-rewrite and missing-export recovery follow-up passed focused automatic
+export tests (45 passing), `npm test` (590 passing), `npm run build`,
+`npm run
+lint` (zero errors, 20 warnings), and `git diff --check`. The actual
+writer and event order were not instrumented, and no direct hosted before/after
+file-ID and checksum comparison was performed.
 
 Do not use production login/OTP, delete or clear harness cache, or broaden the
 test-vault fixture scope without separate explicit authorization. Keep protocol

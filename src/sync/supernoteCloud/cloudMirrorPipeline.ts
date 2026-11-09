@@ -54,8 +54,8 @@ export interface CloudMirrorRunOptions {
 }
 
 export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Promise<{
-    synced: number; unchanged: number; excluded: number; removed: number; removedFolders: number;
-    protected: string[]; failed: string[];
+    synced: number; unchanged: number; excluded: number; removed: number; removedFolders: number; moved: number;
+    protected: string[]; moveConflicts: string[]; failed: string[];
     failureCategories: string[]; warningCategories: string[];
 }> {
     const manifestService = options.manifestService ?? new RootMirrorManifestService(() => options.storage);
@@ -67,13 +67,77 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         options.syncFolder, loaded.manifest, options.accountFingerprint, options.vault,
         options.pathFilters, options.fileExtensions);
     const result = {
-        synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length, removed: 0, removedFolders: 0,
+        synced: 0, unchanged: plan.unchanged.length, excluded: plan.excluded.length, removed: 0, removedFolders: 0, moved: 0,
         protected: plan.protected.map((candidate) => candidate.vaultPath),
+        moveConflicts: [] as string[],
         failed: plan.missingChecksum.map((candidate) => candidate.vaultPath),
         failureCategories: plan.missingChecksum.map(() => 'Missing Cloud checksum'),
         warningCategories: [] as string[],
     };
+    const files = bindVerifiedCloudPaths(options.inventory, options.canonicalPathsById);
+    const present = new Set(files.map((file) => `${options.syncFolder.replace(/^\/+|\/+$/g, '')}${file.canonicalPath}`));
+    const oldPathsById = new Map(Object.entries(executor.manifest.records).flatMap(([path, record]) =>
+        record.source.engineId === 'supernote-cloud' && record.source.fileId
+            ? [[record.source.fileId, path] as const] : []));
+    const blocked = new Set<string>();
+    const protectMove = (oldPath: string, newPath: string) => {
+        for (const path of [oldPath, newPath]) {
+            blocked.add(path);
+            if (!result.protected.includes(path)) result.protected.push(path);
+            if (!result.moveConflicts.includes(path)) result.moveConflicts.push(path);
+        }
+    };
+    const moveCandidates = files.flatMap((file) => {
+        const oldPath = oldPathsById.get(file.item.id);
+        if (!oldPath) return [];
+        const newPath = `${options.syncFolder.replace(/^\/+|\/+$/g, '')}${file.canonicalPath}`;
+        if (oldPath === newPath) return [];
+        const inScope = plan.toDownload.some((candidate) => candidate.vaultPath === newPath);
+        const oldRecord = executor.manifest.records[oldPath];
+        const oldRelative = oldPath.slice(options.syncFolder.replace(/^\/+|\/+$/g, '').length);
+        if (!inScope || present.has(oldPath) || oldPath.toLowerCase() === newPath.toLowerCase()
+            || !!executor.manifest.records[newPath]
+            || !matchesAnyPathPattern([oldRelative], options.pathFilters)
+            || !matchesFileExtension(oldPath.split('/').at(-1)!, options.fileExtensions)
+            || oldRecord.source.engineId !== 'supernote-cloud' || !file.item.md5
+            || file.item.md5.toLowerCase() !== oldRecord.source.md5.toLowerCase()) {
+            protectMove(oldPath, newPath);
+            return [];
+        }
+        return [{ oldPath, newPath, record: oldRecord }];
+    });
+    if (moveCandidates.length > 0) {
+        let stable = false;
+        if (options.verifyDeletionInventory && options.vault.rename) {
+            try {
+                const second = await options.verifyDeletionInventory();
+                stable = cloudInventoryFingerprint(options.inventory, options.canonicalPathsById)
+                    === cloudInventoryFingerprint(second.inventory, second.canonicalPathsById);
+            } catch { stable = false; }
+        }
+        for (const { oldPath, newPath, record } of moveCandidates) {
+            if (!stable || !options.vault.rename) {
+                protectMove(oldPath, newPath);
+                continue;
+            }
+            try {
+                const source = await options.vault.read(oldPath);
+                const destination = await options.vault.read(newPath);
+                if (source === null || hashBytes(source) !== record.contentHash || destination !== null) {
+                    protectMove(oldPath, newPath);
+                    continue;
+                }
+                await executor.move(oldPath, newPath, record, (from, to) => options.vault.rename!(from, to));
+                blocked.add(newPath);
+                result.moved++;
+            } catch (error) {
+                if (error instanceof MirrorOperationError) throw error;
+                protectMove(oldPath, newPath);
+            }
+        }
+    }
     for (const candidate of plan.toDownload) {
+        if (blocked.has(candidate.vaultPath)) continue;
         let write: Awaited<ReturnType<typeof applyCloudDownload>>;
         try {
             write = await applyCloudDownload(candidate, executor.manifest, options.accountFingerprint,
@@ -100,9 +164,9 @@ export async function runVerifiedCloudMirror(options: CloudMirrorRunOptions): Pr
         else result.unchanged++;
     }
 
-    const files = bindVerifiedCloudPaths(options.inventory, options.canonicalPathsById);
     const candidates = missingManagedCloudPaths(files, options.syncFolder,
-        cloudPlanningRecords(executor.manifest), options.pathFilters, options.fileExtensions);
+        cloudPlanningRecords(executor.manifest), options.pathFilters, options.fileExtensions)
+        .filter((path) => !blocked.has(path));
     const root = options.syncFolder.replace(/^\/+|\/+$/g, '');
     const folders = options.vault.listFolders && options.vault.trashEmptyFolder
         ? await options.vault.listFolders(root) : [];

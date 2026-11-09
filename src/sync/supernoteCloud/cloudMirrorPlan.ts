@@ -28,6 +28,7 @@ export function bindVerifiedCloudPaths(
 export interface CloudMirrorRecord {
     contentHash: string;
     cloudMd5?: string;
+    cloudId?: string;
 }
 
 export interface CloudMirrorCandidate extends VerifiedCloudFile {
@@ -112,7 +113,8 @@ export function planCloudMirror(
         // checksum does not make a locally modified mirror safe to adopt.
         if (localHash !== null && record && localHash !== record.contentHash) {
             plan.protected.push(candidate);
-        } else if (record?.cloudMd5 && file.item.md5 === record.cloudMd5 && localHash !== null) {
+        } else if (record?.cloudMd5 && record.cloudId === file.item.id
+            && file.item.md5 === record.cloudMd5 && localHash !== null) {
             plan.unchanged.push(candidate);
         } else {
             plan.toDownload.push(candidate);

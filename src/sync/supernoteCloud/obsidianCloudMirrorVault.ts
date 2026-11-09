@@ -36,6 +36,26 @@ export class ObsidianCloudMirrorVault implements CloudMirrorVault {
         await this.app.fileManager.trashFile(entry);
     }
 
+    async rename(path: string, destination: string): Promise<void> {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        if (!(entry instanceof TFile)) throw new Error('Cloud mirror move source is not a file');
+        if (this.app.vault.getAbstractFileByPath(destination) !== null) {
+            throw new Error('Cloud mirror move destination is occupied');
+        }
+        const parentPath = destination.slice(0, destination.lastIndexOf('/'));
+        let parent = '';
+        for (const segment of parentPath.split('/')) {
+            parent = parent ? `${parent}/${segment}` : segment;
+            const folder = this.app.vault.getAbstractFileByPath(parent);
+            if (folder instanceof TFile) throw new Error('Cloud mirror move parent is not a folder');
+            if (folder === null) await this.app.vault.createFolder(parent);
+        }
+        if (this.app.vault.getAbstractFileByPath(destination) !== null) {
+            throw new Error('Cloud mirror move destination is occupied');
+        }
+        await this.app.fileManager.renameFile(entry, destination);
+    }
+
     async trashEmptyFolder(path: string): Promise<boolean> {
         const entry = this.app.vault.getAbstractFileByPath(path);
         if (!(entry instanceof TFolder)) return false;

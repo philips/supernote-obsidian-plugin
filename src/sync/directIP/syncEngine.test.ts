@@ -407,7 +407,7 @@ describe('shared sync reporting', () => {
         await reportSyncFailure(vault.app, SYNC_FOLDER, 'supernote-cloud', new Error(secret), 'Supernote cloud');
         const text = vault.readText(`${SYNC_FOLDER}/Sync Log.md`);
         expect(text).toContain('(Supernote cloud)');
-        expect(text).toContain('1 skipped (locally edited), 2 failed, 2 warnings');
+        expect(text).toContain('1 skipped (protected), 2 failed, 2 warnings');
         expect(text).toContain(`Skipped (edited locally since last sync): \`${protectedPath}\``);
         expect(text).toContain(`Failed: \`${failedPath}\` — Cloud transfer or vault write failed`);
         expect(text).toContain(`Failed: \`${failedPath}\` — Cloud sync failure`);

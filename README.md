@@ -10,7 +10,10 @@ Scanned-journal support is a goal, not a feature in the current release.
 
 ## Compared with the original project, Journal Companion adds
 
-- ☁️ Supernote Cloud sync while keeping direct-IP device sync.
+- ☁️ Supernote Cloud sync while keeping direct-IP device sync. When a verified
+  Cloud file keeps its persisted ID and checksum after a path change, sync can
+  rename its unchanged local copy; ambiguous moves protect both paths. Hosted ID
+  stability across rename has not yet been validated with a live fixture.
 
 - 🧩 An engine-neutral sync layer designed to accommodate other devices.
 
@@ -96,6 +99,14 @@ from the command palette while viewing that Markdown file. Confirm the mapping,
 source, and destination. This records the file's current contents as the new
 baseline without rewriting it; the next source change can update it. Renames
 with conflicts remain blocked until you explicitly resume.
+
+If the managed Markdown file is missing instead, open the affected `.note` and
+run **Regenerate missing Markdown export for this note** from the command
+palette. Confirm to discard only that note's missing export record and related
+pending rename history, then queue a fresh export. The command is unavailable if
+a related destination or source still exists, or the export has page
+attachments; it never deletes files. Review any edited Markdown you have
+elsewhere before discarding its ownership history.
 
 With **Markdown export error log** enabled, failures and conflicts are recorded
 in `Markdown Export Log.md` in each folder's output location, or at the vault

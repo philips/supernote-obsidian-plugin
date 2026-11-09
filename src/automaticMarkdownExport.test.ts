@@ -4,6 +4,7 @@ import { AutomaticMarkdownExport } from './automaticMarkdownExport';
 import type { AutomaticMarkdownResult } from './automaticMarkdownExport';
 import { DEFAULT_SETTINGS } from './settings';
 import type { NoteConversion, SupernotePluginSettings } from './settings';
+import { ObsidianCloudMirrorVault } from './sync/supernoteCloud/obsidianCloudMirrorVault';
 
 vi.mock('obsidian', () => ({
     Modal: class {},
@@ -13,6 +14,7 @@ vi.mock('obsidian', () => ({
         extension = 'note';
         path = '';
     },
+    TFolder: class TFolder {},
 }));
 
 class FakeFile extends TFile {
@@ -83,6 +85,31 @@ describe('automatic Markdown export', () => {
     async function flush() {
         await vi.runAllTimersAsync();
     }
+
+    it('hands a FileManager source rename to the Markdown-only export listener', async () => {
+        const source = new FakeFile('Notes/day.note');
+        files.set(source.path, { file: source, content: 'first' });
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        exporter.schedule(source);
+        await flush();
+        const bridge = app as { vault: { rename(file: FakeFile, path: string): Promise<void> },
+            fileManager?: { renameFile(file: FakeFile, path: string): Promise<void> } };
+        const renameFile = vi.fn(async (file: FakeFile, destination: string) => {
+            const oldPath = file.path;
+            await bridge.vault.rename(file, destination);
+            exporter.rename(file, oldPath);
+        });
+        bridge.fileManager = { renameFile };
+
+        await new ObsidianCloudMirrorVault(app).rename('Notes/day.note', 'Notes/new.note');
+        await flush();
+
+        expect(renameFile).toHaveBeenCalledExactlyOnceWith(source, 'Notes/new.note');
+        expect(files.has('Exports/day.md')).toBe(false);
+        expect(files.has('Exports/new.md')).toBe(true);
+        expect(settings.markdownExportRecords['Exports/new.md']?.source).toBe('Notes/new.note');
+        expect(report).not.toHaveBeenCalled();
+    });
 
     it.each(['png', 'svg'] as const)('creates and refreshes managed %s page attachments', async (format) => {
         settings.markdownExportMappings[0].noteConversion = format;
@@ -204,6 +231,117 @@ describe('automatic Markdown export', () => {
         expect(settings.markdownExportRecords['Exports/new.md']?.source).toBe(source.path);
         expect(settings.markdownExportPendingMove).toBeNull();
         expect(report).not.toHaveBeenCalled();
+    });
+
+    it('moves a managed Markdown-only export back to its original name', async () => {
+        const source = new FakeFile('Notes/day.note');
+        files.set(source.path, { file: source, content: 'first' });
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        exporter.schedule(source);
+        await flush();
+        for (const destination of ['Notes/day1.note', 'Notes/day.note']) {
+            const oldPath = source.path;
+            files.delete(oldPath);
+            source.path = destination;
+            files.set(destination, { file: source, content: 'first' });
+            exporter.rename(source, oldPath);
+            await flush();
+        }
+        expect(files.has('Exports/day1.md')).toBe(false);
+        expect(files.has('Exports/day.md')).toBe(true);
+        expect(settings.markdownExportRecords['Exports/day.md']?.source).toBe('Notes/day.note');
+        expect(settings.markdownExportPendingMove).toBeNull();
+        expect(report).not.toHaveBeenCalled();
+    });
+
+    it.each(['before intent', 'after intent'])('moves a Markdown export after an exact note-link rewrite %s', async (timing) => {
+        const source = new FakeFile('Notes/day.note');
+        files.set(source.path, { file: source, content: 'note' });
+        convert.mockImplementation(async (file) => `See [[${file.path}]] and [[${file.path.split('/').pop()}]]`);
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        exporter.schedule(source);
+        await flush();
+        const rewritten = 'See [[Notes/new.note]] and [[new.note]]';
+        if (timing === 'before intent') files.get('Exports/day.md')!.content = rewritten;
+        else save.mockImplementationOnce(async () => {
+            if (settings.markdownExportPendingMove) files.get('Exports/day.md')!.content = rewritten;
+        });
+        files.delete(source.path);
+        source.path = 'Notes/new.note';
+        files.set(source.path, { file: source, content: 'note' });
+        exporter.rename(source, 'Notes/day.note');
+        await flush();
+        expect(files.has('Exports/day.md')).toBe(false);
+        expect(files.get('Exports/new.md')?.content).toBe(rewritten);
+        expect(settings.markdownExportPendingMove).toBeNull();
+        expect(settings.markdownExportBlockedSources[source.path]).toBeUndefined();
+        expect(report).not.toHaveBeenCalled();
+    });
+
+    it('protects a managed export changed while a reverse rename is pending', async () => {
+        const source = new FakeFile('Notes/day.note');
+        files.set(source.path, { file: source, content: 'first' });
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        exporter.schedule(source);
+        await flush();
+        files.delete(source.path);
+        source.path = 'Notes/day1.note';
+        files.set(source.path, { file: source, content: 'first' });
+        exporter.rename(source, 'Notes/day.note');
+        await flush();
+        save.mockImplementationOnce(async () => {
+            if (settings.markdownExportPendingMove) files.get('Exports/day1.md')!.content = 'changed during rename';
+        });
+        files.delete(source.path);
+        source.path = 'Notes/day.note';
+        files.set(source.path, { file: source, content: 'first' });
+        exporter.rename(source, 'Notes/day1.note');
+        await flush();
+        expect(files.get('Exports/day1.md')?.content).toBe('changed during rename');
+        expect(files.has('Exports/day.md')).toBe(false);
+        expect(settings.markdownExportPendingMove?.from.destination).toBe('Exports/day1.md');
+        expect(report).toHaveBeenCalledOnce();
+        expect(report).toHaveBeenCalledWith(source.path, 'Exports/day.md', expect.stringContaining('review both locations before resuming'));
+    });
+
+    it('records the pending-save, Markdown-modify, second-read ordering without claiming the changed file', async () => {
+        const source = new FakeFile('Notes/day.note');
+        files.set(source.path, { file: source, content: 'first' });
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        exporter.schedule(source);
+        await flush();
+        const events: string[] = [];
+        const vault = (app as { vault: {
+            read: (file: FakeFile) => Promise<string>;
+            rename: (file: FakeFile, destination: string) => Promise<void>;
+        } }).vault;
+        const read = vault.read;
+        const rename = vault.rename;
+        vault.read = async (file) => {
+            if (file.extension === 'md') events.push('markdown read');
+            return read(file);
+        };
+        vault.rename = async (file, destination) => {
+            if (file.extension === 'md') events.push('markdown rename');
+            return rename(file, destination);
+        };
+        save.mockImplementation(async () => {
+            if (settings.markdownExportPendingMove && !events.includes('intent saved')) {
+                events.push('intent saved');
+                files.get('Exports/day.md')!.content = 'changed by another writer';
+                events.push('markdown modified');
+            }
+        });
+        files.delete(source.path);
+        source.path = 'Notes/new.note';
+        files.set(source.path, { file: source, content: 'first' });
+        exporter.rename(source, 'Notes/day.note');
+        await flush();
+        expect(events).toEqual(['markdown read', 'intent saved', 'markdown modified',
+            'markdown read', 'markdown read']);
+        expect(settings.markdownExportPendingMove?.to.destination).toBe('Exports/new.md');
+        expect(files.has('Exports/new.md')).toBe(false);
+        expect(settings.markdownExportBlockedSources[source.path]).toBe('Exports/new.md');
     });
 
     it('keeps an edited export in place on rename and handles root beside-source files', async () => {
@@ -479,6 +617,48 @@ describe('automatic Markdown export', () => {
         expect(files.get('Exports/new.md')?.content).toBe('Notes/new.note -> Exports/new.md');
     });
 
+    it('recovers a pending rename after only the linked note path changes', async () => {
+        const source = new FakeFile('Notes/new.note');
+        files.set(source.path, { file: source, content: 'note' });
+        const previous = 'See [[Notes/day.note]]';
+        const { hashBytes } = await import('./sync/directIP/deviceSync');
+        const record = { mappingId: 'one', source: 'Notes/day.note', destination: 'Exports/day.md',
+            hash: hashBytes(new TextEncoder().encode(previous)) };
+        settings.markdownExportRecords['Exports/day.md'] = record;
+        settings.markdownExportPendingMove = { from: record, to: { ...record, source: source.path, destination: 'Exports/new.md' } };
+        settings.markdownExportBlockedSources[source.path] = 'Exports/new.md';
+        files.set('Exports/day.md', { file: new FakeFile('Exports/day.md'), content: 'See [[Notes/new.note]]' });
+        convert.mockImplementation(async (file) => `See [[${file.path}]]`);
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        await exporter.recover();
+        await flush();
+        expect(files.has('Exports/day.md')).toBe(false);
+        expect(files.get('Exports/new.md')?.content).toBe('See [[Notes/new.note]]');
+        expect(settings.markdownExportPendingMove).toBeNull();
+        expect(settings.markdownExportBlockedSources[source.path]).toBeUndefined();
+        expect(report).not.toHaveBeenCalled();
+    });
+
+    it.each(['disabled', 'missing source'])('leaves a pending move untouched after restart with %s', async (state) => {
+        const source = new FakeFile('Notes/new.note');
+        if (state !== 'missing source') files.set(source.path, { file: source, content: '' });
+        if (state === 'disabled') settings.automaticMarkdownExportEnabled = false;
+        const previous = 'original export';
+        const { hashBytes } = await import('./sync/directIP/deviceSync');
+        const record = { mappingId: 'one', source: 'Notes/day.note', destination: 'Exports/day.md',
+            hash: hashBytes(new TextEncoder().encode(previous)) };
+        settings.markdownExportRecords = { 'Exports/day.md': record };
+        settings.markdownExportPendingMove = { from: record, to: { ...record, source: source.path, destination: 'Exports/new.md' } };
+        files.set('Exports/day.md', { file: new FakeFile('Exports/day.md'), content: previous });
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        await exporter.recover();
+        expect(files.get('Exports/day.md')?.content).toBe(previous);
+        expect(files.has('Exports/new.md')).toBe(false);
+        expect(settings.markdownExportPendingMove?.from).toEqual(record);
+        expect(settings.markdownExportBlockedSources[source.path]).toBe('Exports/new.md');
+        expect(report).toHaveBeenCalledWith(source.path, 'Exports/new.md', expect.stringContaining('source is missing or automatic export mapping changed'));
+    });
+
     it('does not create a new export after renaming a source with an unmanaged old output', async () => {
         const source = new FakeFile('Notes/day.note');
         files.set(source.path, { file: source, content: '' });
@@ -609,6 +789,78 @@ describe('automatic Markdown export', () => {
         reloaded.schedule(source);
         await flush();
         expect(files.get('Exports/new.md')?.content).toContain('Notes/new.note');
+    });
+
+    it('does not resume at a second destination while a pending move still owns the original', async () => {
+        const source = new FakeFile('Notes/new.note');
+        files.set(source.path, { file: source, content: 'note' });
+        files.set('Exports/day.md', { file: new FakeFile('Exports/day.md'), content: 'edited original' });
+        files.set('Exports/new.md', { file: new FakeFile('Exports/new.md'), content: 'reviewed replacement' });
+        const record = { mappingId: 'one', source: 'Notes/day.note', destination: 'Exports/day.md', hash: 'old hash' };
+        settings.markdownExportRecords['Exports/day.md'] = record;
+        settings.markdownExportPendingMove = { from: record, to: { ...record, source: source.path, destination: 'Exports/new.md' } };
+        settings.markdownExportBlockedSources[source.path] = 'Exports/new.md';
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        await expect(exporter.resume('Exports/new.md')).rejects.toThrow('original Markdown export still exists');
+        expect(settings.markdownExportRecords).toEqual({ 'Exports/day.md': record });
+        expect(settings.markdownExportPendingMove?.from).toEqual(record);
+        expect(settings.markdownExportBlockedSources[source.path]).toBe('Exports/new.md');
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('regenerates only the missing export after a blocked rename back to the original note', async () => {
+        const source = new FakeFile('Notes/day1.note');
+        files.set(source.path, { file: source, content: 'note' });
+        const oldRecord = { mappingId: 'one', source: 'Notes/day1.note', destination: 'Exports/day1.md', hash: 'saved' };
+        settings.markdownExportRecords['Exports/day1.md'] = oldRecord;
+        settings.markdownExportPendingMove = { from: oldRecord, to: { ...oldRecord, source: 'Notes/day.note', destination: 'Exports/day.md' } };
+        settings.markdownExportBlockedSources['Notes/day.note'] = 'Exports/day.md';
+        settings.markdownExportBlockedSources[source.path] = 'Exports/day1.md';
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        expect(exporter.missingExportCandidate(source.path)?.destination).toBe('Exports/day1.md');
+        await exporter.restartMissingExport(source.path);
+        await flush();
+        expect(files.get('Exports/day1.md')?.content).toContain('Notes/day1.note');
+        expect(settings.markdownExportRecords['Exports/day1.md']?.source).toBe(source.path);
+        expect(settings.markdownExportPendingMove).toBeNull();
+        expect(settings.markdownExportBlockedSources).toEqual({});
+        expect(files.has('Exports/day.md')).toBe(false);
+    });
+
+    it('refuses to discard missing-export history if a related destination exists or save fails', async () => {
+        const source = new FakeFile('Notes/day1.note');
+        files.set(source.path, { file: source, content: 'note' });
+        const record = { mappingId: 'one', source: source.path, destination: 'Exports/day1.md', hash: 'saved' };
+        settings.markdownExportRecords['Exports/day1.md'] = record;
+        settings.markdownExportPendingMove = { from: record, to: { ...record, source: 'Notes/day.note', destination: 'Exports/day.md' } };
+        settings.markdownExportBlockedSources[source.path] = 'Exports/day1.md';
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        files.set('Exports/day.md', { file: new FakeFile('Exports/day.md'), content: 'keep' });
+        expect(exporter.missingExportCandidate(source.path)).toBeUndefined();
+        await expect(exporter.restartMissingExport(source.path)).rejects.toThrow('changed');
+        expect(files.get('Exports/day.md')?.content).toBe('keep');
+        files.delete('Exports/day.md');
+        save.mockRejectedValueOnce(new Error('disk full'));
+        await expect(exporter.restartMissingExport(source.path)).rejects.toThrow('disk full');
+        expect(settings.markdownExportRecords['Exports/day1.md']).toEqual(record);
+        expect(settings.markdownExportPendingMove?.from).toEqual(record);
+        expect(settings.markdownExportBlockedSources[source.path]).toBe('Exports/day1.md');
+        expect(files.has('Exports/day1.md')).toBe(false);
+    });
+
+    it('leaves unrelated export conflicts and attachment-bearing history untouched', async () => {
+        const source = new FakeFile('Notes/day1.note');
+        files.set(source.path, { file: source, content: 'note' });
+        const record = { mappingId: 'one', source: source.path, destination: 'Exports/day1.md', hash: 'saved' };
+        settings.markdownExportRecords['Exports/day1.md'] = record;
+        settings.markdownExportBlockedSources[source.path] = 'Exports/other.md';
+        const exporter = new AutomaticMarkdownExport(app, settings, save, convert, report);
+        expect(exporter.missingExportCandidate(source.path)).toBeUndefined();
+        settings.markdownExportBlockedSources[source.path] = 'Exports/day1.md';
+        settings.markdownExportRecords['Exports/day1.md'] = { ...record, attachments: { 'Exports/day1-pages/1.png': 'saved' } };
+        expect(exporter.missingExportCandidate(source.path)).toBeUndefined();
+        expect(settings.markdownExportRecords['Exports/day1.md'].attachments).toBeDefined();
+        expect(save).not.toHaveBeenCalled();
     });
 
     it('shares a vault-root error log across beside-source pairs without duplicate notices', async () => {

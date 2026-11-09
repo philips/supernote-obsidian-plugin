@@ -16,6 +16,99 @@ function item(id: string, fileName: string): CloudInventoryItem {
 }
 
 describe('Cloud inventory to shared-manifest planning', () => {
+    it.each(['edited', 'occupied', 'checksum', 'filtered', 'case-only', 'unstable'])(
+        'protects both paths for a %s ID-matched move conflict', async (reason) => {
+            const bytes = new Uint8Array([1, 2, 3]);
+            const oldPath = 'Mirror/Note/Old.note';
+            const newName = reason === 'case-only' ? 'old.note' : 'New.note';
+            const newPath = `Mirror/Note/${newName}`;
+            const files = new Map([[oldPath, reason === 'edited' ? new Uint8Array([4, 5, 6]) : bytes]]);
+            if (reason === 'occupied') files.set(newPath, new Uint8Array([4, 5, 6]));
+            const slots = new Map<MirrorManifestSlot, string>();
+            const storage = {
+                read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+                write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+            };
+            await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+                records: { [oldPath]: { contentHash: hashBytes(bytes),
+                    source: { engineId: 'supernote-cloud', md5, fileId: '1' } } } });
+            const vault = { read: vi.fn(async (path: string) => files.get(path) ?? null),
+                write: vi.fn(), rename: vi.fn(), trash: vi.fn() };
+            const inventory = { directories: [], items: [{ ...item('1', newName),
+                md5: reason === 'checksum' ? '11111111111111111111111111111111' : md5 }] };
+            const canonicalPathsById = { '1': `/Note/${newName}` };
+            const download = vi.fn();
+            const result = await runVerifiedCloudMirror({ inventory, canonicalPathsById, syncFolder: 'Mirror',
+                legacyManifest: {}, accountFingerprint: 'v1:synthetic-account', vault, storage,
+                transfer: { download, md5: vi.fn() }, pathFilters: reason === 'filtered' ? ['/Note/Old.note'] : [],
+                fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100,
+                verifyDeletionInventory: async () => reason === 'unstable'
+                    ? { inventory: { directories: [], items: [] }, canonicalPathsById: {} }
+                    : { inventory, canonicalPathsById },
+            });
+            expect(result).toMatchObject({ synced: 0, removed: 0, failed: [] });
+            expect(result.protected).toEqual(expect.arrayContaining([oldPath, newPath]));
+            expect(vault.rename).not.toHaveBeenCalled();
+            expect(vault.trash).not.toHaveBeenCalled();
+            expect(download).not.toHaveBeenCalled();
+            expect((await loadMirrorManifest(storage, {})).manifest.records[oldPath]).toBeDefined();
+        });
+
+    it.each(['same', 'different'])('handles a verified new path with a %s persisted file ID', async (identity) => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        const oldPath = 'Mirror/Note/Old.note';
+        const newPath = identity === 'same' ? 'Mirror/Note/Archive/New.note' : 'Mirror/Note/New.note';
+        const files = new Map([[oldPath, bytes]]);
+        const slots = new Map<MirrorManifestSlot, string>();
+        const storage = {
+            read: async (slot: MirrorManifestSlot) => slots.get(slot) ?? null,
+            write: async (slot: MirrorManifestSlot, value: string) => { slots.set(slot, value); },
+        };
+        await saveMirrorManifest(storage, null, { version: 1, cloudAccountFingerprint: 'v1:synthetic-account',
+            records: { [oldPath]: { contentHash: hashBytes(bytes), source: { engineId: 'supernote-cloud', md5 } } } });
+        const vault = {
+            read: vi.fn(async (path: string) => files.get(path) ?? null),
+            write: vi.fn(async (path: string, content: Uint8Array) => { files.set(path, content.slice()); }),
+            trash: vi.fn(async (path: string) => { files.delete(path); }),
+            rename: vi.fn(async (from: string, to: string) => {
+                files.set(to, files.get(from)!);
+                files.delete(from);
+            }),
+        };
+        const oldInventory = { directories: [], items: [item('1', 'Old.note')] };
+        const download = vi.fn(async () => bytes);
+        const common = { syncFolder: 'Mirror', legacyManifest: {}, accountFingerprint: 'v1:synthetic-account',
+            vault, storage, transfer: { download, md5: vi.fn(async () => md5) }, pathFilters: [],
+            fileExtensions: DEFAULT_FILE_EXTENSION_ALLOWLIST, maxFileBytes: 100 };
+        expect(await runVerifiedCloudMirror({ ...common, inventory: oldInventory,
+            canonicalPathsById: { '1': '/Note/Old.note' } })).toMatchObject({ unchanged: 1, failed: [] });
+        const inventory = { directories: [], items: [item(identity === 'same' ? '1' : '2', 'New.note')] };
+        const canonicalPathsById = { [inventory.items[0].id]: newPath.slice('Mirror'.length) };
+        const result = await runVerifiedCloudMirror({
+            ...common, inventory, canonicalPathsById,
+            verifyDeletionInventory: async () => ({ inventory, canonicalPathsById }),
+        });
+
+        expect(result).toMatchObject({ synced: identity === 'same' ? 0 : 1,
+            removed: identity === 'same' ? 0 : 1, failed: [], protected: [] });
+        expect(download).toHaveBeenCalledTimes(identity === 'same' ? 1 : 2);
+        if (identity === 'same') {
+            expect(vault.rename).toHaveBeenCalledExactlyOnceWith(oldPath, newPath);
+            expect(vault.write).not.toHaveBeenCalled();
+            expect(vault.trash).not.toHaveBeenCalled();
+        } else {
+            expect(vault.rename).not.toHaveBeenCalled();
+            expect(vault.write).toHaveBeenCalledExactlyOnceWith(newPath, bytes);
+            expect(vault.trash).toHaveBeenCalledExactlyOnceWith(oldPath);
+        }
+        expect(files.has(newPath)).toBe(true);
+        expect(files.has(oldPath)).toBe(false);
+        expect(Object.keys((await loadMirrorManifest(storage, {})).manifest.records)).toEqual([newPath]);
+        const repeated = await runVerifiedCloudMirror({ ...common, inventory, canonicalPathsById });
+        expect(repeated).toMatchObject({ synced: 0, moved: 0, unchanged: 1, removed: 0 });
+        expect(download).toHaveBeenCalledTimes(identity === 'same' ? 1 : 2);
+    });
+
     it('trashes only unchanged managed files missing from two identical verified inventories', async () => {
         const bytes = new Uint8Array([1, 2, 3]);
         const files = new Map([['Mirror/Note/Missing.note', bytes],

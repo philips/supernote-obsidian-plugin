@@ -17,15 +17,17 @@ export interface SharedMirrorRecord {
     } | {
         engineId: 'supernote-cloud';
         md5: string;
+        fileId?: string;
     };
 }
 
 export interface PendingMirrorOperation {
-    kind: 'write' | 'trash';
+    kind: 'write' | 'trash' | 'move';
     root: string;
     path: string;
     beforeHash: string | null;
     after: SharedMirrorRecord | null;
+    destination?: string;
 }
 
 export interface SharedMirrorManifest {
@@ -106,6 +108,7 @@ export function cloudPlanningRecords(manifest: SharedMirrorManifest): Record<str
     return Object.fromEntries(Object.entries(manifest.records).map(([path, record]) => [
         path,
         { contentHash: record.contentHash, cloudMd5: record.source.engineId === 'supernote-cloud'
-            ? record.source.md5 : undefined },
+            ? record.source.md5 : undefined, cloudId: record.source.engineId === 'supernote-cloud'
+                ? record.source.fileId : undefined },
     ]));
 }

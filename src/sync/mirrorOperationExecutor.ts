@@ -21,6 +21,35 @@ export async function recoverMirrorOperation(service: MirrorManifestService, loa
     if (!pending) return;
     if (pending.root !== root) throw new MirrorRecoveryAttentionError(pending.path,
         'sync root changed; restore the original root before retrying');
+    if (pending.kind === 'move') {
+        let source: Uint8Array | null;
+        let destination: Uint8Array | null;
+        try {
+            [source, destination] = await Promise.all([read(pending.path), read(pending.destination!)]);
+        } catch {
+            throw new MirrorRecoveryAttentionError(pending.path, 'move vault bytes cannot be read; inspect both paths');
+        }
+        const oldHash = source === null ? null : hashBytes(source);
+        const newHash = destination === null ? null : hashBytes(destination);
+        if (oldHash === pending.beforeHash && newHash === null) {
+            const { pendingOperation: _pendingOperation, ...manifest } = loaded.manifest;
+            try { await service.commit(loaded, manifest); } catch {
+                throw new MirrorRecoveryAttentionError(pending.path, 'move reconciliation failed; retry when storage is available');
+            }
+            return;
+        }
+        if (oldHash !== null || newHash !== pending.after?.contentHash) {
+            throw new MirrorRecoveryAttentionError(pending.path, 'move outcome is uncertain; inspect both paths before retrying');
+        }
+        const records = { ...loaded.manifest.records };
+        delete records[pending.path];
+        records[pending.destination!] = pending.after!;
+        const { pendingOperation: _pendingOperation, ...manifest } = loaded.manifest;
+        try { await service.commit(loaded, { ...manifest, records }); } catch {
+            throw new MirrorRecoveryAttentionError(pending.path, 'move reconciliation failed; retry when storage is available');
+        }
+        return;
+    }
     let current: Uint8Array | null;
     try { current = await read(pending.path); } catch {
         throw new MirrorRecoveryAttentionError(pending.path, 'vault bytes cannot be read; inspect the file and retry manually');
@@ -107,6 +136,36 @@ export class MirrorOperationExecutor {
             }
             await trashFile(path);
             await this.finish(path, null);
+        } catch (error) { throw new MirrorOperationError(error); }
+    }
+
+    async move(path: string, destination: string, record: SharedMirrorRecord,
+        renameFile: (path: string, destination: string) => Promise<void>): Promise<void> {
+        if (this.manifest.pendingOperation) throw new Error('Pending mirror operation requires recovery');
+        const previous = this.manifest.records[path];
+        if (!path.startsWith(`${this.root}/`) || !destination.startsWith(`${this.root}/`)
+            || path === destination || !previous || this.manifest.records[destination]
+            || previous.source.engineId !== 'supernote-cloud' || record.source.engineId !== 'supernote-cloud'
+            || !previous.source.fileId || previous.source.fileId !== record.source.fileId
+            || previous.contentHash !== record.contentHash) throw new Error('Cloud move requires a unique managed identity');
+        const source = await this.read(path);
+        if (source === null || hashBytes(source) !== previous.contentHash || await this.read(destination) !== null) {
+            throw new Error('Cloud move source changed or destination is occupied');
+        }
+        try {
+            this.loaded = await this.service.commit(this.loaded, { ...this.manifest,
+                pendingOperation: { kind: 'move', root: this.root, path, destination,
+                    beforeHash: previous.contentHash, after: record },
+            });
+            const guarded = await this.read(path);
+            if (guarded === null || hashBytes(guarded) !== previous.contentHash
+                || await this.read(destination) !== null) throw new Error('Cloud move paths changed after intent commit');
+            await renameFile(path, destination);
+            const records = { ...this.manifest.records };
+            delete records[path];
+            records[destination] = record;
+            const { pendingOperation: _pendingOperation, ...manifest } = this.manifest;
+            this.loaded = await this.service.commit(this.loaded, { ...manifest, records });
         } catch (error) { throw new MirrorOperationError(error); }
     }
 
